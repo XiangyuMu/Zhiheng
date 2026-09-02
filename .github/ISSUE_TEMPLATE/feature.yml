@@ -1,0 +1,40 @@
+name: 功能需求
+description: 描述一个具有明确用户价值和验收标准的功能
+title: "[Feature] "
+labels:
+  - feature
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 用户问题
+      description: 当前场景中，用户遇到了什么问题？
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 期望结果
+      description: 完成后，用户能够做什么？
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 范围与非目标
+      description: 明确本 Issue 包含和不包含什么。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 使用可验证的 Given/When/Then 或检查项描述。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 相关证据或文档
+      description: 链接 PRD 章节、设计文档、测试或讨论。
+

@@ -1,0 +1,35 @@
+name: 调研任务
+description: 用于技术选型、实验或尚需证据的产品判断
+title: "[Research] "
+labels:
+  - research
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: 调研问题
+      description: 需要回答的单一核心问题是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: decision
+    attributes:
+      label: 将支持的决策
+      description: 调研结果会改变哪个产品或技术选择？
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 所需证据
+      description: 需要哪些官方文档、实验或基准结果？
+    validations:
+      required: true
+  - type: textarea
+    id: stop
+    attributes:
+      label: 完成标准
+      description: 获得哪些证据后即可停止调研？
+    validations:
+      required: true
+

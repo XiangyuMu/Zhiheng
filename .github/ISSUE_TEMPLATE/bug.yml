@@ -1,0 +1,37 @@
+name: 缺陷报告
+description: 报告可复现的错误或行为回退
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影响范围
+      description: 是否影响数据、隐私、记忆、检索或已有功能？
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 日志与证据
+      description: 请移除密钥和敏感数据后提供必要信息。
+
