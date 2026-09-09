@@ -306,3 +306,7 @@ def _evolution_executor(
 
 def _close_executor(executor: EvolutionJobExecutor) -> None:
     executor.close()
+
+
+if __name__ == "__main__":
+    run()
