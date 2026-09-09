@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录知衡</title>
+<style>body{font-family:system-ui,sans-serif;max-width:420px;margin:12vh auto;padding:24px;background:#f6f7f9}main{background:white;padding:28px;border-radius:14px;box-shadow:0 8px 30px #0001}label{display:block;margin:16px 0}input{display:block;width:100%;box-sizing:border-box;padding:10px;margin-top:6px}button{width:100%;padding:11px;margin-top:10px}#error{color:#b42318;min-height:1.5em}</style></head>
+<body><main><h1>登录知衡</h1><p>单用户个人知识库</p><form id="form"><label>用户名<input id="username" required autocomplete="username"></label><label>密码<input id="password" type="password" required autocomplete="current-password"></label><button>登录</button></form><p id="error"></p></main>
+<script>
+const next=new URLSearchParams(location.search).get("next")||"/knowledge-agent";
+document.querySelector("#form").addEventListener("submit",async e=>{e.preventDefault();const error=document.querySelector("#error");error.textContent="";const r=await fetch("/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({username:username.value,password:password.value})});if(!r.ok){error.textContent="用户名或密码错误";return}const data=await r.json();document.cookie=`zhiheng_csrf=${encodeURIComponent(data.csrf_token)}; Path=/; SameSite=Strict`;location.href=next});
+</script></body></html>

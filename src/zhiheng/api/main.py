@@ -4,10 +4,13 @@ import hmac
 import os
 from collections.abc import Generator
 from datetime import timedelta
+from pathlib import Path
 from typing import Annotated
+from urllib.parse import quote
 
 import uvicorn
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -79,6 +82,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_decision_routes(app, app_settings)
     install_gap_routes(app, app_settings)
     install_evolution_routes(app, app_settings)
+
+    @app.get("/login", include_in_schema=False)
+    def login_page() -> FileResponse:
+        return FileResponse(
+            str(Path(__file__).parent / "static" / "login.html"),
+            media_type="text/html; charset=utf-8",
+        )
+
+    @app.exception_handler(HTTPException)
+    async def redirect_unauthenticated_pages(request: Request, exc: HTTPException) -> Response:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED and request.url.path in {
+            "/knowledge-agent", "/memory-center", "/evolution-center",
+        }:
+            target = quote(str(request.url), safe="")
+            return RedirectResponse(url=f"/login?next={target}", status_code=status.HTTP_303_SEE_OTHER)
+        return Response(content=str(exc.detail), status_code=exc.status_code)
 
     @app.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str | bool]:
