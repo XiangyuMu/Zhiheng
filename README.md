@@ -27,6 +27,7 @@
 - [完整产品 PRD](docs/product/PRD.md)
 - [需求访谈摘要](docs/product/discovery/deep-interview-summary.md)
 - [产品与开发路线图](docs/ROADMAP.md)
+- [MVP 技术栈与检索基线 ADR](docs/architecture/adr/0001-mvp-technology-stack.md)
 
 ## 状态约定
 
@@ -36,4 +37,3 @@
 - `blocked`：存在明确阻塞因素
 - `in review`：等待验证或合并
 - `done`：验收完成并已合入稳定分支
-

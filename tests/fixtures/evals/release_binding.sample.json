@@ -1,0 +1,19 @@
+{
+  "schema_version": "step0.release_binding.v1",
+  "candidate_id": "cand-retrieval-policy-0001",
+  "target_component": "retrieval.answer_strategy",
+  "source_evaluation_ids": [
+    "eval-boundary-rag-citation-conflict-001",
+    "eval-migration-answer-strategy-transfer-001",
+    "eval-retention-structured-direct-lookup-001",
+    "eval-safety-candidate-false-activation-001"
+  ],
+  "source_evidence_refs": [
+    "synthetic://trajectory/qa-conflict-v1",
+    "synthetic://trajectory/qa-transfer-v1"
+  ],
+  "validation_report_ref": "synthetic://reports/validation/cand-retrieval-policy-0001",
+  "reviewer_decision_ref": "synthetic://reviews/reviewer-approved-cand-retrieval-policy-0001",
+  "approved_artifact_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "rollback_target_id": "stable-retrieval-policy-0000"
+}

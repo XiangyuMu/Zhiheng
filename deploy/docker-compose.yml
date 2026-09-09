@@ -1,0 +1,78 @@
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    environment:
+      ZHIHENG_SITE_ADDRESS: ${ZHIHENG_SITE_ADDRESS:-http://localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      ZHIHENG_ENVIRONMENT: production
+      ZHIHENG_DATABASE_URL: sqlite:////data/zhiheng.db
+      ZHIHENG_SECRET_KEY: ${ZHIHENG_SECRET_KEY:?ZHIHENG_SECRET_KEY must be set}
+      ZHIHENG_BOOTSTRAP_TOKEN: ${ZHIHENG_BOOTSTRAP_TOKEN:?ZHIHENG_BOOTSTRAP_TOKEN must be set}
+      ZHIHENG_ERASE_JOURNAL_PATH: /data/erase-journal.jsonl
+      ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH: /data/knowledge-object-store
+      ZHIHENG_API_HOST: 0.0.0.0
+    volumes:
+      - zhiheng-data:/data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  publisher-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      ZHIHENG_ENVIRONMENT: production
+      ZHIHENG_DATABASE_URL: sqlite:////data/zhiheng.db
+      ZHIHENG_SECRET_KEY: ${ZHIHENG_SECRET_KEY:?ZHIHENG_SECRET_KEY must be set}
+      ZHIHENG_BOOTSTRAP_TOKEN: ${ZHIHENG_BOOTSTRAP_TOKEN:?ZHIHENG_BOOTSTRAP_TOKEN must be set}
+      ZHIHENG_ERASE_JOURNAL_PATH: /data/erase-journal.jsonl
+      ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH: /data/knowledge-object-store
+      ZHIHENG_WORKER_ROLE: publisher
+    volumes:
+      - zhiheng-data:/data
+    command: ["zhiheng-worker", "--role", "publisher"]
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+  ollama:
+    image: ollama/ollama:0.11.10
+    profiles: ["local-model"]
+    network_mode: "service:api"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+volumes:
+  zhiheng-data:
+  caddy-data:
+  caddy-config:
+  ollama-data:

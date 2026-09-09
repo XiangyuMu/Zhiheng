@@ -1,0 +1,5 @@
+sqlite-vec==0.1.9
+sentence-transformers==6.0.1
+jieba==0.42.1
+numpy==2.5.2
+psutil==7.2.2

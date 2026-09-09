@@ -1,0 +1,126 @@
+{
+  "release_id": "release-g006-20260904",
+  "set_name": "boundary",
+  "cases": [
+    {
+      "case_id": "boundary-001",
+      "set_name": "boundary",
+      "result": {
+        "status": "success"
+      },
+      "process": {
+        "status": "clean"
+      },
+      "quality": {
+        "status": "acceptable"
+      },
+      "evidence": {
+        "result": [
+          "synthetic://g006/boundary/result"
+        ],
+        "process": [
+          "synthetic://g006/boundary/process"
+        ],
+        "quality": [
+          "synthetic://g006/boundary/quality"
+        ]
+      }
+    },
+    {
+      "case_id": "migration-001",
+      "set_name": "migration",
+      "result": {
+        "status": "success"
+      },
+      "process": {
+        "status": "clean"
+      },
+      "quality": {
+        "status": "acceptable"
+      },
+      "evidence": {
+        "result": [
+          "synthetic://g006/migration/result"
+        ],
+        "process": [
+          "synthetic://g006/migration/process"
+        ],
+        "quality": [
+          "synthetic://g006/migration/quality"
+        ]
+      }
+    },
+    {
+      "case_id": "retention-001",
+      "set_name": "retention",
+      "result": {
+        "status": "success"
+      },
+      "process": {
+        "status": "clean"
+      },
+      "quality": {
+        "status": "acceptable"
+      },
+      "evidence": {
+        "result": [
+          "synthetic://g006/retention/result"
+        ],
+        "process": [
+          "synthetic://g006/retention/process"
+        ],
+        "quality": [
+          "synthetic://g006/retention/quality"
+        ]
+      }
+    },
+    {
+      "case_id": "safety-001",
+      "set_name": "safety",
+      "result": {
+        "status": "success"
+      },
+      "process": {
+        "status": "clean"
+      },
+      "quality": {
+        "status": "acceptable"
+      },
+      "evidence": {
+        "result": [
+          "synthetic://g006/safety/result"
+        ],
+        "process": [
+          "synthetic://g006/safety/process"
+        ],
+        "quality": [
+          "synthetic://g006/safety/quality"
+        ]
+      }
+    },
+    {
+      "case_id": "dynamic-001",
+      "set_name": "dynamic",
+      "result": {
+        "status": "success"
+      },
+      "process": {
+        "status": "clean"
+      },
+      "quality": {
+        "status": "acceptable"
+      },
+      "evidence": {
+        "result": [
+          "synthetic://g006/dynamic/result"
+        ],
+        "process": [
+          "synthetic://g006/dynamic/process"
+        ],
+        "quality": [
+          "synthetic://g006/dynamic/quality"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "createdAt": "2026-09-02T05:10:08.894Z",
+  "updatedAt": "2026-09-09T05:10:51.945Z",
+  "briefPath": ".omx/ultragoal/brief.md",
+  "goalsPath": ".omx/ultragoal/goals.json",
+  "ledgerPath": ".omx/ultragoal/ledger.jsonl",
+  "codexGoalMode": "aggregate",
+  "goals": [
+    {
+      "id": "G001-architecture-baseline",
+      "title": "Architecture baseline",
+      "objective": "Finish Step 0 contracts, taxonomy, memory dictionary, authority/lifecycle, SQLite schema, evaluation specs, Python project skeleton, CI, and preserve the accepted ADR and benchmark evidence.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-09-02T05:10:08.894Z",
+      "updatedAt": "2026-09-02T07:41:35.603Z",
+      "startedAt": "2026-09-02T05:11:24.442Z",
+      "completedAt": "2026-09-02T07:41:35.603Z",
+      "evidence": "Step 0 architecture, authority/lifecycle, taxonomy, memory dictionary, SQLite schema, evaluation contracts, Python 3.12 FastAPI/Alembic skeleton, CI, ADR and benchmark artifacts present. Independent docs verifier PASS; independent scaffold verifier PASS after fixes. Stable gates: ruff check . PASS twice, mypy src tests PASS (34 files) twice, pytest PASS (31 tests) twice, empty DB migration at 0001_initial, API /healthz 200 with external_models_enabled=false, Worker --once exit 0, git diff --check PASS, privacy scan no matches. Target-server benchmark remains an explicit deployment acceptance item because target server is unspecified."
+    },
+    {
+      "id": "G002-evidence-ingestion-and-authority",
+      "title": "Evidence ingestion and authority",
+      "objective": "Implement immutable evidence ingestion, versions/spans, SQLite current pointers, outbox Worker, FTS5, sqlite-vec rebuild generations, soft delete, and write-ahead privacy erase foundations.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-09-02T05:10:08.894Z",
+      "updatedAt": "2026-09-02T07:23:46.041Z",
+      "startedAt": "2026-09-02T07:15:34.508Z",
+      "completedAt": "2026-09-02T07:23:46.041Z",
+      "evidence": "Verifier evidence: implemented evidence ingestion repository, formal FTS search and soft delete in src/zhiheng/knowledge; implemented idempotent outbox-to-jobs worker path in src/zhiheng/jobs and worker/main.py; implemented embedding generation rebuild and activation foundations in src/zhiheng/retrieval; implemented privacy erase write-ahead intent and authoritative erase path in src/zhiheng/privacy/erase.py; updated initial migration for raw_text FTS content and active embedding generation uniqueness; added tests/integration/test_evidence_foundations.py covering ingest/outbox/FTS, soft delete, worker idempotency, vector generation rebuild, dimension mismatch, and privacy erase. Verification: ruff check . passed; mypy src tests passed with 27 source files; pytest passed 22 tests; personal path scan found no matches."
+    },
+    {
+      "id": "G003-privacy-authentication-and-model-gat",
+      "title": "Privacy authentication and model gateway",
+      "objective": "Implement single-user secure sessions, secret isolation, one fail-closed privacy gateway, Ollama and approved external provider adapters, and auditable provider routing with no bypass.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-09-02T05:10:08.894Z",
+      "updatedAt": "2026-09-02T13:25:34.288Z",
+      "startedAt": "2026-09-02T07:24:28.032Z",
+      "completedAt": "2026-09-02T13:25:34.288Z",
+      "evidence": "G003 complete: Argon2 single-user auth/session and production bootstrap hardening; Presidio analyzer plus local deterministic fail-closed redaction; immutable faithful four-stage privacy snapshots; task/provider/model/policy/endpoint/payload/expiry/one-shot bindings with TOCTOU revalidation; private approved payload transport capability; explicit official OpenAI base URL and zero SDK retries; loopback-only Ollama; unresolved dispatch no-resend; vulnerable presidio-anonymizer/cryptography removed. Verification: pytest 71 passed under pytest 9.1.1; Ruff PASS; mypy 36 files PASS; Alembic upgrade-downgrade-upgrade PASS; fresh runtime-only install/import PASS with cryptography and presidio-anonymizer absent; uv lock/check/frozen dry-run PASS; runtime and all-extras pip-audit no known vulnerabilities; git diff check and public-data privacy scan PASS. Independent verifier PASS; independent architect CLEAR."
+    },
+    {
+      "id": "G004-user-memory-and-confirmation",
+      "title": "User memory and confirmation",
+      "objective": "Implement explicit/inferred memory separation, candidates and confirmation UI/API, evidence and versions, L0/L1/L2, current state, delete/restore/rollback, and deterministic candidate-isolation proof.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-09-02T05:10:08.894Z",
+      "updatedAt": "2026-09-03T05:22:03.683Z",
+      "startedAt": "2026-09-02T13:25:54.480Z",
+      "completedAt": "2026-09-03T05:22:03.683Z",
+      "evidence": "G004 complete: candidate/formal physical separation and confirmation gate; stable state_key slots; lifecycle-aware composite ETags with parent receipt replay and repository CAS; append-only versions/decisions/generations; exact L0/L1/L2 boundaries and evidence lineage; write-ahead privacy erase clears all value-bearing descendants and blocks resurrection; authenticated non-technical Memory Center supports confirm/edit/reject/delete/restore/rollback and displays rationale, change reason, evidence and impact. Verification: full pytest 114 passed; Ruff PASS; mypy 46 files PASS; node syntax PASS; uv lock check PASS; git diff check and public-data privacy scan PASS. Independent verifier PASS with attack probes; independent architect CLEAR."
+    },
+    {
+      "id": "G005-retrieval-decisions-and-knowledge-ga",
+      "title": "Retrieval decisions and knowledge gaps",
+      "objective": "Implement structured lookup, hybrid RAG with final authorization and citations, bounded Agentic RAG, decision support without external actions, and explainable goal-linked knowledge-gap recommendations.",
+      "status": "complete",
+      "attempt": 1,
+      "createdAt": "2026-09-02T05:10:08.894Z",
+      "updatedAt": "2026-09-04T02:41:48.148Z",
+      "startedAt": "2026-09-03T05:22:35.695Z",
+      "completedAt": "2026-09-04T02:41:48.148Z",
+      "evidence": "G005 complete: structured lookup; jieba Chinese FTS5 plus sqlite-vec hybrid retrieval; RRF and exact SQLite current-formal authorization with three-phase revalidation; version/span/hash citations; bounded Agentic RAG; advice-only decisions with explicit save and restart persistence; exact-current-goal knowledge-gap recommendations; authenticated idempotent API/UI. Fresh evidence: 185 pytest passed, 71 G005 passed, zero skips; runtime metrics lookup/recall/vector/hybrid/citation=1.0 and leak/candidate false activation/external actions=0; Ruff PASS; mypy 83 files PASS; uv lock PASS; migration roundtrip PASS; JS syntax and privacy scan PASS; code-reviewer APPROVE; architect CLEAR."
+    },
+    {
+      "id": "G006-verifiable-evolution-control-plane",
+      "title": "Verifiable evolution control plane",
+      "objective": "Implement trajectories, three-layer evaluation, separated capabilities, immutable release bindings, protected evaluation sets/policies, replay/shadow/canary/stable/rollback, and demonstrate one promotion plus rollback.",
+      "status": "complete",
+      "attempt": 3,
+      "createdAt": "2026-09-02T05:10:08.894Z",
+      "updatedAt": "2026-09-09T05:02:10.828Z",
+      "startedAt": "2026-09-04T05:05:09.177Z",
+      "completedAt": "2026-09-09T05:02:10.828Z",
+      "evidence": "Evolution control plane complete: authenticated trajectories, fixed/dynamic/policy reports, capability separation, source graph provenance, review artifact binding, replay/shadow/canary/stable/rollback lifecycle and full pytest/Ruff/mypy verification."
+    },
+    {
+      "id": "G007-deployment-recovery-and-final-qualit",
+      "title": "Deployment recovery and final quality gate",
+      "objective": "Implement Compose deployment, observability, encrypted backup/restore with erase-ledger replay, hostile E2E tests, then run cleanup, invariant audit, independent code review and architect clearance.",
+      "status": "complete",
+      "attempt": 2,
+      "createdAt": "2026-09-02T05:10:08.894Z",
+      "updatedAt": "2026-09-09T05:10:51.945Z",
+      "startedAt": "2026-09-09T05:02:35.332Z",
+      "evidence": "Final quality gate complete.",
+      "completedAt": "2026-09-09T05:10:51.945Z"
+    },
+    {
+      "id": "G008-g006-a-trusted-evaluation-evidence",
+      "title": "G006-A trusted evaluation evidence",
+      "objective": "Replace caller-declared promotion gates with immutable evaluator and reviewer evidence: canonical three-layer reports, fixed-set/policy snapshots, trajectory IDs, and fail-closed prepare.",
+      "status": "complete",
+      "attempt": 0,
+      "createdAt": "2026-09-06T06:20:44.153Z",
+      "updatedAt": "2026-09-09T05:01:58.652Z",
+      "evidence": "Canonical evaluator, policy, trajectory, provenance and reviewer artifacts are persisted and fail-closed; full pytest, Ruff, mypy and review gates pass.",
+      "completedAt": "2026-09-09T05:01:58.652Z"
+    }
+  ],
+  "codexObjective": "Complete the durable ultragoal plan in .omx/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .omx/ultragoal/ledger.jsonl as the audit trail."
+}

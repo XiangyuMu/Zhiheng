@@ -1,0 +1,170 @@
+{
+  "run": {
+    "created_at": "2026-09-02T04:51:40.624696+00:00",
+    "seed": 20260902,
+    "command_arguments": {
+      "documents": 2000,
+      "queries": 24,
+      "iterations": 3,
+      "warmup": 5,
+      "batch_size": 8,
+      "device": "cpu",
+      "model": "BAAI/bge-m3",
+      "revision": "5617a9f61b028005a4858fdac845db406aefb181",
+      "output": "/tmp/zhiheng-development-macos-cpu.json",
+      "report": "/tmp/zhiheng-development-macos-cpu.md",
+      "seed": 20260902
+    },
+    "result_fingerprint": "8d826ce51775af8cecc3e944acba0c500155827b83c9f59460000773aab7c31a"
+  },
+  "system": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "arm",
+    "python": "3.12.9",
+    "sqlite": "3.45.3",
+    "sqlite_vec": "v0.1.9",
+    "device": "cpu",
+    "logical_cpu_count": 10,
+    "physical_cpu_count": 10,
+    "system_memory_mb": 24576.0,
+    "packages": {
+      "sqlite-vec": "0.1.9",
+      "sentence-transformers": "6.0.1",
+      "torch": "2.13.0",
+      "numpy": "2.5.2",
+      "jieba": "0.42.1",
+      "psutil": "7.2.2"
+    }
+  },
+  "dataset": {
+    "documents": 2000,
+    "queries": 24,
+    "gold_cases": [
+      "candidate-memory",
+      "evidence-source",
+      "sqlite-wal",
+      "fts5",
+      "vector-index",
+      "hybrid-rag",
+      "agentic-rag",
+      "privacy-gateway",
+      "local-model",
+      "soft-delete",
+      "privacy-erase",
+      "outbox",
+      "dead-letter",
+      "reviewer",
+      "canary",
+      "eval-sets",
+      "knowledge-gap",
+      "decision-support",
+      "paper-import",
+      "image-evidence",
+      "backup-restore",
+      "model-audit",
+      "l0-profile",
+      "mece"
+    ],
+    "synthetic_only": true,
+    "contains_personal_data": false
+  },
+  "embedding": {
+    "model_id": "BAAI/bge-m3",
+    "requested_revision": "5617a9f61b028005a4858fdac845db406aefb181",
+    "resolved_revision": "5617a9f61b028005a4858fdac845db406aefb181",
+    "dimensions": 1024,
+    "normalized": true,
+    "batch_size": 8,
+    "model_load_ms": 1024.006,
+    "document_encode_ms": 67173.295,
+    "documents_per_second": 29.774,
+    "query_latency": {
+      "count": 24,
+      "mean_ms": 77.945,
+      "p50_ms": 81.812,
+      "p95_ms": 83.739,
+      "max_ms": 85.752
+    },
+    "model_snapshot_bytes": 2293331623
+  },
+  "indexing": {
+    "fts_insert_ms": 347.798,
+    "vector_insert_ms": 205.964,
+    "vector_bytes_estimated": 8192000
+  },
+  "retrieval": {
+    "top_k": 10,
+    "retrieval_depth": 50,
+    "rrf_k": 60,
+    "iterations": 3,
+    "warmup": 5,
+    "fts_latency": {
+      "count": 72,
+      "mean_ms": 0.535,
+      "p50_ms": 0.472,
+      "p95_ms": 1.02,
+      "max_ms": 1.121
+    },
+    "vector_latency": {
+      "count": 72,
+      "mean_ms": 1.243,
+      "p50_ms": 1.204,
+      "p95_ms": 1.455,
+      "max_ms": 1.515
+    },
+    "hybrid_index_latency": {
+      "count": 72,
+      "mean_ms": 1.776,
+      "p50_ms": 1.703,
+      "p95_ms": 2.275,
+      "max_ms": 2.353
+    },
+    "hybrid_e2e_latency": {
+      "count": 24,
+      "mean_ms": 79.987,
+      "p50_ms": 83.836,
+      "p95_ms": 86.188,
+      "max_ms": 86.372
+    },
+    "fts_recall_at_10": 1.0,
+    "vector_recall_at_10": 1.0,
+    "hybrid_recall_at_10": 1.0
+  },
+  "resources": {
+    "rss_before_model_mb": 387.95,
+    "rss_after_model_mb": 985.56,
+    "rss_peak_mb": 2208.05,
+    "benchmark_wall_seconds": 73.494,
+    "process_cpu_seconds": 123.416,
+    "cpu_to_wall_ratio": 1.679,
+    "gpu": {
+      "allocated_mb": null,
+      "peak_allocated_mb": null
+    },
+    "db_before_checkpoint_bytes": 9658368,
+    "wal_before_checkpoint_bytes": 9772672,
+    "shm_before_checkpoint_bytes": 32768,
+    "db_after_checkpoint_bytes": 9658368,
+    "wal_after_checkpoint_bytes": 0,
+    "shm_after_checkpoint_bytes": 0
+  },
+  "checks": {
+    "sqlite_vec_loaded": {
+      "passed": true,
+      "detail": "extension=v0.1.9, package=0.1.9"
+    },
+    "bge_m3_dimensions": {
+      "passed": true,
+      "detail": "dimensions=1024"
+    },
+    "fts_recall_at_10": {
+      "passed": true,
+      "detail": "recall=1.000, threshold=0.900"
+    },
+    "hybrid_not_below_vector": {
+      "passed": true,
+      "detail": "hybrid=1.000, vector=1.000"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": "g005.gap_cases.v1",
+  "cases": [
+    {
+      "case_id": "formal-goal-produces-gap",
+      "formal_goal_id": "goal-rag-quality",
+      "goal_status": "formal_current",
+      "known_coverage": ["basic vector search", "Chinese FTS5"],
+      "missing_coverage": ["conflict handling", "stale evidence rejection"],
+      "expected_recommendation_fields": ["formal_goal_id", "why", "benefit", "evidence", "missing_coverage", "suggested_search_terms"],
+      "must_not_claim_user_lacks_ability": true,
+      "auto_ingest_allowed": false
+    },
+    {
+      "case_id": "candidate-goal-produces-no-gap",
+      "formal_goal_id": null,
+      "candidate_goal_id": "candidate-goal-fashion",
+      "goal_status": "pending_confirmation",
+      "expected_recommendations": 0,
+      "reason": "candidate goals cannot affect recommendations"
+    }
+  ]
+}

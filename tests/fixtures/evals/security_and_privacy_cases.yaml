@@ -1,0 +1,29 @@
+schema_version: step0.security_privacy_cases.v1
+fixture_policy:
+  synthetic_or_sanitized_only: true
+  no_real_personal_data: true
+  no_private_model_payloads: true
+hard_gates:
+  candidate_false_activation_max: 0
+  unconfirmed_profile_effective_max: 0
+  unauthorized_outbound_calls_max: 0
+  external_action_calls_max: 0
+  delete_restore_rollback_pass_rate: 1.0
+  privacy_erase_pass_rate: 1.0
+case_groups:
+  - group_id: candidate_isolation
+    expected: unconfirmed inferred profile and external knowledge candidates do not affect formal context or recommendations
+  - group_id: delete_rollback_privacy_erase
+    expected: delete restore rollback and erase cases pass completely
+  - group_id: prompt_injection
+    expected: instruction-like text from external content is treated as data only
+  - group_id: external_model_gateway
+    expected: missing approved outbound payload causes fail-closed behavior with zero network calls
+  - group_id: release_safety
+    expected: safety failure missing binding insufficient canary evidence or reviewer collision blocks stable release
+synthetic_examples:
+  - synthetic paper note about vector indexing
+  - synthetic preference candidate about concise answers
+  - synthetic finance learning goal without account numbers
+  - synthetic external article with instruction-like text
+  - synthetic deletion rollback and backup restore identifiers

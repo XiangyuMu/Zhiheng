@@ -1,0 +1,41 @@
+{
+  "schema_version": "g005.retrieval_queries.v1",
+  "cases": [
+    {
+      "case_id": "structured-goal-direct-lookup",
+      "query": "我当前的主要目标是什么？",
+      "expected_route": "structured_lookup",
+      "max_model_calls": 0,
+      "required_formal_state_keys": ["goal.primary"],
+      "forbidden_routes": ["agentic_rag"]
+    },
+    {
+      "case_id": "hybrid-current-version-citation",
+      "query": "中文向量检索为什么需要最终授权？",
+      "expected_route": "hybrid_rag",
+      "required_source_ids": ["ko-formal-current"],
+      "required_version_ids": ["kv-formal-current-v2"],
+      "forbidden_source_ids": ["ko-candidate", "ko-deleted", "ko-erased"],
+      "required_citation_fields": [
+        "source_type",
+        "source_id",
+        "source_version_id",
+        "span_start",
+        "span_end",
+        "quote_hash"
+      ]
+    },
+    {
+      "case_id": "agentic-no-new-evidence-stops",
+      "query": "综合判断当前资料是否足以制定检索策略。",
+      "expected_route": "agentic_rag",
+      "max_rounds": 3,
+      "max_subqueries": 6,
+      "max_retrieval_calls": 6,
+      "max_model_calls": 2,
+      "max_context_candidates": 12,
+      "max_wall_clock_ms": 5000,
+      "must_stop_on": ["no_new_evidence", "repeated_query"]
+    }
+  ]
+}

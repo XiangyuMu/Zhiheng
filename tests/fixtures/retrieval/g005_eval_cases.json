@@ -1,0 +1,190 @@
+{
+  "schema_version": "g005.runtime_eval.v1",
+  "model": {
+    "id": "BAAI/bge-m3",
+    "revision": "deterministic-fake",
+    "dimension": 6
+  },
+  "goal": {
+    "state_key": "goal.primary",
+    "value": {
+      "title": "完成自进化个人知识库 Agent",
+      "domain": "technology.ai"
+    }
+  },
+  "corpus": [
+    {
+      "fixture_id": "formal-current-vector-indexing",
+      "title": "当前向量授权",
+      "text": "中文向量检索需要在融合排序之后再次回查 serving_chunks，只有当前正式版本可以进入回答上下文。",
+      "domain_id": "technology.ai",
+      "status": "formal_current",
+      "vector": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "fixture_id": "formal-current-fts",
+      "title": "中文 FTS5",
+      "text": "中文 FTS5 检索需要先分词，再用 serving_chunks 过滤候选、删除和过期资料。",
+      "domain_id": "technology.ai",
+      "status": "formal_current",
+      "vector": [0.92, 0.08, 0.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "fixture_id": "formal-current-decision",
+      "title": "决策边界",
+      "text": "决策支持只能提供建议、保存和复盘，不能执行交易、购买、发送或发布等外部动作。",
+      "domain_id": "product.decision",
+      "status": "formal_current",
+      "vector": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "fixture_id": "formal-current-gap",
+      "title": "知识缺口",
+      "text": "知识缺口推荐必须绑定当前正式目标或知识结构缺口，并说明是知识库覆盖不足，不评价用户能力。",
+      "domain_id": "product.evolution",
+      "status": "formal_current",
+      "vector": [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "fixture_id": "formal-current-agentic",
+      "title": "Agentic RAG 边界",
+      "text": "Agentic RAG 必须有轮次、子查询、检索调用、上下文数量和时间上限，重复查询或没有新增证据时停止。",
+      "domain_id": "technology.ai",
+      "status": "formal_current",
+      "vector": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    },
+    {
+      "fixture_id": "formal-current-conflict-a",
+      "title": "冲突证据 A",
+      "text": "证据 A 认为检索策略应该优先使用 FTS，因为可解释性更强。",
+      "domain_id": "technology.ai",
+      "status": "formal_current",
+      "vector": [0.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+    },
+    {
+      "fixture_id": "formal-current-conflict-b",
+      "title": "冲突证据 B",
+      "text": "证据 B 认为检索策略应该优先使用向量，因为语义召回更强。",
+      "domain_id": "technology.ai",
+      "status": "formal_current",
+      "vector": [0.0, 0.0, 0.0, 0.0, 0.96, 0.04]
+    },
+    {
+      "fixture_id": "formal-current-privacy",
+      "title": "隐私外发",
+      "text": "外部模型调用前必须最小化、分类、脱敏并复检；不确定时拒绝外发。",
+      "domain_id": "privacy",
+      "status": "formal_current",
+      "vector": [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    },
+    {
+      "fixture_id": "candidate-knowledge",
+      "title": "候选知识",
+      "text": "候选知识可以展示给确认中心，但不得进入正式回答或推荐排序。",
+      "domain_id": "technology.ai",
+      "status": "candidate",
+      "vector": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "fixture_id": "deleted-knowledge",
+      "title": "删除知识",
+      "text": "已删除资料不得被全文检索、向量召回或最终上下文重新激活。",
+      "domain_id": "technology.ai",
+      "status": "soft_deleted",
+      "vector": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "fixture_id": "erased-knowledge",
+      "title": "擦除知识",
+      "text": "隐私擦除后的资料不得被索引重建、备份恢复或引用生成恢复。",
+      "domain_id": "privacy",
+      "status": "privacy_erased",
+      "vector": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "fixture_id": "stale-previous-version",
+      "title": "旧版本知识",
+      "text": "旧版本知识只能作为历史记录，不能作为当前事实进入回答上下文。",
+      "domain_id": "technology.ai",
+      "status": "stale_previous_version",
+      "current_fixture_id": "formal-current-vector-indexing",
+      "vector": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    },
+    {
+      "fixture_id": "wrong-generation",
+      "title": "错误 generation",
+      "text": "确认 generation 不匹配的派生 chunk 不能被 serving 使用。",
+      "domain_id": "technology.ai",
+      "status": "wrong_generation",
+      "current_fixture_id": "formal-current-vector-indexing",
+      "vector": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    }
+  ],
+  "queries": [
+    {
+      "case_id": "lookup-primary-goal",
+      "query": "memory:goal.primary",
+      "mode": "structured",
+      "expected_state_key": "goal.primary"
+    },
+    {
+      "case_id": "hybrid-vector-authorization",
+      "query": "中文向量检索为什么需要最终授权？",
+      "mode": "hybrid",
+      "embedding": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      "required_fixture_ids": ["formal-current-vector-indexing"],
+      "forbidden_fixture_ids": ["candidate-knowledge", "deleted-knowledge", "erased-knowledge", "stale-previous-version", "wrong-generation"],
+      "fact_critical": true
+    },
+    {
+      "case_id": "hybrid-chinese-fts",
+      "query": "中文 FTS5 如何过滤候选 删除 过期 资料？",
+      "mode": "hybrid",
+      "embedding": [0.9, 0.1, 0.0, 0.0, 0.0, 0.0],
+      "required_fixture_ids": ["formal-current-fts"],
+      "forbidden_fixture_ids": ["candidate-knowledge", "deleted-knowledge", "erased-knowledge"],
+      "fact_critical": true
+    },
+    {
+      "case_id": "hybrid-decision-boundary",
+      "query": "决策支持可以执行交易购买发送发布吗？",
+      "mode": "hybrid",
+      "embedding": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+      "required_fixture_ids": ["formal-current-decision"],
+      "fact_critical": true
+    },
+    {
+      "case_id": "hybrid-gap-language",
+      "query": "知识缺口推荐应该如何绑定目标并避免评价用户能力？",
+      "mode": "hybrid",
+      "embedding": [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+      "required_fixture_ids": ["formal-current-gap"],
+      "fact_critical": true
+    },
+    {
+      "case_id": "agentic-bounds",
+      "query": "请权衡 Agentic RAG 的迭代预算、重复查询和没有新增证据时的停止条件。",
+      "mode": "agentic",
+      "embedding": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+      "required_fixture_ids": ["formal-current-agentic"],
+      "fact_critical": true
+    },
+    {
+      "case_id": "hybrid-conflict-surfaced",
+      "query": "检索策略应该优先 FTS 还是向量？请指出冲突。",
+      "mode": "hybrid",
+      "embedding": [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+      "required_fixture_ids": ["formal-current-conflict-a", "formal-current-conflict-b"],
+      "fact_critical": true,
+      "requires_conflict": true
+    },
+    {
+      "case_id": "hybrid-privacy-boundary",
+      "query": "外部模型调用前需要哪些隐私处理？",
+      "mode": "hybrid",
+      "embedding": [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+      "required_fixture_ids": ["formal-current-privacy"],
+      "fact_critical": true
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>知衡知识助理</title>
+    <link rel="stylesheet" href="./knowledge-agent.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel question-panel">
+        <p class="eyebrow">已登录 · 只使用授权证据</p>
+        <h1>知识助理</h1>
+        <form id="answer-form">
+          <label>
+            问题
+            <textarea id="question" rows="5" required placeholder="例如：最近知识库里关于中文检索有什么结论？"></textarea>
+          </label>
+          <div class="row">
+            <select id="intent" aria-label="回答模式">
+              <option value="">自动选择</option>
+              <option value="complex_synthesis">复杂综合</option>
+              <option value="decision">决策场景</option>
+            </select>
+            <button type="submit">提问</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel result-panel" aria-live="polite">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">回答</p>
+            <h2 id="route">等待提问</h2>
+          </div>
+          <span id="stop-reason">idle</span>
+        </div>
+        <p id="answer" class="answer">提交问题后，这里会显示回答、证据、冲突和不足。</p>
+        <div class="grid">
+          <section>
+            <h3>证据引用</h3>
+            <ul id="citations"></ul>
+          </section>
+          <section>
+            <h3>冲突与不足</h3>
+            <ul id="issues"></ul>
+          </section>
+        </div>
+      </section>
+
+      <section class="panel decision-panel">
+        <p class="eyebrow">仅分析 · 不执行外部动作</p>
+        <h2>决策分析</h2>
+        <form id="decision-form">
+          <label>
+            决策问题
+            <input id="decision-problem" required placeholder="例如：是否开始系统学习量化？" />
+          </label>
+          <label>
+            选项，每行一个
+            <textarea id="decision-options" rows="4" required>开始学习：每周固定投入时间
+暂缓：先完成当前目标</textarea>
+          </label>
+          <button type="submit">分析决策</button>
+        </form>
+        <div id="decision-output" class="compact-output"></div>
+      </section>
+
+      <section class="panel gaps-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">知识缺口</p>
+            <h2>建议补充的材料</h2>
+          </div>
+          <button id="load-gaps" type="button">刷新列表</button>
+        </div>
+        <ul id="gaps"></ul>
+      </section>
+    </main>
+    <div id="toast" class="toast"></div>
+    <script src="./knowledge-agent.js" defer></script>
+  </body>
+</html>

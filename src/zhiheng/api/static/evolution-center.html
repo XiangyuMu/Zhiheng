@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>持续进化中心</title>
+    <link rel="stylesheet" href="/evolution-center.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="toolbar">
+        <div>
+          <p class="eyebrow">Zhiheng</p>
+          <h1>持续进化中心</h1>
+        </div>
+        <button id="refresh" type="button">刷新</button>
+      </section>
+
+      <section class="grid metrics" id="metrics"></section>
+
+      <section class="grid">
+        <article>
+          <header>
+            <h2>发布阶段</h2>
+            <span id="release-count">0</span>
+          </header>
+          <div id="releases" class="list"></div>
+        </article>
+        <article>
+          <header>
+            <h2>提案证据</h2>
+            <span id="proposal-count">0</span>
+          </header>
+          <div id="proposals" class="list"></div>
+        </article>
+      </section>
+
+      <section class="grid">
+        <article>
+          <header>
+            <h2>任务轨迹</h2>
+            <span id="trajectory-count">0</span>
+          </header>
+          <div id="trajectories" class="list"></div>
+        </article>
+        <article>
+          <header>
+            <h2>评测集合</h2>
+            <span>4</span>
+          </header>
+          <div id="sets" class="sets"></div>
+        </article>
+      </section>
+
+      <aside id="detail" class="detail">
+        <h2>详情</h2>
+        <pre id="detail-body">选择一条记录查看脱敏投影。</pre>
+      </aside>
+      <p id="toast" class="toast" hidden></p>
+    </main>
+    <script src="/evolution-center.js"></script>
+  </body>
+</html>

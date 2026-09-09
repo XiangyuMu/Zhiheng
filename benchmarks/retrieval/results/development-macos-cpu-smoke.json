@@ -1,0 +1,166 @@
+{
+  "run": {
+    "created_at": "2026-09-02T04:50:21.744045+00:00",
+    "seed": 20260902,
+    "command_arguments": {
+      "documents": 300,
+      "queries": 20,
+      "iterations": 3,
+      "warmup": 3,
+      "batch_size": 4,
+      "device": "cpu",
+      "model": "BAAI/bge-m3",
+      "revision": "5617a9f61b028005a4858fdac845db406aefb181",
+      "output": "/tmp/zhiheng-development-macos-cpu.json",
+      "report": "/tmp/zhiheng-development-macos-cpu.md",
+      "seed": 20260902
+    },
+    "result_fingerprint": "9fb1cb14efc003e2c8b18f949d4396d10150b359a40f24d69fad41262c71b968"
+  },
+  "system": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "arm",
+    "python": "3.12.9",
+    "sqlite": "3.45.3",
+    "sqlite_vec": "v0.1.9",
+    "device": "cpu",
+    "logical_cpu_count": 10,
+    "physical_cpu_count": 10,
+    "system_memory_mb": 24576.0,
+    "packages": {
+      "sqlite-vec": "0.1.9",
+      "sentence-transformers": "6.0.1",
+      "torch": "2.13.0",
+      "numpy": "2.5.2",
+      "jieba": "0.42.1",
+      "psutil": "7.2.2"
+    }
+  },
+  "dataset": {
+    "documents": 300,
+    "queries": 20,
+    "gold_cases": [
+      "candidate-memory",
+      "evidence-source",
+      "sqlite-wal",
+      "fts5",
+      "vector-index",
+      "hybrid-rag",
+      "agentic-rag",
+      "privacy-gateway",
+      "local-model",
+      "soft-delete",
+      "privacy-erase",
+      "outbox",
+      "dead-letter",
+      "reviewer",
+      "canary",
+      "eval-sets",
+      "knowledge-gap",
+      "decision-support",
+      "paper-import",
+      "image-evidence"
+    ],
+    "synthetic_only": true,
+    "contains_personal_data": false
+  },
+  "embedding": {
+    "model_id": "BAAI/bge-m3",
+    "requested_revision": "5617a9f61b028005a4858fdac845db406aefb181",
+    "resolved_revision": "5617a9f61b028005a4858fdac845db406aefb181",
+    "dimensions": 1024,
+    "normalized": true,
+    "batch_size": 4,
+    "model_load_ms": 1078.075,
+    "document_encode_ms": 12185.485,
+    "documents_per_second": 24.619,
+    "query_latency": {
+      "count": 20,
+      "mean_ms": 76.791,
+      "p50_ms": 79.669,
+      "p95_ms": 85.865,
+      "max_ms": 88.203
+    },
+    "model_snapshot_bytes": 2293331623
+  },
+  "indexing": {
+    "fts_insert_ms": 258.179,
+    "vector_insert_ms": 18.316,
+    "vector_bytes_estimated": 1228800
+  },
+  "retrieval": {
+    "top_k": 10,
+    "retrieval_depth": 50,
+    "rrf_k": 60,
+    "iterations": 3,
+    "warmup": 3,
+    "fts_latency": {
+      "count": 60,
+      "mean_ms": 0.229,
+      "p50_ms": 0.22,
+      "p95_ms": 0.349,
+      "max_ms": 0.499
+    },
+    "vector_latency": {
+      "count": 60,
+      "mean_ms": 0.687,
+      "p50_ms": 0.67,
+      "p95_ms": 0.79,
+      "max_ms": 0.872
+    },
+    "hybrid_index_latency": {
+      "count": 60,
+      "mean_ms": 0.909,
+      "p50_ms": 0.889,
+      "p95_ms": 1.15,
+      "max_ms": 1.39
+    },
+    "hybrid_e2e_latency": {
+      "count": 20,
+      "mean_ms": 78.189,
+      "p50_ms": 82.177,
+      "p95_ms": 85.484,
+      "max_ms": 86.766
+    },
+    "fts_recall_at_10": 1.0,
+    "vector_recall_at_10": 1.0,
+    "hybrid_recall_at_10": 1.0
+  },
+  "resources": {
+    "rss_before_model_mb": 388.23,
+    "rss_after_model_mb": 987.16,
+    "rss_peak_mb": 2042.34,
+    "benchmark_wall_seconds": 17.918,
+    "process_cpu_seconds": 24.428,
+    "cpu_to_wall_ratio": 1.363,
+    "gpu": {
+      "allocated_mb": null,
+      "peak_allocated_mb": null
+    },
+    "db_before_checkpoint_bytes": 4444160,
+    "wal_before_checkpoint_bytes": 4527912,
+    "shm_before_checkpoint_bytes": 32768,
+    "db_after_checkpoint_bytes": 4444160,
+    "wal_after_checkpoint_bytes": 0,
+    "shm_after_checkpoint_bytes": 0
+  },
+  "checks": {
+    "sqlite_vec_loaded": {
+      "passed": true,
+      "detail": "extension=v0.1.9, package=0.1.9"
+    },
+    "bge_m3_dimensions": {
+      "passed": true,
+      "detail": "dimensions=1024"
+    },
+    "fts_recall_at_10": {
+      "passed": true,
+      "detail": "recall=1.000, threshold=0.900"
+    },
+    "hybrid_not_below_vector": {
+      "passed": true,
+      "detail": "hybrid=1.000, vector=1.000"
+    }
+  }
+}

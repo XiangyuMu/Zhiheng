@@ -1,0 +1,33 @@
+{
+  "status": "NEEDS_REVIEW",
+  "scope": ["G006", "G006-A", "G007"],
+  "evidence": {
+    "pytest": "227 passed",
+    "mypy": "109 source files passed",
+    "ruff": "passed",
+    "uv_lock_check": "passed",
+    "git_diff_check": "passed",
+    "promotion_rollback": "passed",
+    "release_lifecycle": "4 passed",
+    "canary_query_observations": "passed",
+    "stage_worker_execution": "replay/evaluation require release_id and injected Publisher context; state transition is persisted",
+    "hostile_worker_boundary": "missing Publisher capability fails closed"
+    ,"compose_config": "passed"
+    ,"metrics_endpoint": "passed"
+    ,"backup_restore_scripts": "present; restore performs integrity check"
+    ,"erase_ledger_replay": "implemented via PrivacyEraseService.replay_pending"
+  },
+  "invariants": {
+    "immutable_release_binding": "CLEAR",
+    "trusted_evaluator_evidence": "CLEAR",
+    "capability_separation": "CLEAR",
+    "release_context_binding": "CLEAR",
+    "rollback_audit_chain": "CLEAR",
+    "artifact_digest_integrity": "CLEAR",
+    "privacy_redaction": "CLEAR"
+  },
+  "review": {
+    "code_reviewer": "not-run-in-this-turn",
+    "architect": "not-run-in-this-turn"
+  }
+}

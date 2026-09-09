@@ -19,3 +19,14 @@ config/private/
 docs/private/
 .secrets/
 *.private.*
+var/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.maintenance.lock
+*.enc
+*.hmac
+*erase-journal.jsonl*
+.omx/state/
+.omx/tmux-hook.json
