@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import Connection, Engine, event, pool
 from sqlalchemy.engine import engine_from_config
+from sqlalchemy.engine.url import make_url
 
 from zhiheng.db.base import metadata
 
@@ -38,6 +40,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    _ensure_sqlite_parent_directory()
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
@@ -50,6 +53,14 @@ def run_migrations_online() -> None:
         _configure_context(connection)
         with context.begin_transaction():
             context.run_migrations()
+
+
+def _ensure_sqlite_parent_directory() -> None:
+    """Make the default ``var/`` runtime directory before SQLite connects."""
+    url = make_url(config.get_main_option("sqlalchemy.url"))
+    if url.get_backend_name() != "sqlite" or not url.database or url.database == ":memory:":
+        return
+    Path(url.database).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
 
 
 def _configure_context(connection: Connection) -> None:
