@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>分类中心</title>
+    <link rel="stylesheet" href="/taxonomy-center.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">Zhiheng</p>
+          <h1>分类中心</h1>
+        </div>
+        <a href="/knowledge-agent">返回知识库</a>
+      </header>
+      <section class="split">
+        <section>
+          <div class="section-heading">
+            <h2>主领域</h2>
+            <span id="domain-count"></span>
+          </div>
+          <div id="domains" class="domain-list" aria-live="polite"></div>
+        </section>
+        <section>
+          <div class="section-heading">
+            <h2>待审核调整</h2>
+            <button id="refresh" type="button">刷新</button>
+          </div>
+          <div id="proposals" class="proposal-list" aria-live="polite"></div>
+        </section>
+      </section>
+    </main>
+    <script src="/taxonomy-center.js" defer></script>
+  </body>
+</html>

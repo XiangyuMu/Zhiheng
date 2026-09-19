@@ -16,12 +16,15 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from zhiheng import __version__
+from zhiheng.api.conclusions import install_conclusion_routes
 from zhiheng.api.decisions import install_decision_routes
 from zhiheng.api.evolution import install_evolution_routes
 from zhiheng.api.gaps import install_gap_routes
 from zhiheng.api.knowledge import install_knowledge_routes
 from zhiheng.api.memory import install_memory_routes
+from zhiheng.api.personal_updates import install_personal_update_routes
 from zhiheng.api.retrieval import install_retrieval_routes
+from zhiheng.api.taxonomy import install_taxonomy_routes
 from zhiheng.auth import SessionService
 from zhiheng.core.config import Settings, get_settings
 from zhiheng.core.ids import sha256_text
@@ -77,6 +80,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.session_factory = session_factory
     app.state.settings = app_settings
     install_knowledge_routes(app, app_settings)
+    install_conclusion_routes(app)
+    install_personal_update_routes(app)
+    install_taxonomy_routes(app)
     install_memory_routes(app, app_settings)
     install_retrieval_routes(app, app_settings)
     install_decision_routes(app, app_settings)

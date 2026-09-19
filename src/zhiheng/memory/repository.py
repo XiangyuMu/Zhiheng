@@ -22,6 +22,11 @@ class MemoryValue:
     confidence: float = 1.0
     valid_from: datetime | None = None
     valid_to: datetime | None = None
+    time_sensitivity: str = "persistent"
+    confidence_explanation: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        _validate_interval(self.valid_from, self.valid_to)
 
 
 @dataclass(frozen=True)
@@ -35,6 +40,14 @@ class MemoryCandidateInput:
     confidence: float
     sensitivity_level: str = "private"
     evidence_refs: list[dict[str, Any]] = field(default_factory=list)
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    time_sensitivity: str = "persistent"
+    confidence_explanation: dict[str, Any] | None = None
+    extracted_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _validate_interval(self.valid_from, self.valid_to)
 
 
 @dataclass(frozen=True)
@@ -101,12 +114,12 @@ class MemoryRepository:
                     INSERT INTO formal_memories (
                       id, memory_type, state_key, status, current_version_id,
                       current_generation, sensitivity_level, confidence, valid_from, valid_to,
-                      origin_kind
+                      time_sensitivity, confidence_explanation, origin_kind
                     )
                     VALUES (
                       :id, :memory_type, :state_key, 'formal_current', :current_version_id,
                       :current_generation, :sensitivity_level, :confidence, :valid_from, :valid_to,
-                      'explicit_direct'
+                      :time_sensitivity, :confidence_explanation, 'explicit_direct'
                     )
                     """
                 ),
@@ -120,6 +133,10 @@ class MemoryRepository:
                     "confidence": memory.confidence,
                     "valid_from": memory.valid_from or _utc_now(),
                     "valid_to": memory.valid_to,
+                    "time_sensitivity": memory.time_sensitivity,
+                    "confidence_explanation": json_text(
+                        memory.confidence_explanation or _confidence_explanation(memory.confidence)
+                    ),
                 },
             )
         else:
@@ -134,6 +151,8 @@ class MemoryRepository:
                         confidence = :confidence,
                         valid_from = :valid_from,
                         valid_to = :valid_to,
+                        time_sensitivity = :time_sensitivity,
+                        confidence_explanation = :confidence_explanation,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = :id
                     """
@@ -147,6 +166,10 @@ class MemoryRepository:
                     "confidence": memory.confidence,
                     "valid_from": memory.valid_from or _utc_now(),
                     "valid_to": memory.valid_to,
+                    "time_sensitivity": memory.time_sensitivity,
+                    "confidence_explanation": json_text(
+                        memory.confidence_explanation or _confidence_explanation(memory.confidence)
+                    ),
                 },
             )
         session.execute(
@@ -320,11 +343,14 @@ class MemoryRepository:
                 """
                 INSERT INTO memory_candidates (
                   id, candidate_type, memory_type, state_key, status, current_version_id,
-                  source_kind, rationale, confidence, sensitivity_level
+                  source_kind, rationale, confidence, confidence_explanation,
+                  valid_from, valid_to, time_sensitivity, extracted_at, sensitivity_level
                 )
                 VALUES (
                   :id, :candidate_type, :memory_type, :state_key, 'pending_confirmation',
-                  :current_version_id, :source_kind, :rationale, :confidence, :sensitivity_level
+                  :current_version_id, :source_kind, :rationale, :confidence,
+                  :confidence_explanation, :valid_from, :valid_to, :time_sensitivity,
+                  :extracted_at, :sensitivity_level
                 )
                 """
             ),
@@ -337,6 +363,13 @@ class MemoryRepository:
                 "source_kind": item.source_kind,
                 "rationale": item.rationale,
                 "confidence": item.confidence,
+                "confidence_explanation": json_text(
+                    item.confidence_explanation or _confidence_explanation(item.confidence)
+                ),
+                "valid_from": item.valid_from,
+                "valid_to": item.valid_to,
+                "time_sensitivity": item.time_sensitivity,
+                "extracted_at": item.extracted_at or _utc_now(),
                 "sensitivity_level": item.sensitivity_level,
             },
         )
@@ -362,7 +395,202 @@ class MemoryRepository:
             target_version_id=version_id,
             refs=item.evidence_refs,
         )
+        self._record_conflicts_for_candidate(session, candidate_id, version_id)
+        self._record_candidate_evidence(session, candidate_id, version_id, item.evidence_refs)
         return candidate_id
+
+    def list_conflicts(
+        self, session: Session, *, status: str = "pending", limit: int = 100
+    ) -> list[dict[str, Any]]:
+        rows = session.execute(
+            text(
+                """
+                SELECT *
+                FROM memory_conflicts
+                WHERE (:status = 'all' OR status = :status)
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"status": status, "limit": max(1, min(limit, 500))},
+        ).mappings()
+        result = []
+        for row in rows:
+            item = dict(row)
+            for key in ("candidate_value_json", "formal_value_json"):
+                if item.get(key) is not None:
+                    item[key.removesuffix("_json")] = _json_dict(item.pop(key))
+            result.append(item)
+        return result
+
+    def list_expiry(
+        self, session: Session, *, state: str = "all", within_days: int = 7, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        cutoff = _utc_now() + timedelta(days=max(0, within_days))
+        predicates = ["fm.valid_to IS NOT NULL"]
+        if state == "expired":
+            predicates.append("datetime(fm.valid_to) <= datetime('now')")
+        elif state == "expiring":
+            predicates.extend(
+                [
+                    "datetime(fm.valid_to) > datetime('now')",
+                    "datetime(fm.valid_to) <= datetime(:cutoff)",
+                ]
+            )
+        rows = session.execute(
+            text(
+                f"""
+                SELECT fm.id, fm.memory_type, fm.state_key, fm.status, fm.valid_from, fm.valid_to,
+                       fm.time_sensitivity, fm.confidence, fmv.id AS version_id,
+                       fmv.value_json
+                FROM formal_memories fm
+                JOIN formal_memory_versions fmv ON fmv.id = fm.current_version_id
+                WHERE {' AND '.join(predicates)}
+                ORDER BY datetime(fm.valid_to), fm.updated_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"cutoff": cutoff, "limit": max(1, min(limit, 500))},
+        ).mappings()
+        result = []
+        now = _utc_now()
+        for row in rows:
+            item = dict(row)
+            item["value"] = _json_dict(item.pop("value_json"))
+            valid_to = _coerce_datetime(item["valid_to"])
+            item["expiry_state"] = "expired" if valid_to <= now else "expiring"
+            item["days_remaining"] = max(0, (valid_to - now).days)
+            result.append(item)
+        return result
+
+    def timeline(
+        self,
+        session: Session,
+        *,
+        formal_memory_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        predicates = ["fm.status <> 'privacy_erased'"]
+        params: dict[str, Any] = {"limit": max(1, min(limit, 500))}
+        if formal_memory_id:
+            predicates.append("fm.id = :formal_memory_id")
+            params["formal_memory_id"] = formal_memory_id
+        if since:
+            predicates.append("datetime(fmv.created_at) >= datetime(:since)")
+            params["since"] = since
+        if until:
+            predicates.append("datetime(fmv.created_at) <= datetime(:until)")
+            params["until"] = until
+        rows = session.execute(
+            text(
+                f"""
+                SELECT fm.id AS formal_memory_id, fm.state_key, fm.memory_type,
+                       fm.status AS memory_status, fm.valid_from, fm.valid_to,
+                       fmv.id AS version_id, fmv.version_no, fmv.value_json,
+                       fmv.change_reason, fmv.created_by_role, fmv.source_kind,
+                       fmv.generation, fmv.created_at
+                FROM formal_memory_versions fmv
+                JOIN formal_memories fm ON fm.id = fmv.formal_memory_id
+                WHERE {' AND '.join(predicates)}
+                ORDER BY datetime(fmv.created_at) DESC, fmv.version_no DESC
+                LIMIT :limit
+                """
+            ),
+            params,
+        ).mappings()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["value"] = _json_dict(item.pop("value_json"))
+            item["event_type"] = "version"
+            result.append(item)
+        return result
+
+    def _record_conflicts_for_candidate(
+        self, session: Session, candidate_id: str, version_id: str
+    ) -> None:
+        candidate = self._candidate(session, candidate_id)
+        if candidate is None:
+            return
+        formal = self._current_formal_memory_for_state(session, str(candidate["state_key"]))
+        if formal is None:
+            return
+        candidate_value = self._candidate_version(session, version_id)
+        if _json_dict(candidate_value["value_json"]) == _json_dict(formal["value_json"]):
+            return
+        session.execute(
+            text(
+                """
+                INSERT INTO memory_conflicts (
+                  id, state_key, memory_type, candidate_id, candidate_version_id,
+                  formal_memory_id, formal_version_id, candidate_value_json,
+                  formal_value_json, candidate_confidence, formal_confidence
+                )
+                VALUES (
+                  :id, :state_key, :memory_type, :candidate_id, :candidate_version_id,
+                  :formal_memory_id, :formal_version_id, :candidate_value_json,
+                  :formal_value_json, :candidate_confidence, :formal_confidence
+                )
+                """
+            ),
+            {
+                "id": new_id(),
+                "state_key": candidate["state_key"],
+                "memory_type": candidate["memory_type"],
+                "candidate_id": candidate_id,
+                "candidate_version_id": version_id,
+                "formal_memory_id": formal["id"],
+                "formal_version_id": formal["current_version_id"],
+                "candidate_value_json": json_text(_json_dict(candidate_value["value_json"])),
+                "formal_value_json": json_text(_json_dict(formal["value_json"])),
+                "candidate_confidence": candidate["confidence"],
+                "formal_confidence": formal["confidence"],
+            },
+        )
+
+    def _record_candidate_evidence(
+        self, session: Session, candidate_id: str, version_id: str, refs: list[dict[str, Any]]
+    ) -> None:
+        for ref in refs:
+            if not any(
+                ref.get(name) is not None
+                for name in (
+                    "conversation_id",
+                    "message_id",
+                    "excerpt",
+                    "message_start",
+                    "message_end",
+                )
+            ):
+                continue
+            session.execute(
+                text(
+                    """
+                    INSERT INTO memory_candidate_evidence (
+                      id, candidate_id, candidate_version_id, conversation_id, message_id,
+                      message_start, message_end, excerpt, support_type, extracted_at
+                    )
+                    VALUES (
+                      :id, :candidate_id, :candidate_version_id, :conversation_id, :message_id,
+                      :message_start, :message_end, :excerpt, :support_type, :extracted_at
+                    )
+                    """
+                ),
+                {
+                    "id": new_id(),
+                    "candidate_id": candidate_id,
+                    "candidate_version_id": version_id,
+                    "conversation_id": ref.get("conversation_id"),
+                    "message_id": ref.get("message_id"),
+                    "message_start": ref.get("message_start"),
+                    "message_end": ref.get("message_end"),
+                    "excerpt": ref.get("excerpt"),
+                    "support_type": ref.get("support_type", "supporting"),
+                    "extracted_at": ref.get("extracted_at") or _utc_now(),
+                },
+            )
 
     def request_confirmation(
         self,
@@ -1493,6 +1721,23 @@ class MemoryRepository:
         memory = self._formal_memory(session, formal_memory_id)
         return None if memory is None else formal_memory_etag(memory)
 
+    def candidate_etag(self, session: Session, candidate_id: str) -> str | None:
+        candidate = self._candidate(session, candidate_id)
+        return None if candidate is None else _candidate_etag_value(candidate)
+
+    def pending_request_id(self, session: Session, candidate_id: str) -> str | None:
+        row = session.execute(
+            text(
+                """
+                SELECT id FROM memory_confirmation_requests
+                WHERE candidate_id = :candidate_id AND status = 'pending'
+                ORDER BY created_at DESC LIMIT 1
+                """
+            ),
+            {"candidate_id": candidate_id},
+        ).first()
+        return None if row is None else str(row[0])
+
     def _require_formal_etag(
         self, memory: RowMapping, expected_etag: str | None
     ) -> None:
@@ -1577,6 +1822,30 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _validate_interval(valid_from: datetime | None, valid_to: datetime | None) -> None:
+    if (
+        valid_from is not None
+        and valid_to is not None
+        and _coerce_datetime(valid_from) > _coerce_datetime(valid_to)
+    ):
+        raise ValueError("valid_from must be earlier than or equal to valid_to")
+
+
+def _confidence_explanation(confidence: float) -> dict[str, Any]:
+    explicitness = round(min(1.0, confidence + 0.15), 3)
+    consistency = round(confidence, 3)
+    return {
+        "score": round(confidence, 3),
+        "factors": {
+            "explicitness": explicitness,
+            "evidence_count": 0,
+            "consistency": consistency,
+            "timeliness": 1.0,
+        },
+        "summary": "置信度由显式程度、证据数量、一致性和时效性综合得出。",
+    }
+
+
 def _coerce_datetime(value: object) -> datetime:
     if isinstance(value, datetime):
         if value.tzinfo is None:
@@ -1636,6 +1905,16 @@ def formal_memory_etag(item: RowMapping | dict[str, Any]) -> str:
             "id": str(item["id"]),
             "current_version_id": str(item["current_version_id"]),
             "current_generation": int(item["current_generation"]),
+            "status": str(item["status"]),
+        }
+    )
+
+
+def _candidate_etag_value(item: RowMapping | dict[str, Any]) -> str:
+    return sha256_json(
+        {
+            "id": str(item["id"]),
+            "current_version_id": str(item["current_version_id"]),
             "status": str(item["status"]),
         }
     )
