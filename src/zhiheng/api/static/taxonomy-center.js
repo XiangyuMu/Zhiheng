@@ -52,11 +52,14 @@
       const preview = item.preview || {};
       detail.textContent = preview.reason || item.target_id || "领域结构";
       row.append(title, detail);
-      if (item.proposal_type === "domain_structure") {
+      if (item.proposal_type === "domain_structure" || item.proposal_type === "legacy_migration") {
         const list = document.createElement("div");
         list.className = "migration-list";
+        const entries = preview.affected_knowledge || preview.items || [];
         const targets = (preview.new_domains || []).map((domain) => domain.id);
-        (preview.affected_knowledge || []).forEach((entry) => {
+        entries.forEach((entry) => {
+          const entryTargets = item.proposal_type === "legacy_migration"
+            ? [entry.after.primary_domain_id] : targets;
           const line = document.createElement("div");
           line.className = "migration-item";
           const label = document.createElement("span");
@@ -66,7 +69,7 @@
           defer.value = "";
           defer.textContent = "稍后处理";
           select.append(defer);
-          targets.forEach((id) => {
+          entryTargets.forEach((id) => {
             const option = document.createElement("option");
             option.value = id;
             option.textContent = labelForDomain(id);

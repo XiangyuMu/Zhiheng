@@ -128,6 +128,19 @@ def test_legacy_migration_is_previewed_item_by_item(tmp_path: Path) -> None:
     assert proposal["preview"]["items"][0]["after"]["record_type"] == (
         "personal_archive_experience"
     )
+    decision = client.patch(
+        f"/v1/taxonomy/proposals/{proposal['id']}/items/{knowledge_id}",
+        json={"target_domain_id": "economics_finance_business"},
+        headers=_headers(csrf, "legacy-item-decision", proposal["etag"]),
+    )
+    assert decision.status_code == 200
+    approved = client.post(
+        f"/v1/taxonomy/proposals/{proposal['id']}/approve",
+        headers=_headers(csrf, "legacy-item-approve", decision.json()["result"]["etag"]),
+    )
+    assert approved.status_code == 200
+    assignment = client.get(f"/v1/knowledge/{knowledge_id}/classifications")
+    assert assignment.json()["primary_domain_id"] == "economics_finance_business"
 
 
 def test_domain_structure_migrates_only_confirmed_items(tmp_path: Path) -> None:
