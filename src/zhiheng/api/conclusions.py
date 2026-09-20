@@ -34,6 +34,16 @@ class DraftPayload(BaseModel):
     evidence: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class DraftUpdatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str | None = Field(default=None, min_length=1, max_length=512)
+    claim: str | None = Field(default=None, min_length=1, max_length=10000)
+    domain_id: str | None = Field(default=None, min_length=1, max_length=128)
+    premises: list[dict[str, Any]] | None = None
+    excerpt: str | None = Field(default=None, min_length=1, max_length=10000)
+    evidence: list[dict[str, Any]] | None = None
+
+
 @router.post("/sources")
 def source(
     payload: SourcePayload, session: SessionDep, user: AuthDep, mutation: MutationDep
@@ -57,6 +67,27 @@ def draft(
 @router.get("/context/search")
 def context(query: str, session: SessionDep, user: AuthDep) -> dict[str, Any]:
     return {"items": repo.context(session, user, query)}
+
+
+@router.get("/drafts")
+def drafts(session: SessionDep, user: AuthDep, limit: int = 100) -> dict[str, Any]:
+    return {"items": repo.list_drafts(session, user, limit=limit)}
+
+
+@router.patch("/{entry_id}")
+def update_draft(
+    entry_id: str,
+    payload: DraftUpdatePayload,
+    session: SessionDep,
+    user: AuthDep,
+    mutation: MutationDep,
+) -> dict[str, Any]:
+    key, etag = mutation
+    changes = {name: value for name, value in payload.model_dump().items() if value is not None}
+    try:
+        return repo.update_draft(session, user, entry_id, etag, changes, key)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get("/{entry_id}")

@@ -144,6 +144,72 @@ class ConclusionRepository:
             "source": {"id": source["id"], "text": source["body"]},
         }
 
+    def list_drafts(self, session: Session, owner: str, limit: int = 100) -> list[dict[str, Any]]:
+        rows = session.execute(
+            text(
+                """
+                SELECT id FROM conclusion_entries
+                WHERE owner_user_id = :owner AND status = 'draft'
+                ORDER BY datetime(created_at) DESC, id DESC
+                LIMIT :limit
+                """
+            ),
+            {"owner": owner, "limit": max(1, min(limit, 500))},
+        ).scalars()
+        return [item for entry_id in rows if (item := self.get(session, owner, str(entry_id))) is not None]
+
+    def update_draft(
+        self,
+        session: Session,
+        owner: str,
+        entry_id: str,
+        etag: str,
+        changes: Mapping[str, Any],
+        key: str,
+    ) -> dict[str, Any]:
+        item = self.get(session, owner, entry_id)
+        if item is None or item["status"] != "draft":
+            raise ValueError("draft conclusion not found")
+        if etag not in {"*", item["etag"]}:
+            raise ValueError("conclusion changed after it was read")
+        existing = session.execute(
+            text(
+                "SELECT result_json FROM conclusion_operations "
+                "WHERE owner_user_id=:o AND operation_key=:k"
+            ),
+            {"o": owner, "k": key},
+        ).scalar_one_or_none()
+        if existing is not None:
+            return cast(dict[str, Any], json.loads(str(existing)))
+        payload = {
+            key: value for key, value in {**item, **dict(changes)}.items()
+            if key not in {"id", "status", "version", "approved_version", "etag", "source"}
+        }
+        version = int(item["version"]) + 1
+        session.execute(
+            text(
+                "INSERT INTO conclusion_versions(entry_id,version,payload_json) "
+                "VALUES (:id,:v,:p)"
+            ),
+            {"id": entry_id, "v": version, "p": json_text({**payload, "status": "draft", "version": version})},
+        )
+        session.execute(
+            text(
+                "UPDATE conclusion_entries SET current_version=:v WHERE id=:id AND owner_user_id=:o"
+            ),
+            {"id": entry_id, "o": owner, "v": version},
+        )
+        result = {
+            "id": entry_id,
+            "status": "draft",
+            "version": version,
+            "approved_version": None,
+            "etag": sha256_json({"id": entry_id, "version": version, "status": "draft"}),
+            **payload,
+            "source": item["source"],
+        }
+        return self._write(session, owner, key, changes, result)
+
     def approve(
         self, session: Session, owner: str, entry_id: str, etag: str, key: str
     ) -> dict[str, Any]:
