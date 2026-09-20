@@ -21,8 +21,9 @@ from zhiheng.api.memory import (
 )
 from zhiheng.auth import SessionService
 from zhiheng.core.config import Settings
-from zhiheng.core.ids import sha256_json
+from zhiheng.core.ids import sha256_json, sha256_text
 from zhiheng.db.session import session_scope
+from zhiheng.evolution.learning_loop import LearningLoopService
 from zhiheng.evolution.releases import ReleaseContext
 from zhiheng.evolution.trajectory_repository import TrajectoryRepository
 from zhiheng.memory.context import (
@@ -30,7 +31,9 @@ from zhiheng.memory.context import (
     MemoryContextService,
     MemoryContextSnapshot,
 )
+from zhiheng.memory.personal_updates import PersonalUpdateService
 from zhiheng.models import ModelGateway
+from zhiheng.models.configuration import defaults as model_defaults
 from zhiheng.query import (
     AgenticBudget,
     AnswerClaim,
@@ -41,6 +44,7 @@ from zhiheng.query import (
 )
 from zhiheng.query.conflicts import explicit_constraint_conflicts
 from zhiheng.query.contracts import AnswerEnvelope, PersonalizationRef
+from zhiheng.query.conversations import ConversationRepository
 from zhiheng.retrieval import (
     Citation,
     HybridRetrievalResult,
@@ -53,7 +57,7 @@ from zhiheng.retrieval import (
 from zhiheng.retrieval.contracts import AuthorizedContextManifest
 from zhiheng.retrieval.embeddings import BgeM3QueryEmbedder, QueryEmbeddingUnavailableError
 from zhiheng.retrieval.replay import CitationReplayValidator
-from zhiheng.retrieval.repository import LexicalRetriever
+from zhiheng.retrieval.repository import CitationContextRepository, LexicalRetriever
 from zhiheng.retrieval.vector_index import QueryEmbeddingPort
 
 router = APIRouter()
@@ -74,6 +78,7 @@ class AnswerRequest(BaseModel):
         max_length=128,
         pattern=TOPIC_PREFIX_PATTERN,
     )
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=36)
 
 
 class RoutePayload(BaseModel):
@@ -110,6 +115,54 @@ class CitationPayload(BaseModel):
     quote_hash: str
 
 
+class CitationContextRequest(CitationPayload):
+    pass
+
+
+class EventCitationEvidence(BaseModel):
+    history_id: str
+    conversation_id: str
+    excerpt: str
+    quote_hash: str
+
+
+class CitationContextResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    citation_id: str
+    title: str | None
+    source_type: str
+    source_id: str
+    source_version_id: str
+    chunk_id: str
+    media_type: str | None
+    object_kind: str | None
+    page_no: int | None
+    section_path: str | None
+    context: str
+    quote: str
+    quote_start: int
+    quote_end: int
+    event_evidence: EventCitationEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+
+class CitationCoverageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    claims: list[ClaimPayload]
+    citation_ids: list[str] = Field(default_factory=list)
+
+
+class CitationCoverageResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    total_claims: int
+    cited_claims: int
+    uncovered_claims: int
+    coverage: float
+    low_confidence: bool
+
+
 class BudgetUsagePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -132,6 +185,17 @@ class PersonalizationRefPayload(BaseModel):
     state_key: str
 
 
+class MemoryImpactPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    formal_memory_id: str
+    formal_version_id: str
+    state_key: str
+    effect_type: str
+    explanation: str
+    used: bool = True
+
+
 class AnswerResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -147,6 +211,11 @@ class AnswerResponse(BaseModel):
     rows: list[dict[str, Any]]
     personalization_refs: list[PersonalizationRefPayload] = Field(default_factory=list)
     memory_context_digest: str | None = None
+    memory_impacts: list[MemoryImpactPayload] = Field(
+        default_factory=list,
+        exclude_if=lambda value: not value,
+    )
+    context_prompts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class LookupResponse(BaseModel):
@@ -154,6 +223,33 @@ class LookupResponse(BaseModel):
 
     route: RoutePayload
     rows: list[dict[str, Any]]
+
+
+class ConversationCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, max_length=200)
+
+
+class ConversationResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    title: str | None = None
+    turn_count: int = 0
+
+
+class AnswerHistoryResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    conversation_id: str
+    turn_index: int
+    query: str
+    response: dict[str, Any]
+    route: str
+    stop_reason: str
+    is_favorite: bool
 
 
 def install_retrieval_routes(app: Any, settings: Settings) -> None:
@@ -270,6 +366,7 @@ def answer_question(
     session: SessionDep,
     request: Request,
     idempotency_key: WriteDep,
+    user_id: AuthDep,
 ) -> AnswerResponse:
     operation_payload = payload.model_dump(mode="json")
     replay = _idempotency_replay(
@@ -296,6 +393,8 @@ def answer_question(
                 session,
                 query_hash=sha256_text(payload.query),
                 topic_prefix=payload.memory_topic_prefix,
+                query=payload.query,
+                intent=payload.intent,
             )
             if current_memory.digest != replay["memory_context_digest"]:
                 raise HTTPException(
@@ -313,6 +412,21 @@ def answer_question(
     session.commit()
     router_service: QueryRouter = request.app.state.query_router
     decision = router_service.route(payload.query, selector=payload.selector, intent=payload.intent)
+    conversation_context = None
+    if payload.conversation_id is not None:
+        repository = ConversationRepository()
+        if (
+            repository.get_owned(
+                session, conversation_id=payload.conversation_id, owner_user_id=user_id
+            )
+            is None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found"
+            )
+        conversation_context = repository.context(
+            session, conversation_id=payload.conversation_id, owner_user_id=user_id
+        )
     result = request.app.state.query_answer_service.answer(
         session,
         payload.query,
@@ -320,8 +434,16 @@ def answer_question(
         structured_value=payload.structured_value,
         intent=payload.intent,
         memory_topic_prefix=payload.memory_topic_prefix,
+        conversation_context=conversation_context,
     )
     response = _answer_response(result, reason=decision.reason_code)
+    response.context_prompts = _contextual_prompts(
+        session, query=payload.query, user_id=user_id, result=result
+    )
+    if any(prompt["kind"] == "conflict" for prompt in response.context_prompts):
+        response.insufficiencies.append(
+            "回答中依赖冲突个人信息的部分暂缓，请先确认或补充；不依赖冲突的信息仍可继续使用。"
+        )
     authority_digest = _answer_authority_digest(session, request.app, payload, response)
     if authority_digest is None:
         raise HTTPException(status_code=409, detail="answer source authority changed")
@@ -333,6 +455,8 @@ def answer_question(
             session,
             query_hash=sha256_text(payload.query),
             topic_prefix=payload.memory_topic_prefix,
+            query=payload.query,
+            intent=payload.intent,
         )
         if snapshot.digest != response.memory_context_digest:
             raise HTTPException(status_code=409, detail="answer memory context changed")
@@ -349,7 +473,215 @@ def answer_question(
             "response": response.model_dump(mode="json"),
         },
     )
+    if payload.conversation_id is not None:
+        ConversationRepository().append(
+            session,
+            conversation_id=payload.conversation_id,
+            owner_user_id=user_id,
+            query=payload.query,
+            response=response.model_dump(mode="json"),
+        )
     return response
+
+
+def _contextual_prompts(
+    session: Session,
+    *,
+    query: str,
+    user_id: str,
+    result: AnswerEnvelope | StructuredLookupResult,
+) -> list[dict[str, Any]]:
+    service = PersonalUpdateService()
+    prompts = service.context_prompts(session, query=query, owner_user_id=user_id)
+    if not prompts and _needs_personal_context(query, result):
+        prompts.append(
+            service.create_missing_prompt(
+                session,
+                owner_user_id=user_id,
+                query=query,
+                reason="当前问题需要你的个人背景或偏好，但知识库中没有足够的已确认信息。",
+            )
+        )
+    return prompts
+
+
+def _needs_personal_context(query: str, result: AnswerEnvelope | StructuredLookupResult) -> bool:
+    if getattr(result, "citations", ()):
+        return False
+    normalized = query.casefold()
+    return any(
+        marker in normalized for marker in ("我", "我的", "目前", "现在", "偏好", "目标", "计划")
+    )
+
+
+@router.post("/v1/conversations", response_model=ConversationResponse)
+def create_conversation(
+    payload: ConversationCreateRequest,
+    session: SessionDep,
+    user_id: AuthDep,
+    _idempotency_key: WriteDep,
+) -> ConversationResponse:
+    return ConversationResponse(
+        **ConversationRepository().create(session, owner_user_id=user_id, title=payload.title)
+    )
+
+
+@router.get("/v1/conversations", response_model=list[ConversationResponse])
+def list_conversations(
+    session: SessionDep,
+    user_id: AuthDep,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[ConversationResponse]:
+    return [
+        ConversationResponse(**item)
+        for item in ConversationRepository().list_owned(
+            session, owner_user_id=user_id, limit=max(1, min(limit, 100)), offset=max(0, offset)
+        )
+    ]
+
+
+@router.get("/v1/conversations/{conversation_id}", response_model=ConversationResponse)
+def get_conversation(
+    conversation_id: str,
+    session: SessionDep,
+    user_id: AuthDep,
+) -> ConversationResponse:
+    item = ConversationRepository().get_owned(
+        session, conversation_id=conversation_id, owner_user_id=user_id
+    )
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="conversation not found")
+    return ConversationResponse(**item)
+
+
+@router.get("/v1/answers/history", response_model=list[AnswerHistoryResponse])
+def answer_history(
+    session: SessionDep,
+    user_id: AuthDep,
+    conversation_id: str | None = None,
+    favorite: bool | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[AnswerHistoryResponse]:
+    items = ConversationRepository().list_history(
+        session,
+        owner_user_id=user_id,
+        conversation_id=conversation_id,
+        favorite=favorite,
+        limit=max(1, min(limit, 100)),
+        offset=max(0, offset),
+    )
+    return [AnswerHistoryResponse(**item) for item in items]
+
+
+@router.post("/v1/answers/history/{history_id}/favorite", response_model=dict[str, bool])
+def favorite_answer(
+    history_id: str,
+    session: SessionDep,
+    user_id: AuthDep,
+    _idempotency_key: WriteDep,
+    enabled: bool = True,
+) -> dict[str, bool]:
+    updated = ConversationRepository().set_favorite(
+        session, history_id=history_id, owner_user_id=user_id, favorite=enabled
+    )
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="answer history not found"
+        )
+    return {"is_favorite": enabled}
+
+
+@router.post("/v1/citations/context", response_model=CitationContextResponse)
+def citation_context(
+    payload: CitationContextRequest,
+    session: SessionDep,
+    _user_id: AuthDep,
+) -> CitationContextResponse:
+    citation = Citation(
+        citation_id=payload.citation_id,
+        source_type=payload.source_type,
+        source_id=payload.source_id,
+        source_version_id=payload.source_version_id,
+        chunk_id=payload.chunk_id,
+        evidence_object_id=payload.evidence_object_id,
+        content_version_id=payload.content_version_id,
+        content_span_id=payload.content_span_id,
+        content_span=(payload.span_start, payload.span_end),
+        offset=(payload.offset_start, payload.offset_end),
+        page_no=payload.page_no,
+        section_path=payload.section_path,
+        quote_hash=payload.quote_hash,
+    )
+    if CitationReplayValidator().digest(session, [citation]) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="citation source is unavailable or no longer authorized",
+        )
+    row = CitationContextRepository().get_chunk(
+        session,
+        source_type=payload.source_type,
+        source_id=payload.source_id,
+        source_version_id=payload.source_version_id,
+        chunk_id=payload.chunk_id,
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="citation source not found",
+        )
+    chunk_text = str(row["text"])
+    span_start = int(cast(int | str, row["span_start"]))
+    quote_start = max(0, min(payload.offset_start - span_start, len(chunk_text)))
+    quote_end = max(quote_start, min(payload.offset_end - span_start, len(chunk_text)))
+    quote = chunk_text[quote_start:quote_end]
+    if sha256_text(quote) != payload.quote_hash:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="citation quote hash is stale or unauthorized",
+        )
+    context_start = max(0, quote_start - 160)
+    context_end = min(len(chunk_text), quote_end + 160)
+    return CitationContextResponse(
+        citation_id=payload.citation_id,
+        title=str(row["title"]) if row["title"] is not None else None,
+        source_type=payload.source_type,
+        source_id=payload.source_id,
+        source_version_id=payload.source_version_id,
+        chunk_id=payload.chunk_id,
+        media_type=str(row["media_type"]) if row["media_type"] is not None else None,
+        object_kind=str(row["object_kind"]) if row["object_kind"] is not None else None,
+        page_no=payload.page_no,
+        section_path=payload.section_path,
+        context=chunk_text[context_start:context_end],
+        quote=quote,
+        quote_start=quote_start - context_start,
+        quote_end=quote_end - context_start,
+        event_evidence=EventCitationEvidence(
+            history_id=str(row["history_id"]),
+            conversation_id=str(row["conversation_id"]),
+            excerpt=str(row["evidence_excerpt"]),
+            quote_hash=str(row["evidence_quote_hash"]),
+        ) if payload.source_type == "event_memory" else None,
+    )
+
+
+@router.post("/v1/citations/coverage", response_model=CitationCoverageResponse)
+def citation_coverage(
+    payload: CitationCoverageRequest, _user_id: AuthDep
+) -> CitationCoverageResponse:
+    allowed = set(payload.citation_ids)
+    total = len(payload.claims)
+    cited = sum(bool(set(claim.citation_ids) & allowed) for claim in payload.claims)
+    coverage = cited / total if total else 0.0
+    return CitationCoverageResponse(
+        total_claims=total,
+        cited_claims=cited,
+        uncovered_claims=total - cited,
+        coverage=coverage,
+        low_confidence=coverage < 0.75,
+    )
 
 
 def _answer_authority_digest(
@@ -421,6 +753,8 @@ def _ensure_query_services(app: Any) -> None:
         app.state.trajectory_repository = TrajectoryRepository(
             deployment_secret=app.state.retrieval_settings.secret_key.get_secret_value(),
         )
+    if not hasattr(app.state, "learning_loop_service"):
+        app.state.learning_loop_service = LearningLoopService()
     if not hasattr(app.state, "bounded_rag_service"):
         app.state.bounded_rag_service = BoundedAgenticRagService(
             structured_lookup=app.state.structured_lookup_service,
@@ -438,14 +772,32 @@ def _ensure_query_services(app: Any) -> None:
             trajectory_repository=app.state.trajectory_repository,
             deployment_secret=app.state.retrieval_settings.secret_key.get_secret_value(),
             memory_context_service=app.state.memory_context_service,
+            learning_loop_service=app.state.learning_loop_service,
         )
 
 
 def _answer_model_for_settings(app: Any) -> Any:
     settings: Settings = app.state.retrieval_settings
-    if settings.answer_provider_id is None and settings.answer_model_id is None:
+    configured_provider = settings.answer_provider_id
+    configured_model = settings.answer_model_id
+    database_default = False
+    try:
+        with app.state.session_factory() as session:
+            selected = model_defaults(session).get("text")
+        if selected:
+            # Once a user saves a route in SQLite it is authoritative.  The
+            # environment values serve only as the initial bootstrap fallback
+            # and must not silently overwrite a page-configured default.
+            configured_provider = str(selected["provider_id"])
+            configured_model = str(selected["model_id"])
+            database_default = True
+    except Exception:
+        # A fresh/legacy database may not have the defaults table yet; retain
+        # the deployment environment fallback in that case.
+        pass
+    if configured_provider is None and configured_model is None:
         return EvidenceBoundAnswerModel()
-    if settings.answer_provider_id is None or settings.answer_model_id is None:
+    if configured_provider is None or configured_model is None:
         raise ValueError("answer_provider_id and answer_model_id must be configured together")
     if not hasattr(app.state, "model_gateway"):
         app.state.model_gateway = ModelGateway(
@@ -454,11 +806,45 @@ def _answer_model_for_settings(app: Any) -> Any:
         )
     from zhiheng.query.gateway_model import GatewayAnswerModel
 
+    if database_default:
+        return _DynamicGatewayAnswerModel(
+            gateway=app.state.model_gateway,
+            session_factory=app.state.session_factory,
+            fallback=(configured_provider, configured_model),
+        )
     return GatewayAnswerModel(
         gateway=app.state.model_gateway,
-        provider_id=settings.answer_provider_id,
-        model_id=settings.answer_model_id,
+        provider_id=configured_provider,
+        model_id=configured_model,
     )
+
+
+class _DynamicGatewayAnswerModel:
+    """Resolve the persisted text default for every answer invocation."""
+
+    def __init__(
+        self, *, gateway: ModelGateway, session_factory: Any, fallback: tuple[str, str]
+    ) -> None:
+        self._gateway = gateway
+        self._session_factory = session_factory
+        self._fallback = fallback
+
+    def generate_answer(self, **kwargs: Any) -> Any:
+        from zhiheng.query.gateway_model import GatewayAnswerModel
+
+        provider_id, model_id = self._fallback
+        try:
+            with self._session_factory() as session:
+                selected = model_defaults(session).get("text")
+            if selected:
+                provider_id, model_id = str(selected["provider_id"]), str(selected["model_id"])
+        except Exception:
+            pass
+        return GatewayAnswerModel(
+            gateway=self._gateway,
+            provider_id=provider_id,
+            model_id=model_id,
+        ).generate_answer(**kwargs)
 
 
 class VectorAwareHybridRetriever:
@@ -653,6 +1039,7 @@ def _answer_response(
             PersonalizationRefPayload(**asdict(ref)) for ref in result.personalization_refs
         ],
         memory_context_digest=result.memory_context_digest,
+        memory_impacts=[MemoryImpactPayload(**asdict(item)) for item in result.memory_impacts],
     )
 
 
@@ -699,6 +1086,7 @@ class EvidenceBoundAnswerModel:
         manifest: AuthorizedContextManifest,
         citations: Sequence[Citation],
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
         max_output_tokens: int | None = None,
     ) -> GeneratedAnswer:
         memory_refs = (
@@ -744,11 +1132,16 @@ class EvidenceBoundAnswerModel:
             if memory_refs
             else ""
         )
+        follow_up = "已结合本会话前文理解当前问题。\n" if conversation_context else ""
         insufficiencies: tuple[str, ...] = ("当前为证据摘录模式，未完成通用语义一致性检查。",)
         if memory_context is not None and memory_context.truncated:
             insufficiencies += ("用户上下文已按预算截断，不能假定已覆盖全部目标和约束。",)
         return GeneratedAnswer(
-            answer=personalization + warning + "根据当前知识库中已授权证据：\n" + "\n".join(lines),
+            answer=follow_up
+            + personalization
+            + warning
+            + "根据当前知识库中已授权证据：\n"
+            + "\n".join(lines),
             claims=tuple(claims),
             conflicts=conflicts,
             insufficiencies=insufficiencies,

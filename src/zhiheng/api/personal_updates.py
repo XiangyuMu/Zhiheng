@@ -47,6 +47,17 @@ class DecisionPayload(BaseModel):
     decision: Literal["confirm", "reject", "defer", "skip"]
 
 
+class ContextPromptDecisionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["confirm", "reject", "supplement", "defer", "skip"]
+    candidate_etag: str | None = None
+    value: dict[str, Any] | None = None
+    state_key: str | None = Field(default=None, min_length=1, max_length=128)
+    memory_type: str = Field(default="profile", min_length=1, max_length=64)
+    rationale: str = Field(default="user supplied missing context", max_length=512)
+
+
 @router.post("")
 def create_update(
     payload: PersonalUpdatePayload,
@@ -93,6 +104,144 @@ def list_triage(session: SessionDep, _user_id: AuthDep, limit: int = 100) -> dic
 @router.get("/conflicts")
 def list_conflicts(session: SessionDep, _user_id: AuthDep, limit: int = 100) -> dict[str, Any]:
     return {"items": service.list_conflicts(session, limit=max(1, min(limit, 500)))}
+
+
+@router.get("/context-prompts")
+def list_context_prompts(
+    query: str,
+    session: SessionDep,
+    _user_id: AuthDep,
+    limit: int = 20,
+) -> dict[str, Any]:
+    return {
+        "items": service.context_prompts(
+            session, query=query, owner_user_id=_user_id, limit=max(1, min(limit, 100))
+        )
+    }
+
+
+@router.post("/context-prompts/{prompt_id}/decision")
+def decide_context_prompt(
+    prompt_id: str,
+    payload: ContextPromptDecisionPayload,
+    session: SessionDep,
+    _user_id: AuthDep,
+    mutation: MutationDep,
+) -> dict[str, Any]:
+    operation_key, if_match = mutation
+    conflict = session.execute(
+        text(
+            "SELECT id FROM memory_conflicts WHERE id=:id AND status='pending'"
+        ),
+        {"id": prompt_id},
+    ).first()
+    if conflict is not None:
+        if payload.decision in {"defer", "skip"}:
+            result = (
+                service.defer_conflict(session, prompt_id, owner_user_id=_user_id)
+                if payload.decision == "defer"
+                else service.skip_conflict(session, prompt_id, owner_user_id=_user_id)
+            )
+            return {"status": "completed", "result": result}
+        if payload.decision == "supplement":
+            if payload.value is None:
+                raise HTTPException(status_code=400, detail="supplement requires value")
+            state_key = payload.state_key
+            if not state_key:
+                state_row = session.execute(
+                    text("SELECT state_key FROM personal_conflicts WHERE id=:id"),
+                    {"id": prompt_id},
+                ).first()
+                state_key = str(state_row[0]) if state_row is not None else None
+            if not state_key:
+                raise HTTPException(status_code=409, detail="conflict state key is missing")
+            service.resolve_conflict(session, prompt_id, "supplemented", owner_user_id=_user_id)
+            result = service.apply(
+                session,
+                PersonalUpdate(
+                    memory_type=payload.memory_type,
+                    state_key=state_key,
+                    value=payload.value,
+                    source_kind="user_explicit",
+                    temporal_change=True,
+                    rationale=payload.rationale,
+                ),
+                operation_key=f"api:context-prompt:supplement:{operation_key}",
+                owner_user_id=_user_id,
+            )
+            return {"status": "completed", "result": {"status": "supplemented", "update": result}}
+        candidate = session.execute(
+            text("SELECT candidate_id FROM memory_conflicts WHERE id=:id"), {"id": prompt_id}
+        ).first()
+        if candidate is None or not payload.candidate_etag:
+            raise HTTPException(status_code=412, detail="candidate_etag is required")
+        candidate_id = str(candidate[0])
+        current_etag = memory_repository.candidate_etag(session, candidate_id)
+        if current_etag != payload.candidate_etag:
+            raise HTTPException(status_code=412, detail="candidate version changed")
+        request_id = memory_repository.pending_request_id(session, candidate_id)
+        if request_id is None:
+            raise HTTPException(status_code=409, detail="candidate has no pending request")
+        if payload.decision == "confirm":
+            confirmation_result = memory_repository.confirm_request(
+                session, request_id=request_id, operation_key=f"api:context-prompt:{operation_key}"
+            )
+            service.resolve_conflict(session, prompt_id, "confirmed", owner_user_id=_user_id)
+            return {
+                "status": "completed",
+                "result": {
+                    "status": "confirmed",
+                    "formal_memory_id": confirmation_result.formal_memory_id,
+                },
+            }
+        rejection_result = memory_repository.reject_request(
+            session, request_id=request_id, operation_key=f"api:context-prompt:{operation_key}"
+        )
+        service.resolve_conflict(session, prompt_id, "rejected", owner_user_id=_user_id)
+        return {
+            "status": "completed",
+            "result": {"status": "rejected", "decision_id": rejection_result.decision_id},
+        }
+
+    row = session.execute(
+        text(
+            """
+            SELECT state_key FROM personal_prompts
+            WHERE id=:id AND owner_user_id=:owner AND prompt_kind='missing' AND status='pending'
+            """
+        ),
+        {"id": prompt_id, "owner": _user_id},
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="context prompt not found")
+    if payload.decision in {"defer", "skip"}:
+        return {
+            "status": "completed",
+            "result": service.decide_missing_prompt(session, prompt_id, payload.decision),
+        }
+    if payload.decision != "supplement" or payload.value is None:
+        raise HTTPException(status_code=400, detail="supplement requires value")
+    state_key = payload.state_key or str(row[0])
+    result = service.apply(
+        session,
+        PersonalUpdate(
+            memory_type=payload.memory_type,
+            state_key=state_key,
+            value=payload.value,
+            source_kind="user_explicit",
+            rationale=payload.rationale,
+        ),
+        operation_key=f"api:context-prompt:supplement:{operation_key}",
+        owner_user_id=_user_id,
+    )
+    session.execute(
+        text(
+            "UPDATE personal_prompts SET status='supplemented', "
+            "resolved_at=CURRENT_TIMESTAMP WHERE id=:id"
+        ),
+        {"id": prompt_id},
+    )
+    return {"status": "completed", "result": {"status": "supplemented", "update": result}}
 
 
 @router.post("/conflicts/{conflict_id}/decision")

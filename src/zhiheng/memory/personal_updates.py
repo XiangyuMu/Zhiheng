@@ -182,6 +182,165 @@ class PersonalUpdateService:
             item["candidate_id"] = str(item["candidate_id"])
         return rows
 
+    def context_prompts(
+        self, session: Session, *, query: str, owner_user_id: str = "default", limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Return only unresolved prompts that are relevant to the current query."""
+        normalized = query.casefold()
+        prompts: list[dict[str, Any]] = []
+        conflict_rows = session.execute(
+            text(
+                """
+                SELECT pc.id, pc.state_key, pc.candidate_json, pc.existing_json,
+                       c.candidate_id,
+                       mc.source_kind AS candidate_source, mc.rationale AS candidate_reason,
+                       fmv.source_kind AS existing_source
+                FROM personal_conflicts pc
+                JOIN memory_conflicts c ON c.id = pc.id AND c.status = 'pending'
+                JOIN memory_candidates mc ON mc.id = c.candidate_id
+                LEFT JOIN current_formal_memory fm ON fm.state_key = pc.state_key
+                LEFT JOIN formal_memory_versions fmv ON fmv.id = fm.current_version_id
+                WHERE pc.owner_user_id = :owner AND pc.status = 'pending'
+                ORDER BY pc.created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"owner": owner_user_id, "limit": max(1, min(limit, 100))},
+        ).mappings()
+        for row in conflict_rows:
+            candidate = _json_object(row["candidate_json"])
+            existing = _json_object(row["existing_json"])
+            if not _prompt_matches(normalized, str(row["state_key"]), candidate, existing):
+                continue
+            prompts.append(
+                {
+                    "id": str(row["id"]),
+                    "kind": "conflict",
+                    "status": "pending",
+                    "state_key": str(row["state_key"]),
+                    "reason": "当前问题涉及相互冲突的个人信息，请选择、补充或稍后处理。",
+                    "candidate": candidate,
+                    "existing": existing,
+                    "candidate_source": str(row["candidate_source"]),
+                    "existing_source": str(row["existing_source"])
+                    if row["existing_source"] is not None
+                    else None,
+                    "conflict_id": str(row["id"]),
+                    "candidate_etag": self.repository.candidate_etag(
+                        session, str(row["candidate_id"])
+                    ),
+                    "actions": ["confirm", "supplement", "defer", "skip"],
+                }
+            )
+        missing_rows = session.execute(
+            text(
+                """
+                SELECT id, prompt_kind, state_key, reason, payload_json, status
+                FROM personal_prompts
+                WHERE owner_user_id = :owner AND status = 'pending'
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"owner": owner_user_id, "limit": max(1, min(limit, 100))},
+        ).mappings()
+        for row in missing_rows:
+            payload = _json_object(row["payload_json"])
+            if str(row["prompt_kind"]) != "missing":
+                continue
+            if not _prompt_matches(normalized, str(row["state_key"] or ""), payload):
+                continue
+            prompts.append(
+                {
+                    "id": str(row["id"]),
+                    "kind": "missing",
+                    "status": str(row["status"]),
+                    "state_key": str(row["state_key"] or ""),
+                    "reason": str(row["reason"]),
+                    "payload": payload,
+                    "actions": ["supplement", "defer", "skip"],
+                }
+            )
+        return prompts[: max(1, min(limit, 100))]
+
+    def create_missing_prompt(
+        self,
+        session: Session,
+        *,
+        owner_user_id: str,
+        query: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        state_key = "context.missing." + sha256_json({"query": query})[:24]
+        existing = session.execute(
+            text(
+                """
+                SELECT id, reason, payload_json FROM personal_prompts
+                WHERE owner_user_id=:owner AND prompt_kind='missing' AND state_key=:state_key
+                  AND status='pending'
+                ORDER BY created_at DESC LIMIT 1
+                """
+            ),
+            {"owner": owner_user_id, "state_key": state_key},
+        ).mappings().first()
+        if existing is not None:
+            return {
+                "id": str(existing["id"]),
+                "kind": "missing",
+                "status": "pending",
+                "state_key": state_key,
+                "reason": str(existing["reason"]),
+                "payload": _json_object(existing["payload_json"]),
+                "actions": ["supplement", "defer", "skip"],
+            }
+        prompt_id = new_id()
+        payload = {"query": query, "reason": reason}
+        session.execute(
+            text(
+                """
+                INSERT INTO personal_prompts
+                  (id, owner_user_id, prompt_kind, state_key, reason, payload_json)
+                VALUES (:id, :owner, 'missing', :state_key, :reason, :payload)
+                """
+            ),
+            {
+                "id": prompt_id,
+                "owner": owner_user_id,
+                "state_key": state_key,
+                "reason": reason,
+                "payload": json_text(payload),
+            },
+        )
+        return {
+            "id": prompt_id,
+            "kind": "missing",
+            "status": "pending",
+            "state_key": state_key,
+            "reason": reason,
+            "payload": payload,
+            "actions": ["supplement", "defer", "skip"],
+        }
+
+    def decide_missing_prompt(
+        self, session: Session, prompt_id: str, decision: str
+    ) -> dict[str, Any]:
+        if decision not in {"defer", "skip"}:
+            raise ValueError("unsupported missing prompt decision")
+        result = session.execute(
+            text(
+                """
+                UPDATE personal_prompts
+                SET status=:status, resolved_at=CURRENT_TIMESTAMP
+                WHERE id=:id AND prompt_kind='missing' AND status='pending'
+                """
+            ),
+            {"id": prompt_id, "status": decision + "ed"},
+        )
+        if int(getattr(result, "rowcount", 0)) != 1:
+            raise ValueError("prompt not found")
+        status = "skipped" if decision == "skip" else "deferred"
+        return {"prompt_id": prompt_id, "status": status}
+
     def defer_conflict(
         self, session: Session, conflict_id: str, *, owner_user_id: str = "default"
     ) -> dict[str, Any]:
@@ -476,6 +635,36 @@ def _requires_review(update: PersonalUpdate) -> bool:
 
 def _same_value(raw: object, value: dict[str, Any]) -> bool:
     return _json_object(raw) == value
+
+
+def _prompt_matches(
+    normalized_query: str,
+    state_key: str,
+    *values: dict[str, Any],
+) -> bool:
+    if not normalized_query:
+        return False
+    key_tokens = [token for token in state_key.casefold().replace("_", ".").split(".") if token]
+    if any(len(token) > 1 and token in normalized_query for token in key_tokens):
+        return True
+    aliases = {
+        "city": ("城市", "住", "居住", "所在地"),
+        "location": ("城市", "住", "居住", "所在地"),
+        "job": ("工作", "职业", "职位"),
+        "role": ("工作", "职业", "职位"),
+        "goal": ("目标", "计划"),
+        "preference": ("偏好", "喜欢", "习惯"),
+    }
+    if any(alias in normalized_query for token in key_tokens for alias in aliases.get(token, ())):
+        return True
+    for value in values:
+        source_query = str(value.get("query", "")).casefold()
+        if source_query and (source_query == normalized_query or source_query in normalized_query):
+            return True
+        text_value = str(value.get("text", "")).casefold()
+        if text_value and text_value in normalized_query:
+            return True
+    return False
 
 
 def _json_object(raw: object) -> dict[str, Any]:

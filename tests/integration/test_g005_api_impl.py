@@ -254,8 +254,9 @@ def test_g005_answer_response_has_no_extra_schema_fields(tmp_path: Path) -> None
         "insufficiencies",
         "stop_reason",
         "budget_usage",
-        "rows",
-    }
+            "rows",
+            "context_prompts",
+        }
 
 
 def test_answer_api_closes_receipt_transaction_before_answer_service(
