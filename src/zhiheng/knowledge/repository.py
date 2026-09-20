@@ -47,6 +47,7 @@ class TextEvidenceInput:
     source_kind: str = "manual"
     media_type: str = "text/markdown"
     object_kind: str = "note"
+    record_type: str = "knowledge"
     visibility_scope: str = "formal"
     sensitivity_level: str = "private"
     source_metadata: dict[str, Any] = field(default_factory=dict)
@@ -135,6 +136,7 @@ class KnowledgeRepository:
             source_kind=item.source_kind,
             media_type=item.media_type,
             object_kind=item.object_kind,
+            record_type=item.record_type,
             visibility_scope="formal",
             lifecycle_status="formal_current",
             chunk_status="ready",
@@ -580,12 +582,12 @@ class KnowledgeRepository:
             text(
                 """
                 INSERT INTO knowledge_objects (
-                  id, primary_domain_id, title, object_kind, lifecycle_status,
+                  id, primary_domain_id, title, object_kind, record_type, lifecycle_status,
                   visibility_scope, current_version_id, confirmation_generation,
                   sensitivity_level
                 )
                 VALUES (
-                  :id, :primary_domain_id, :title, :object_kind, :lifecycle_status,
+                  :id, :primary_domain_id, :title, :object_kind, :record_type, :lifecycle_status,
                   :visibility_scope, NULL, :confirmation_generation, :sensitivity_level
                 )
                 """
@@ -595,6 +597,7 @@ class KnowledgeRepository:
                 "primary_domain_id": primary_domain_id,
                 "title": title,
                 "object_kind": object_kind,
+                "record_type": record_type,
                 "lifecycle_status": lifecycle_status,
                 "visibility_scope": visibility_scope,
                 "confirmation_generation": confirmation_generation,

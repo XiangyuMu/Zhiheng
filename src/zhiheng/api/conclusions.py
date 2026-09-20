@@ -32,6 +32,7 @@ class DraftPayload(BaseModel):
     premises: list[dict[str, Any]] = Field(default_factory=list)
     excerpt: str = Field(min_length=1, max_length=10000)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
+    classification: dict[str, Any] | None = None
     valid_until: AwareDatetime | None = None
 
 
@@ -43,6 +44,7 @@ class DraftUpdatePayload(BaseModel):
     premises: list[dict[str, Any]] | None = None
     excerpt: str | None = Field(default=None, min_length=1, max_length=10000)
     evidence: list[dict[str, Any]] | None = None
+    classification: dict[str, Any] | None = None
     valid_until: AwareDatetime | None = None
 
 
@@ -136,12 +138,17 @@ def approve(
                     title=str(item["title"]),
                     text=text_value,
                     primary_domain_id=str(item["domain_id"]),
+                    record_type=str(item.get("record_type", "knowledge")),
                     object_kind="conclusion",
                     source_kind="user_explicit",
                     source_metadata={
                         "conclusion_entry_id": entry_id,
                         "source_id": item["source"]["id"],
                         "excerpt": item.get("excerpt"),
+                        "classification": item.get("classification", {}),
+                        "related_domain_ids": item.get("classification", {}).get(
+                            "related_domain_ids", []
+                        ),
                     },
                 ),
                 user_authority=KnowledgeUserAuthority(user),

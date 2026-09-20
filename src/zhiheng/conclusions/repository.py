@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from zhiheng.conclusions.applicability import ConclusionApplicabilityService
+from zhiheng.conclusions.classification import normalize_classification
 from zhiheng.conclusions.relations import relation_explanation, relation_kind
 from zhiheng.core.ids import json_text, new_id, sha256_json
 
@@ -101,6 +102,18 @@ class ConclusionRepository:
         ).scalar_one_or_none()
         if existing:
             return cast(dict[str, Any], json.loads(str(existing)))
+        classification = normalize_classification(
+            payload.get("classification"),
+            fallback_domain_id=str(payload.get("domain_id", "education_learning")),
+            title=str(payload.get("title", "")),
+            claim=str(payload.get("claim", "")),
+        )
+        payload = {
+            **payload,
+            "domain_id": classification["primary_domain_id"],
+            "record_type": classification["record_type"],
+            "classification": classification,
+        }
         entry_id, version = new_id(), 1
         row = {**payload, "status": "draft", "version": version}
         session.execute(
@@ -189,8 +202,6 @@ class ConclusionRepository:
         item = self.get(session, owner, entry_id)
         if item is None or item["status"] != "draft":
             raise ValueError("draft conclusion not found")
-        if etag not in {"*", item["etag"]}:
-            raise ValueError("conclusion changed after it was read")
         existing = session.execute(
             text(
                 "SELECT result_json FROM conclusion_operations "
@@ -200,6 +211,8 @@ class ConclusionRepository:
         ).scalar_one_or_none()
         if existing is not None:
             return cast(dict[str, Any], json.loads(str(existing)))
+        if etag not in {"*", item["etag"]}:
+            raise ValueError("conclusion changed after it was read")
         payload = {
             key: value for key, value in {**item, **dict(changes)}.items()
             if key not in {
@@ -213,6 +226,16 @@ class ConclusionRepository:
                 "applicability",
             }
         }
+        if "classification" in changes:
+            classification = normalize_classification(
+                cast(dict[str, Any] | None, changes["classification"]),
+                fallback_domain_id=str(payload.get("domain_id", "education_learning")),
+                title=str(payload.get("title", "")),
+                claim=str(payload.get("claim", "")),
+            )
+            payload["classification"] = classification
+            payload["domain_id"] = classification["primary_domain_id"]
+            payload["record_type"] = classification["record_type"]
         version = int(item["version"]) + 1
         session.execute(
             text(
