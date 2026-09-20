@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -32,6 +32,7 @@ class DraftPayload(BaseModel):
     premises: list[dict[str, Any]] = Field(default_factory=list)
     excerpt: str = Field(min_length=1, max_length=10000)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
+    valid_until: AwareDatetime | None = None
 
 
 class DraftUpdatePayload(BaseModel):
@@ -42,6 +43,7 @@ class DraftUpdatePayload(BaseModel):
     premises: list[dict[str, Any]] | None = None
     excerpt: str | None = Field(default=None, min_length=1, max_length=10000)
     evidence: list[dict[str, Any]] | None = None
+    valid_until: AwareDatetime | None = None
 
 
 @router.post("/sources")
@@ -58,7 +60,9 @@ def draft(
 ) -> dict[str, Any]:
     key, _ = mutation
     try:
-        return repo.create_draft(session, user, payload.source_id, payload.model_dump(), key)
+        return repo.create_draft(
+            session, user, payload.source_id, payload.model_dump(mode="json"), key
+        )
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -83,7 +87,9 @@ def update_draft(
     mutation: MutationDep,
 ) -> dict[str, Any]:
     key, etag = mutation
-    changes = {name: value for name, value in payload.model_dump().items() if value is not None}
+    changes = {
+        name: value for name, value in payload.model_dump(mode="json").items() if value is not None
+    }
     try:
         return repo.update_draft(session, user, entry_id, etag, changes, key)
     except ValueError as exc:

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from zhiheng.conclusions.applicability import ConclusionApplicabilityService
 from zhiheng.core.ids import json_text, new_id, sha256_json
 from zhiheng.memory.repository import MemoryCandidateInput, MemoryRepository, MemoryValue
 
@@ -50,6 +51,7 @@ class PersonalUpdateService:
             return _json_object(existing["result_json"])
 
         if _requires_review(update):
+            self._notify_conclusions(session, owner_user_id, update, certain=False)
             result = self._propose(session, update, owner_user_id=owner_user_id)
             self._complete_receipt(session, operation_key, request_hash, result)
             return result
@@ -65,6 +67,7 @@ class PersonalUpdateService:
             return result
 
         if current is not None and not update.temporal_change:
+            self._notify_conclusions(session, owner_user_id, update, certain=False)
             result = self._propose(
                 session,
                 update,
@@ -98,8 +101,44 @@ class PersonalUpdateService:
             "status": committed.status,
         }
         self._record_formal_update(session, owner_user_id, update)
+        effective = update.valid_from
+        if effective is None or effective.replace(tzinfo=effective.tzinfo or UTC) <= datetime.now(
+            UTC
+        ):
+            self._notify_conclusions(session, owner_user_id, update, certain=True)
+        else:
+            ConclusionApplicabilityService().fact_changed(
+                session,
+                owner_user_id,
+                update.state_key,
+                update.value,
+                certain=False,
+                evidence={
+                    "future_fact": True,
+                    "effective_at": effective.isoformat(),
+                    "source_kind": update.source_kind,
+                    "evidence_refs": update.evidence_refs,
+                },
+            )
         self._complete_receipt(session, operation_key, request_hash, result)
         return result
+
+    def _notify_conclusions(
+        self, session: Session, owner: str, update: PersonalUpdate, *, certain: bool
+    ) -> None:
+        ConclusionApplicabilityService().fact_changed(
+            session,
+            owner,
+            update.state_key,
+            update.value,
+            certain=certain,
+            evidence={
+                "source_kind": update.source_kind,
+                "evidence_refs": update.evidence_refs,
+                "rationale": update.rationale,
+                "value": update.value,
+            },
+        )
 
     def list_triage(self, session: Session, *, limit: int = 100) -> list[dict[str, Any]]:
         conflicts = self.list_conflicts(session, limit=limit)
@@ -213,6 +252,29 @@ class PersonalUpdateService:
         *,
         owner_user_id: str = "default",
     ) -> None:
+        if resolution == "confirmed":
+            fact = (
+                session.execute(
+                    text("""
+                SELECT c.state_key, v.value_json FROM memory_conflicts c
+                JOIN memory_candidates m ON m.id=c.candidate_id
+                JOIN memory_candidate_versions v ON v.id=m.current_version_id
+                WHERE c.id=:id
+            """),
+                    {"id": conflict_id},
+                )
+                .mappings()
+                .first()
+            )
+            if fact is not None:
+                ConclusionApplicabilityService().fact_changed(
+                    session,
+                    owner_user_id,
+                    str(fact["state_key"]),
+                    _json_object(fact["value_json"]),
+                    certain=True,
+                    evidence={"conflict_id": conflict_id, "source_kind": "user_confirmed"},
+                )
         session.execute(
             text(
                 """

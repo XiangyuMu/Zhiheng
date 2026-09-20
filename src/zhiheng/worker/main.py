@@ -11,6 +11,7 @@ from typing import Literal, cast
 
 from sqlalchemy.exc import OperationalError
 
+from zhiheng.conclusions.applicability import ConclusionApplicabilityService
 from zhiheng.core.config import Settings, get_settings
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
 from zhiheng.evolution.contracts import (
@@ -47,6 +48,7 @@ def process_outbox_once(settings: Settings, *, limit: int = 10) -> int:
         session_factory = create_session_factory(engine)
         repository = OutboxRepository()
         with session_scope(session_factory) as session:
+            ConclusionApplicabilityService().sweep(session)
             events = repository.claim_pending(session, limit=limit)
             return repository.enqueue_jobs_for_events(session, events)
     finally:
@@ -68,6 +70,7 @@ def process_worker_once(
         with session_scope(session_factory) as session:
             events = repository.claim_pending(session, limit=limit)
             enqueued = repository.enqueue_jobs_for_events(session, events)
+            suspended = ConclusionApplicabilityService().sweep(session)
         with session_scope(session_factory) as session:
             gc = OrphanArtifactGC(settings.secret_key.get_secret_value())
             plan = gc.prepare(session)
@@ -104,7 +107,7 @@ def process_worker_once(
             )
         finally:
             _close_executor(executor)
-        return enqueued + indexed + classified + extracted + executed
+        return enqueued + indexed + classified + extracted + executed + suspended
     finally:
         engine.dispose()
 

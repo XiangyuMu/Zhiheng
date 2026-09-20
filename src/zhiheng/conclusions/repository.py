@@ -8,6 +8,7 @@ from typing import Any, cast
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from zhiheng.conclusions.applicability import ConclusionApplicabilityService
 from zhiheng.conclusions.relations import relation_explanation, relation_kind
 from zhiheng.core.ids import json_text, new_id, sha256_json
 
@@ -136,6 +137,7 @@ class ConclusionRepository:
         )
         if row is None:
             return None
+        ConclusionApplicabilityService().sweep(session)
         payload = json.loads(str(row["payload_json"]))
         source = (
             session.execute(
@@ -156,6 +158,8 @@ class ConclusionRepository:
             **payload,
             "source": {"id": source["id"], "text": source["body"]},
         }
+        result["status"] = row["status"]
+        result["applicability"] = ConclusionApplicabilityService().describe(session, entry_id)
         result["relations"] = self.list_relations(session, owner, entry_id)
         return result
 
@@ -206,6 +210,7 @@ class ConclusionRepository:
                 "etag",
                 "source",
                 "relations",
+                "applicability",
             }
         }
         version = int(item["version"]) + 1
@@ -266,9 +271,10 @@ class ConclusionRepository:
         return self._write(session, owner, key, {"entry_id": entry_id, "etag": etag}, result)
 
     def context(self, session: Session, owner: str, query: str) -> list[dict[str, Any]]:
+        ConclusionApplicabilityService().sweep(session)
         rows = session.execute(
             text(
-                "SELECT e.id,e.current_version,e.approved_version,v.payload_json FROM conclusion_entries e JOIN conclusion_versions v ON v.entry_id=e.id AND v.version=e.approved_version WHERE e.owner_user_id=:o AND e.status='formal' AND v.payload_json LIKE :q"
+                "SELECT e.id,e.current_version,e.approved_version,v.payload_json FROM conclusion_entries e JOIN conclusion_versions v ON v.entry_id=e.id AND v.version=e.approved_version WHERE e.owner_user_id=:o AND e.status='formal' AND NOT EXISTS (SELECT 1 FROM conclusion_applicability a WHERE a.entry_id=e.id AND a.version=e.approved_version AND a.state='suspended') AND v.payload_json LIKE :q"
             ),
             {"o": owner, "q": f"%{query}%"},
         ).mappings()
