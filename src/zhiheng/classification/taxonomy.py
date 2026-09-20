@@ -424,6 +424,59 @@ class TaxonomyRepository:
         )
         return {"proposal_id": proposal_id, "status": "approved", "result": result}
 
+    def update_domain_migration(
+        self,
+        session: Session,
+        *,
+        user_id: str,
+        proposal_id: str,
+        knowledge_id: str,
+        target_domain_id: str | None,
+        expected_etag: str,
+    ) -> dict[str, Any]:
+        proposal = self.get_proposal(session, user_id=user_id, proposal_id=proposal_id)
+        if proposal is None or proposal["proposal_type"] != "domain_structure":
+            raise ValueError("taxonomy proposal not found")
+        if proposal["status"] != "pending":
+            raise ValueError("taxonomy proposal is no longer pending")
+        if expected_etag != proposal["etag"]:
+            raise ValueError("stale taxonomy proposal")
+        payload = dict(proposal["payload"])
+        allowed = {str(item["id"]) for item in payload["new_domains"]}
+        if target_domain_id is not None and target_domain_id not in allowed:
+            raise ValueError("migration target must be one of the proposed domains")
+        items = [dict(item) for item in proposal["preview"].get("affected_knowledge", [])]
+        selected = next((item for item in items if str(item["id"]) == knowledge_id), None)
+        if selected is None:
+            raise ValueError("knowledge is not affected by this proposal")
+        selected["migration_status"] = "approved" if target_domain_id else "deferred"
+        selected["target_domain_id"] = target_domain_id
+        payload["decisions"] = {
+            str(item["id"]): item.get("target_domain_id")
+            for item in items
+            if item.get("target_domain_id") is not None
+        }
+        preview = dict(proposal["preview"])
+        preview["affected_knowledge"] = items
+        session.execute(
+            text(
+                "UPDATE taxonomy_proposals SET payload_json=:payload, preview_json=:preview, "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=:id AND owner_user_id=:owner "
+                "AND status='pending'"
+            ),
+            {
+                "id": proposal_id,
+                "owner": user_id,
+                "payload": json_text(payload),
+                "preview": json_text(preview),
+            },
+        )
+        updated = dict(proposal)
+        updated["payload"] = payload
+        updated["preview"] = preview
+        updated["etag"] = proposal_etag(updated)
+        return updated
+
     def _approve_reclassification(
         self, session: Session, *, user_id: str, proposal: dict[str, Any], request_id: str | None
     ) -> dict[str, Any]:
@@ -516,9 +569,52 @@ class TaxonomyRepository:
                     },
                 )
                 created.append(str(item["id"]))
-        if payload["operation"] in {"merge", "split"}:
+        applied: list[str] = []
+        deferred: list[str] = []
+        affected = proposal["preview"].get("affected_knowledge", [])
+        decisions = payload.get("decisions", {})
+        for item in affected:
+            knowledge_id = str(item["id"])
+            target = decisions.get(knowledge_id)
+            if target is None:
+                deferred.append(knowledge_id)
+                continue
+            current = self.knowledge_assignment(
+                session, user_id=user_id, knowledge_id=knowledge_id
+            )
+            if current is None or str(current["primary_domain_id"]) != str(
+                item["primary_domain_id"]
+            ):
+                deferred.append(knowledge_id)
+                continue
+            self._require_domain(session, str(target))
+            self._apply_assignment(
+                session,
+                user_id=user_id,
+                knowledge_id=knowledge_id,
+                primary_domain_id=str(target),
+                record_type=str(item["record_type"] or "knowledge"),
+                node_ids=[],
+                request_id=None,
+                action="domain_migration_approved",
+                before={
+                    "primary_domain_id": str(item["primary_domain_id"]),
+                    "record_type": str(item["record_type"] or "knowledge"),
+                    "classification_revision": int(item["classification_revision"] or 0),
+                },
+            )
+            applied.append(knowledge_id)
+        remaining = self._affected_knowledge(
+            session, user_id=user_id, domain_ids=list(payload["source_domain_ids"])
+        )
+        if not remaining:
             self._disable_domains(session, payload["source_domain_ids"])
-        return {"operation": payload["operation"], "created_domain_ids": created}
+        return {
+            "operation": payload["operation"],
+            "created_domain_ids": created,
+            "applied": applied,
+            "deferred": deferred,
+        }
 
     def _apply_assignment(
         self,
@@ -721,7 +817,7 @@ class TaxonomyRepository:
             ),
             {"owner": user_id, **{f"domain_{idx}": value for idx, value in enumerate(domain_ids)}},
         ).mappings()
-        return [dict(row) for row in rows]
+        return [{**dict(row), "knowledge_object_id": str(row["id"])} for row in rows]
 
     @staticmethod
     def _disable_domains(session: Session, domain_ids: list[str]) -> None:

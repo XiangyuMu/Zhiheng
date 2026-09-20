@@ -50,6 +50,12 @@ class LegacyMigrationRequest(BaseModel):
     reason: str = Field(default="", max_length=2000)
 
 
+class DomainMigrationDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_domain_id: str | None = Field(default=None, max_length=64)
+
+
 def install_taxonomy_routes(app: Any) -> None:
     app.include_router(router)
 
@@ -224,6 +230,39 @@ def approve_taxonomy_proposal(
             proposal_id=proposal_id,
             expected_etag=if_match,
             request_id=request.headers.get("X-Request-ID"),
+        ),
+    )
+
+
+@router.patch("/v1/taxonomy/proposals/{proposal_id}/items/{knowledge_object_id}")
+def update_domain_migration(
+    proposal_id: str,
+    knowledge_object_id: str,
+    request: DomainMigrationDecisionRequest,
+    session: SessionDep,
+    user_id: AuthDep,
+    idempotency_key: WriteDep,
+    if_match: IfMatchDep,
+) -> dict[str, Any]:
+    payload = {
+        "proposal_id": proposal_id,
+        "knowledge_object_id": knowledge_object_id,
+        "target_domain_id": request.target_domain_id,
+        "if_match": if_match,
+    }
+    return _mutation_response(
+        session,
+        user_id=user_id,
+        idempotency_key=idempotency_key,
+        operation_type="domain-proposal.item-update",
+        payload=payload,
+        action=lambda: repository.update_domain_migration(
+            session,
+            user_id=user_id,
+            proposal_id=proposal_id,
+            knowledge_id=knowledge_object_id,
+            target_domain_id=request.target_domain_id,
+            expected_etag=if_match,
         ),
     )
 

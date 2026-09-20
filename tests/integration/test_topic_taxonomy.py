@@ -128,3 +128,81 @@ def test_legacy_migration_is_previewed_item_by_item(tmp_path: Path) -> None:
     assert proposal["preview"]["items"][0]["after"]["record_type"] == (
         "personal_archive_experience"
     )
+
+
+def test_domain_structure_migrates_only_confirmed_items(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    csrf = _login(client)
+    first = _import_knowledge(client, csrf, "merge-first", "economics_finance_business")
+    second = _import_knowledge(client, csrf, "merge-second", "economics_finance_business")
+
+    created = client.post(
+        "/v1/taxonomy/proposals/domain",
+        json={
+            "operation": "merge",
+            "source_domain_ids": ["economics_finance_business"],
+            "new_domains": [
+                {
+                    "id": "personal_finance",
+                    "name": "个人财务",
+                    "description": "个人财务和投资实践",
+                    "sort_order": 75,
+                }
+            ],
+            "reason": "拆出个人财务主题",
+        },
+        headers=_headers(csrf, "domain-merge-proposal"),
+    )
+    assert created.status_code == 400
+
+    created = client.post(
+        "/v1/taxonomy/proposals/domain",
+        json={
+            "operation": "split",
+            "source_domain_ids": ["economics_finance_business"],
+            "new_domains": [
+                {
+                    "id": "personal_finance",
+                    "name": "个人财务",
+                    "description": "个人财务和投资实践",
+                    "sort_order": 75,
+                },
+                {
+                    "id": "business_finance",
+                    "name": "商业金融",
+                    "description": "商业和金融知识",
+                    "sort_order": 76,
+                },
+            ],
+            "reason": "按条目主题拆分经济金融领域",
+        },
+        headers=_headers(csrf, "domain-split-proposal"),
+    )
+    assert created.status_code == 201
+    proposal = created.json()["result"]
+    assert {item["knowledge_object_id"] for item in proposal["preview"]["affected_knowledge"]} == {
+        first,
+        second,
+    }
+
+    decision = client.patch(
+        f"/v1/taxonomy/proposals/{proposal['id']}/items/{first}",
+        json={"target_domain_id": "personal_finance"},
+        headers=_headers(csrf, "domain-split-first", proposal["etag"]),
+    )
+    assert decision.status_code == 200
+    decision_result = decision.json()["result"]
+    approved = client.post(
+        f"/v1/taxonomy/proposals/{proposal['id']}/approve",
+        headers=_headers(csrf, "domain-split-approve", decision_result["etag"]),
+    )
+    assert approved.status_code == 200
+    assert approved.json()["result"]["result"]["applied"] == [first]
+    assert client.get(f"/v1/knowledge/{first}/classifications").json()["primary_domain_id"] == (
+        "personal_finance"
+    )
+    assert client.get(f"/v1/knowledge/{second}/classifications").json()["primary_domain_id"] == (
+        "economics_finance_business"
+    )
+    history = client.get(f"/v1/knowledge/{first}/classification-history")
+    assert any(item["action"] == "domain_migration_approved" for item in history.json()["items"])
