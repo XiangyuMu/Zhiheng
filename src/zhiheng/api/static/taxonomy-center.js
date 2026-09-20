@@ -3,6 +3,13 @@
   const proposals = document.querySelector("#proposals");
   const count = document.querySelector("#domain-count");
   const message = document.querySelector("#proposal-message");
+  const domainLabels = {
+    personal_finance: "个人财务", business_finance: "商业金融",
+    economics_finance_business: "经济、金融与商业",
+  };
+  const proposalLabels = { domain_structure: "领域结构调整", legacy_migration: "历史领域迁移" };
+  const statusLabels = { pending: "待审核", approved: "已生效" };
+  const labelForDomain = (id) => domainLabels[id] || id.replaceAll("_", " ");
 
   const csrf = () => document.cookie.split(";").map((item) => item.trim())
     .find((item) => item.startsWith("zhiheng_csrf="))?.slice("zhiheng_csrf=".length) || "";
@@ -40,7 +47,7 @@
       const row = document.createElement("article");
       row.className = "proposal";
       const title = document.createElement("p");
-      title.textContent = `${item.proposal_type} · ${item.status}`;
+      title.textContent = `${proposalLabels[item.proposal_type] || "分类调整"} · ${statusLabels[item.status] || "待审核"}`;
       const detail = document.createElement("small");
       const preview = item.preview || {};
       detail.textContent = preview.reason || item.target_id || "领域结构";
@@ -53,7 +60,7 @@
           const line = document.createElement("div");
           line.className = "migration-item";
           const label = document.createElement("span");
-          label.textContent = `${entry.title} · ${entry.primary_domain_id}`;
+          label.textContent = `${entry.title} · ${labelForDomain(entry.primary_domain_id)}`;
           const select = document.createElement("select");
           const defer = document.createElement("option");
           defer.value = "";
@@ -62,7 +69,7 @@
           targets.forEach((id) => {
             const option = document.createElement("option");
             option.value = id;
-            option.textContent = id;
+            option.textContent = labelForDomain(id);
             select.append(option);
           });
           if (entry.target_domain_id) select.value = entry.target_domain_id;
@@ -70,6 +77,9 @@
           save.type = "button";
           save.textContent = "保存";
           save.addEventListener("click", async () => {
+            if (save.disabled) return;
+            save.disabled = true;
+            save.setAttribute("aria-busy", "true");
             message.textContent = "正在保存迁移决定…";
             try {
               const result = await request(`/v1/taxonomy/proposals/${item.id}/items/${entry.id}`, {
@@ -83,6 +93,7 @@
               renderProposals(items);
               message.textContent = "迁移决定已保存。";
             } catch (error) { message.textContent = error.message; }
+            finally { save.disabled = false; save.removeAttribute("aria-busy"); }
           });
           line.append(label, select, save);
           list.append(line);
@@ -92,6 +103,9 @@
         approve.type = "button";
         approve.textContent = "批准已确认迁移";
         approve.addEventListener("click", async () => {
+          if (approve.disabled) return;
+          approve.disabled = true;
+          approve.setAttribute("aria-busy", "true");
           try {
             const result = await request(`/v1/taxonomy/proposals/${item.id}/approve`, {
               method: "POST", headers: {
@@ -101,6 +115,7 @@
             message.textContent = result.result.status === "pending" ? "仍有条目待处理。" : "迁移已批准。";
             await load();
           } catch (error) { message.textContent = error.message; }
+          finally { approve.disabled = false; approve.removeAttribute("aria-busy"); }
         });
         row.append(approve);
       }
