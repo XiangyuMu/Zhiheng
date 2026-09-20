@@ -8,6 +8,7 @@ from typing import Any, cast
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from zhiheng.conclusions.relations import relation_explanation, relation_kind
 from zhiheng.core.ids import json_text, new_id, sha256_json
 
 
@@ -118,7 +119,9 @@ class ConclusionRepository:
             "etag": sha256_json({"id": entry_id, "version": version, "status": "draft"}),
             **row,
         }
-        return self._write(session, owner, key, payload, result)
+        created = self._write(session, owner, key, payload, result)
+        self.suggest_relations(session, owner, entry_id)
+        return created
 
     def get(self, session: Session, owner: str, entry_id: str) -> dict[str, Any] | None:
         row = (
@@ -142,7 +145,7 @@ class ConclusionRepository:
             .mappings()
             .one()
         )
-        return {
+        result = {
             "id": entry_id,
             "status": row["status"],
             "version": row["version"],
@@ -153,6 +156,8 @@ class ConclusionRepository:
             **payload,
             "source": {"id": source["id"], "text": source["body"]},
         }
+        result["relations"] = self.list_relations(session, owner, entry_id)
+        return result
 
     def list_drafts(self, session: Session, owner: str, limit: int = 100) -> list[dict[str, Any]]:
         rows = session.execute(
@@ -193,7 +198,15 @@ class ConclusionRepository:
             return cast(dict[str, Any], json.loads(str(existing)))
         payload = {
             key: value for key, value in {**item, **dict(changes)}.items()
-            if key not in {"id", "status", "version", "approved_version", "etag", "source"}
+            if key not in {
+                "id",
+                "status",
+                "version",
+                "approved_version",
+                "etag",
+                "source",
+                "relations",
+            }
         }
         version = int(item["version"]) + 1
         session.execute(
@@ -218,6 +231,7 @@ class ConclusionRepository:
             **payload,
             "source": item["source"],
         }
+        self.suggest_relations(session, owner, entry_id, key=f"conclusion-relations:{entry_id}:v{version}")
         return self._write(session, owner, key, changes, result)
 
     def approve(
@@ -290,3 +304,243 @@ class ConclusionRepository:
             text("UPDATE conclusion_entries SET knowledge_id=:k WHERE id=:id AND owner_user_id=:o"),
             {"k": knowledge_id, "id": entry_id, "o": owner},
         )
+
+    def suggest_relations(
+        self, session: Session, owner: str, entry_id: str, key: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Create explainable proposals against the owner's approved conclusions."""
+        item = self.get(session, owner, entry_id)
+        if item is None:
+            raise ValueError("conclusion not found")
+        operation_key = key or f"conclusion-relations:{entry_id}"
+        existing_operation = session.execute(
+            text(
+                "SELECT result_json FROM conclusion_operations "
+                "WHERE owner_user_id=:o AND operation_key=:k"
+            ),
+            {"o": owner, "k": operation_key},
+        ).scalar_one_or_none()
+        if existing_operation is not None:
+            stored = cast(dict[str, Any], json.loads(str(existing_operation)))
+            return cast(list[dict[str, Any]], stored["items"])
+
+        rows = session.execute(
+            text(
+                """
+                SELECT e.id, e.source_id, v.payload_json
+                FROM conclusion_entries e
+                JOIN conclusion_versions v
+                  ON v.entry_id=e.id AND v.version=e.approved_version
+                WHERE e.owner_user_id=:o AND e.status='formal' AND e.id != :id
+                ORDER BY e.created_at ASC, e.id ASC
+                """
+            ),
+            {"o": owner, "id": entry_id},
+        ).mappings()
+        proposals: list[dict[str, Any]] = []
+        for row in rows:
+            old_payload = cast(dict[str, Any], json.loads(str(row["payload_json"])))
+            kind = relation_kind(item, old_payload)
+            if kind is None:
+                continue
+            duplicate = session.execute(
+                text(
+                    "SELECT id FROM conclusion_relations "
+                    "WHERE owner_user_id=:o AND left_id=:left AND right_id=:right "
+                    "AND kind=:kind AND left_version=:lv AND right_version=:rv "
+                    "AND status IN ('proposed','approved','deferred')"
+                ),
+                {
+                    "o": owner,
+                    "left": entry_id,
+                    "right": row["id"],
+                    "kind": kind,
+                    "lv": item["version"],
+                    "rv": old_payload.get("version", 1),
+                },
+            ).scalar_one_or_none()
+            if duplicate is not None:
+                continue
+            relation_id = new_id()
+            session.execute(
+                text(
+                    "INSERT INTO conclusion_relations "
+                    "(id,owner_user_id,left_id,right_id,kind,status,left_version,right_version) "
+                    "VALUES (:id,:o,:left,:right,:kind,'proposed',:lv,:rv)"
+                ),
+                {
+                    "id": relation_id,
+                    "o": owner,
+                    "left": entry_id,
+                    "right": row["id"],
+                    "kind": kind,
+                    "lv": item["version"],
+                    "rv": old_payload.get("version", 1),
+                },
+            )
+            session.execute(
+                text(
+                    "INSERT INTO conclusion_relation_events "
+                    "(id,relation_id,owner_user_id,from_status,to_status,actor_user_id,"
+                    "left_version,right_version,left_source_id,right_source_id) "
+                    "VALUES (:id,:relation,:o,NULL,'proposed',:actor,:lv,:rv,:ls,:rs)"
+                ),
+                {
+                    "id": new_id(),
+                    "relation": relation_id,
+                    "o": owner,
+                    "actor": owner,
+                    "lv": item["version"],
+                    "rv": old_payload.get("version", 1),
+                    "ls": item["source"]["id"],
+                    "rs": row["source_id"],
+                },
+            )
+            proposals.append(
+                {
+                    "id": relation_id,
+                    "left_id": entry_id,
+                    "right_id": row["id"],
+                    "kind": kind,
+                    "status": "proposed",
+                    "left_version": item["version"],
+                    "right_version": old_payload.get("version", 1),
+                    "left_source_id": item["source"]["id"],
+                    "right_source_id": row["source_id"],
+                    "explanation": relation_explanation(kind),
+                }
+            )
+        self._write(session, owner, operation_key, {"entry_id": entry_id}, {"items": proposals})
+        return proposals
+
+    def list_relations(
+        self, session: Session, owner: str, entry_id: str, status: str | None = None
+    ) -> list[dict[str, Any]]:
+        where_status = " AND r.status=:status" if status else ""
+        rows = session.execute(
+            text(
+                """
+                SELECT r.*, le.source_id AS left_source_id, re.source_id AS right_source_id,
+                       lv.payload_json AS left_payload, rv.payload_json AS right_payload
+                FROM conclusion_relations r
+                JOIN conclusion_entries le ON le.id=r.left_id AND le.owner_user_id=r.owner_user_id
+                JOIN conclusion_entries re ON re.id=r.right_id AND re.owner_user_id=r.owner_user_id
+                JOIN conclusion_versions lv ON lv.entry_id=r.left_id AND lv.version=r.left_version
+                JOIN conclusion_versions rv ON rv.entry_id=r.right_id AND rv.version=r.right_version
+                WHERE r.owner_user_id=:o AND (r.left_id=:id OR r.right_id=:id)
+                """ + where_status + " ORDER BY r.id DESC"
+            ),
+            {"o": owner, "id": entry_id, **({"status": status} if status else {})},
+        ).mappings()
+        out = []
+        for row in rows:
+            left_payload = cast(dict[str, Any], json.loads(str(row["left_payload"])))
+            right_payload = cast(dict[str, Any], json.loads(str(row["right_payload"])))
+            out.append(
+                {
+                    "id": row["id"],
+                    "left_id": row["left_id"],
+                    "right_id": row["right_id"],
+                    "kind": row["kind"],
+                    "status": row["status"],
+                    "left_version": row["left_version"],
+                    "right_version": row["right_version"],
+                    "left_source_id": row["left_source_id"],
+                    "right_source_id": row["right_source_id"],
+                    "left_claim": left_payload.get("claim"),
+                    "right_claim": right_payload.get("claim"),
+                    "explanation": relation_explanation(str(row["kind"])),
+                }
+            )
+        return out
+
+    def decide_relation(
+        self,
+        session: Session,
+        owner: str,
+        relation_id: str,
+        decision: str,
+        key: str,
+    ) -> dict[str, Any]:
+        if decision not in {"approved", "rejected", "deferred"}:
+            raise ValueError("invalid relation decision")
+        row = session.execute(
+            text(
+                "SELECT r.*, le.source_id AS left_source_id, re.source_id AS right_source_id "
+                "FROM conclusion_relations r "
+                "JOIN conclusion_entries le ON le.id=r.left_id "
+                "JOIN conclusion_entries re ON re.id=r.right_id "
+                "WHERE r.id=:id AND r.owner_user_id=:o"
+            ),
+            {"id": relation_id, "o": owner},
+        ).mappings().first()
+        if row is None:
+            raise ValueError("relation not found")
+        if row["status"] not in {"proposed", "deferred"}:
+            raise ValueError("relation is no longer reviewable")
+        existing = session.execute(
+            text(
+                "SELECT result_json FROM conclusion_operations "
+                "WHERE owner_user_id=:o AND operation_key=:k"
+            ),
+            {"o": owner, "k": key},
+        ).scalar_one_or_none()
+        if existing is not None:
+            return cast(dict[str, Any], json.loads(str(existing)))
+        session.execute(
+            text("UPDATE conclusion_relations SET status=:status WHERE id=:id AND owner_user_id=:o"),
+            {"status": decision, "id": relation_id, "o": owner},
+        )
+        if decision == "approved":
+            session.execute(
+                text(
+                    "UPDATE conclusion_entries SET status='formal',approved_version=current_version "
+                    "WHERE id=:id AND owner_user_id=:o AND status='draft'"
+                ),
+                {"id": row["left_id"], "o": owner},
+            )
+            session.execute(
+                text(
+                    "UPDATE conclusion_versions SET approved_at=CURRENT_TIMESTAMP "
+                    "WHERE entry_id=:id AND version=:v"
+                ),
+                {"id": row["left_id"], "v": row["left_version"]},
+            )
+            if row["kind"] == "revision":
+                session.execute(
+                    text(
+                        "UPDATE conclusion_entries SET status='superseded' "
+                        "WHERE id=:id AND owner_user_id=:o AND status='formal'"
+                    ),
+                    {"id": row["right_id"], "o": owner},
+                )
+        session.execute(
+            text(
+                "INSERT INTO conclusion_relation_events "
+                "(id,relation_id,owner_user_id,from_status,to_status,actor_user_id,"
+                "left_version,right_version,left_source_id,right_source_id) "
+                "VALUES (:id,:relation,:o,:from_status,:to_status,:actor,:lv,:rv,:ls,:rs)"
+            ),
+            {
+                "id": new_id(),
+                "relation": relation_id,
+                "o": owner,
+                "from_status": row["status"],
+                "to_status": decision,
+                "actor": owner,
+                "lv": row["left_version"],
+                "rv": row["right_version"],
+                "ls": row["left_source_id"],
+                "rs": row["right_source_id"],
+            },
+        )
+        result = {
+            "id": relation_id,
+            "left_id": row["left_id"],
+            "right_id": row["right_id"],
+            "kind": row["kind"],
+            "status": decision,
+            "left_version": row["left_version"],
+            "right_version": row["right_version"],
+        }
+        return self._write(session, owner, key, {"relation_id": relation_id, "decision": decision}, result)

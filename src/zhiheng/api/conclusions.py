@@ -150,5 +150,61 @@ def approve(
         raise HTTPException(409, str(exc)) from exc
 
 
+@router.get("/{entry_id}/relations")
+def relations(entry_id: str, session: SessionDep, user: AuthDep) -> dict[str, Any]:
+    if repo.get(session, user, entry_id) is None:
+        raise HTTPException(404, "conclusion not found")
+    return {"items": repo.list_relations(session, user, entry_id)}
+
+
+@router.post("/{entry_id}/relations/suggest")
+def suggest_relations(
+    entry_id: str,
+    session: SessionDep,
+    user: AuthDep,
+    mutation: MutationDep,
+) -> dict[str, Any]:
+    key, _ = mutation
+    try:
+        return {"items": repo.suggest_relations(session, user, entry_id, key=key)}
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+def _decide_relation(
+    relation_id: str,
+    decision: str,
+    session: SessionDep,
+    user: AuthDep,
+    mutation: MutationDep,
+) -> dict[str, Any]:
+    key, _ = mutation
+    try:
+        return repo.decide_relation(session, user, relation_id, decision, key)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/relations/{relation_id}/approve")
+def approve_relation(
+    relation_id: str, session: SessionDep, user: AuthDep, mutation: MutationDep
+) -> dict[str, Any]:
+    return _decide_relation(relation_id, "approved", session, user, mutation)
+
+
+@router.post("/relations/{relation_id}/reject")
+def reject_relation(
+    relation_id: str, session: SessionDep, user: AuthDep, mutation: MutationDep
+) -> dict[str, Any]:
+    return _decide_relation(relation_id, "rejected", session, user, mutation)
+
+
+@router.post("/relations/{relation_id}/defer")
+def defer_relation(
+    relation_id: str, session: SessionDep, user: AuthDep, mutation: MutationDep
+) -> dict[str, Any]:
+    return _decide_relation(relation_id, "deferred", session, user, mutation)
+
+
 def install_conclusion_routes(app: FastAPI) -> None:
     app.include_router(router)
