@@ -449,14 +449,15 @@ class TaxonomyRepository:
         if expected_etag != proposal["etag"]:
             raise ValueError("stale taxonomy proposal")
         payload = dict(proposal["payload"])
-        allowed = (
-            {str(item["id"]) for item in payload["new_domains"]}
-            if proposal["proposal_type"] == "domain_structure"
-            else {
-                str(item["after"]["primary_domain_id"])
-                for item in proposal["preview"].get("items", [])
+        if proposal["proposal_type"] == "domain_structure":
+            allowed = {str(item["id"]) for item in payload["new_domains"]}
+        else:
+            allowed = {
+                str(row["id"])
+                for row in session.execute(
+                    text("SELECT id FROM domain_catalog WHERE status = 'active'")
+                ).mappings()
             }
-        )
         if target_domain_id is not None and target_domain_id not in allowed:
             raise ValueError("migration target must be one of the proposed domains")
         source_items = proposal["preview"].get(
@@ -637,7 +638,11 @@ class TaxonomyRepository:
                 session,
                 user_id=user_id,
                 knowledge_id=knowledge_id,
-                primary_domain_id=str(target),
+                primary_domain_id=(
+                    str(current["primary_domain_id"])
+                    if int(item.get("association_only", 0))
+                    else str(target)
+                ),
                 record_type=str(item["record_type"] or "knowledge"),
                 node_ids=node_ids,
                 request_id=None,
@@ -894,7 +899,9 @@ class TaxonomyRepository:
         rows = session.execute(
             text(
                 f"""
-                SELECT id, title, primary_domain_id, record_type, classification_revision
+                SELECT id, title, primary_domain_id, record_type, classification_revision,
+                       CASE WHEN primary_domain_id IN ({placeholders}) THEN 0 ELSE 1 END
+                         AS association_only
                 FROM knowledge_objects
                 WHERE owner_user_id = :owner
                   AND lifecycle_status <> 'privacy_erased'

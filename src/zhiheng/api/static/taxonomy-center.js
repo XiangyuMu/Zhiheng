@@ -9,7 +9,9 @@
   };
   const proposalLabels = { domain_structure: "领域结构调整", legacy_migration: "历史领域迁移" };
   const statusLabels = { pending: "待审核", approved: "已生效" };
-  const labelForDomain = (id) => domainLabels[id] || id.replaceAll("_", " ");
+  let availableDomains = [];
+  const labelForDomain = (id) => domainLabels[id]
+    || availableDomains.find((domain) => domain.id === id)?.name || "未命名领域";
 
   const csrf = () => document.cookie.split(";").map((item) => item.trim())
     .find((item) => item.startsWith("zhiheng_csrf="))?.slice("zhiheng_csrf=".length) || "";
@@ -56,10 +58,11 @@
         const list = document.createElement("div");
         list.className = "migration-list";
         const entries = preview.affected_knowledge || preview.items || [];
-        const targets = (preview.new_domains || []).map((domain) => domain.id);
+        const targets = item.proposal_type === "legacy_migration"
+          ? availableDomains.map((domain) => domain.id)
+          : (preview.new_domains || []).map((domain) => domain.id);
         entries.forEach((entry) => {
-          const entryTargets = item.proposal_type === "legacy_migration"
-            ? [entry.after.primary_domain_id] : targets;
+          const entryTargets = targets;
           const line = document.createElement("div");
           line.className = "migration-item";
           const label = document.createElement("span");
@@ -75,7 +78,9 @@
             option.textContent = labelForDomain(id);
             select.append(option);
           });
-          if (entry.target_domain_id) select.value = entry.target_domain_id;
+          if (entry.target_domain_id || entry.after?.primary_domain_id) {
+            select.value = entry.target_domain_id || entry.after.primary_domain_id;
+          }
           const save = document.createElement("button");
           save.type = "button";
           save.textContent = "保存";
@@ -133,6 +138,7 @@
     ]);
     if (!taxonomy.ok || !proposalSet.ok) throw new Error("加载分类信息失败");
     const taxonomyData = await taxonomy.json();
+    availableDomains = taxonomyData.domains.filter((item) => item.is_primary && item.status === "active");
     const proposalData = await proposalSet.json();
     const details = await Promise.all(proposalData.items.filter((item) => item.status === "pending")
       .map((item) => request(`/v1/taxonomy/proposals/${item.id}`)));
