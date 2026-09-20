@@ -34,15 +34,17 @@ def _is_known_domain(domain_id: str) -> bool:
 
 def suggest_classification(*, title: str, claim: str, domain_id: str) -> dict[str, Any]:
     text = f"{title} {claim}".casefold()
-    related = {
+    matched = [
         candidate
         for keywords, candidate in _DOMAIN_KEYWORDS
         if any(keyword.casefold() in text for keyword in keywords)
-    }
-    related.discard(domain_id)
+    ]
+    primary = domain_id if domain_id in matched else (matched[0] if matched else domain_id)
+    related = set(matched)
+    related.discard(primary)
     personal = any(marker in text for marker in ("我", "我的", "经历", "经验", "决定", "反思"))
     return {
-        "primary_domain_id": domain_id,
+        "primary_domain_id": primary,
         "related_domain_ids": sorted(related),
         "record_type": "personal_archive_experience" if personal else "knowledge",
         "source": "rule",
