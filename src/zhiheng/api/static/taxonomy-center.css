@@ -25,6 +25,9 @@ button { border: 1px solid #b6c5d3; border-radius: 6px; background: #fff; paddin
 .domain strong { font-size: 15px; }
 .domain small, .proposal small { color: #66737f; }
 .proposal p { margin-bottom: 7px; line-height: 1.45; }
+.migration-list { display: grid; gap: 8px; margin: 12px 0; }
+.migration-item { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; }
+.migration-item select { min-width: 150px; padding: 6px; }
 .empty { color: #66737f; padding: 12px 0; }
 @media (max-width: 760px) {
   .split { grid-template-columns: 1fr; }

@@ -396,33 +396,42 @@ class TaxonomyRepository:
             )
         else:
             raise ValueError("unsupported taxonomy proposal")
-        session.execute(
-            text(
-                """
-                UPDATE taxonomy_proposals
-                SET status = 'approved', decided_at = CURRENT_TIMESTAMP,
-                    decided_by_user_id = :user, updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id AND owner_user_id = :owner AND status = 'pending'
-                """
-            ),
-            {"id": proposal_id, "owner": user_id, "user": user_id},
+        completed = proposal_type != "domain_structure" or (
+            not result.get("deferred") and not result.get("conflicts")
         )
+        if completed:
+            session.execute(
+                text(
+                    """
+                    UPDATE taxonomy_proposals
+                    SET status = 'approved', decided_at = CURRENT_TIMESTAMP,
+                        decided_by_user_id = :user, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = :id AND owner_user_id = :owner AND status = 'pending'
+                    """
+                ),
+                {"id": proposal_id, "owner": user_id, "user": user_id},
+            )
         session.execute(
             text(
                 """
                 INSERT INTO taxonomy_proposal_events
                   (id, proposal_id, owner_user_id, action, payload_json)
-                VALUES (:id, :proposal_id, :owner, 'approved', :payload)
+                VALUES (:id, :proposal_id, :owner, :action, :payload)
                 """
             ),
             {
                 "id": new_id(),
                 "proposal_id": proposal_id,
                 "owner": user_id,
+                "action": "approved" if completed else "partially_approved",
                 "payload": json_text(result),
             },
         )
-        return {"proposal_id": proposal_id, "status": "approved", "result": result}
+        return {
+            "proposal_id": proposal_id,
+            "status": "approved" if completed else "pending",
+            "result": result,
+        }
 
     def update_domain_migration(
         self,
@@ -449,7 +458,7 @@ class TaxonomyRepository:
         selected = next((item for item in items if str(item["id"]) == knowledge_id), None)
         if selected is None:
             raise ValueError("knowledge is not affected by this proposal")
-        selected["migration_status"] = "approved" if target_domain_id else "deferred"
+        selected["migration_status"] = "selected" if target_domain_id else "deferred"
         selected["target_domain_id"] = target_domain_id
         payload["decisions"] = {
             str(item["id"]): item.get("target_domain_id")
@@ -573,8 +582,11 @@ class TaxonomyRepository:
         deferred: list[str] = []
         affected = proposal["preview"].get("affected_knowledge", [])
         decisions = payload.get("decisions", {})
+        conflicts: list[str] = []
         for item in affected:
             knowledge_id = str(item["id"])
+            if item.get("migration_status") == "applied":
+                continue
             target = decisions.get(knowledge_id)
             if target is None:
                 deferred.append(knowledge_id)
@@ -585,35 +597,54 @@ class TaxonomyRepository:
             if current is None or str(current["primary_domain_id"]) != str(
                 item["primary_domain_id"]
             ):
-                deferred.append(knowledge_id)
+                conflicts.append(knowledge_id)
                 continue
             self._require_domain(session, str(target))
+            node_ids = self._assignment_node_ids(
+                session, user_id=user_id, knowledge_id=knowledge_id
+            )
             self._apply_assignment(
                 session,
                 user_id=user_id,
                 knowledge_id=knowledge_id,
                 primary_domain_id=str(target),
                 record_type=str(item["record_type"] or "knowledge"),
-                node_ids=[],
+                node_ids=node_ids,
                 request_id=None,
                 action="domain_migration_approved",
                 before={
                     "primary_domain_id": str(item["primary_domain_id"]),
                     "record_type": str(item["record_type"] or "knowledge"),
                     "classification_revision": int(item["classification_revision"] or 0),
+                    "classification_node_ids": node_ids,
                 },
             )
+            item["migration_status"] = "applied"
+            decisions.pop(knowledge_id, None)
             applied.append(knowledge_id)
         remaining = self._affected_knowledge(
             session, user_id=user_id, domain_ids=list(payload["source_domain_ids"])
         )
         if not remaining:
             self._disable_domains(session, payload["source_domain_ids"])
+        session.execute(
+            text(
+                "UPDATE taxonomy_proposals SET payload_json=:payload, preview_json=:preview, "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=:id AND owner_user_id=:owner"
+            ),
+            {
+                "id": proposal["id"],
+                "owner": user_id,
+                "payload": json_text(payload),
+                "preview": json_text({**proposal["preview"], "affected_knowledge": affected}),
+            },
+        )
         return {
             "operation": payload["operation"],
             "created_domain_ids": created,
             "applied": applied,
             "deferred": deferred,
+            "conflicts": conflicts,
         }
 
     def _apply_assignment(
@@ -646,6 +677,7 @@ class TaxonomyRepository:
                 "owner": user_id,
             },
         )
+
         session.execute(
             text(
                 """
@@ -696,6 +728,27 @@ class TaxonomyRepository:
                 "request_id": request_id,
             },
         )
+
+    @staticmethod
+    def _assignment_node_ids(
+        session: Session, *, user_id: str, knowledge_id: str
+    ) -> list[str]:
+        return [
+            str(row["classification_node_id"])
+            for row in session.execute(
+                text(
+                    """
+                    SELECT kc.classification_node_id
+                    FROM knowledge_classifications kc
+                    JOIN classification_nodes cn ON cn.id = kc.classification_node_id
+                    WHERE kc.knowledge_object_id = :knowledge_id
+                      AND cn.owner_user_id = :owner
+                    ORDER BY kc.classification_node_id
+                    """
+                ),
+                {"knowledge_id": knowledge_id, "owner": user_id},
+            ).mappings()
+        ]
 
     def _insert_proposal(
         self,
