@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from zhiheng.classification.taxonomy import PRIMARY_DOMAINS
+from zhiheng.classification.taxonomy import LEGACY_DOMAIN_MAPPING, PRIMARY_DOMAINS
 
 _DOMAIN_KEYWORDS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("数学", "逻辑", "概率", "统计"), "mathematics_formal_sciences"),
@@ -23,6 +23,13 @@ _DOMAIN_KEYWORDS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("体育", "游戏", "休闲", "娱乐"), "sports_games_leisure"),
 )
 _PRIMARY_DOMAIN_IDS = frozenset(domain.id for domain in PRIMARY_DOMAINS)
+_LEGACY_DOMAIN_IDS = frozenset(LEGACY_DOMAIN_MAPPING)
+
+
+def _is_known_domain(domain_id: str) -> bool:
+    # Older conclusion records use dotted IDs (for example technology.ai).
+    # Keep those resolvable while all new suggestions use the v2 catalog.
+    return domain_id in _PRIMARY_DOMAIN_IDS or domain_id in _LEGACY_DOMAIN_IDS or "." in domain_id
 
 
 def suggest_classification(*, title: str, claim: str, domain_id: str) -> dict[str, Any]:
@@ -48,11 +55,9 @@ def normalize_classification(
 ) -> dict[str, Any]:
     suggestion = suggest_classification(title=title, claim=claim, domain_id=fallback_domain_id)
     if not value:
-        if suggestion["primary_domain_id"] not in _PRIMARY_DOMAIN_IDS:
-            raise ValueError("unsupported conclusion primary domain")
         return suggestion
     primary = str(value.get("primary_domain_id") or fallback_domain_id)
-    if primary not in _PRIMARY_DOMAIN_IDS:
+    if not _is_known_domain(primary):
         raise ValueError("unsupported conclusion primary domain")
     related = sorted(
         {
@@ -61,7 +66,7 @@ def normalize_classification(
             if str(item) and str(item) != primary
         }
     )
-    if any(item not in _PRIMARY_DOMAIN_IDS for item in related):
+    if any(not _is_known_domain(item) for item in related):
         raise ValueError("unsupported conclusion related domain")
     record_type = str(value.get("record_type") or suggestion["record_type"])
     if record_type not in {"knowledge", "personal_archive_experience"}:
