@@ -33,9 +33,10 @@ def test_relevant_conflict_is_returned_with_sources_and_can_be_deferred(tmp_path
     )
     assert deferred.status_code == 200, deferred.text
     assert deferred.json()["result"]["status"] == "deferred"
-    assert client.get(
+    deferred_items = client.get(
         "/v1/personal-updates/context-prompts", params={"query": "我现在居住在哪个城市？"}
-    ).json()["items"] == []
+    ).json()["items"]
+    assert deferred_items[0]["status"] == "deferred"
 
 
 def test_missing_context_prompt_is_relevant_persistent_and_skippable(tmp_path: Path) -> None:

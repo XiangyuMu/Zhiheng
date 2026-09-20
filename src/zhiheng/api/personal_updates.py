@@ -115,7 +115,11 @@ def list_context_prompts(
 ) -> dict[str, Any]:
     return {
         "items": service.context_prompts(
-            session, query=query, owner_user_id=_user_id, limit=max(1, min(limit, 100))
+            session,
+            query=query,
+            owner_user_id=_user_id,
+            limit=max(1, min(limit, 100)),
+            include_deferred=True,
         )
     }
 

@@ -183,7 +183,13 @@ class PersonalUpdateService:
         return rows
 
     def context_prompts(
-        self, session: Session, *, query: str, owner_user_id: str = "default", limit: int = 20
+        self,
+        session: Session,
+        *,
+        query: str,
+        owner_user_id: str = "default",
+        limit: int = 20,
+        include_deferred: bool = False,
     ) -> list[dict[str, Any]]:
         """Return only unresolved prompts that are relevant to the current query."""
         normalized = query.casefold()
@@ -191,21 +197,27 @@ class PersonalUpdateService:
         conflict_rows = session.execute(
             text(
                 """
-                SELECT pc.id, pc.state_key, pc.candidate_json, pc.existing_json,
+                SELECT pc.id, pc.state_key, pc.candidate_json, pc.existing_json, pc.status,
                        c.candidate_id,
                        mc.source_kind AS candidate_source, mc.rationale AS candidate_reason,
                        fmv.source_kind AS existing_source
                 FROM personal_conflicts pc
-                JOIN memory_conflicts c ON c.id = pc.id AND c.status = 'pending'
+                JOIN memory_conflicts c ON c.id = pc.id
                 JOIN memory_candidates mc ON mc.id = c.candidate_id
                 LEFT JOIN current_formal_memory fm ON fm.state_key = pc.state_key
                 LEFT JOIN formal_memory_versions fmv ON fmv.id = fm.current_version_id
-                WHERE pc.owner_user_id = :owner AND pc.status = 'pending'
+                WHERE pc.owner_user_id = :owner
+                  AND pc.status IN ('pending', 'deferred')
+                  AND (:include_deferred = 1 OR pc.status = 'pending')
                 ORDER BY pc.created_at DESC
                 LIMIT :limit
                 """
             ),
-            {"owner": owner_user_id, "limit": max(1, min(limit, 100))},
+            {
+                "owner": owner_user_id,
+                "limit": max(1, min(limit, 100)),
+                "include_deferred": int(include_deferred),
+            },
         ).mappings()
         for row in conflict_rows:
             candidate = _json_object(row["candidate_json"])
@@ -216,7 +228,7 @@ class PersonalUpdateService:
                 {
                     "id": str(row["id"]),
                     "kind": "conflict",
-                    "status": "pending",
+                    "status": str(row["status"]),
                     "state_key": str(row["state_key"]),
                     "reason": "当前问题涉及相互冲突的个人信息，请选择、补充或稍后处理。",
                     "candidate": candidate,
@@ -237,12 +249,18 @@ class PersonalUpdateService:
                 """
                 SELECT id, prompt_kind, state_key, reason, payload_json, status
                 FROM personal_prompts
-                WHERE owner_user_id = :owner AND status = 'pending'
+                WHERE owner_user_id = :owner
+                  AND status IN ('pending', 'deferred')
+                  AND (:include_deferred = 1 OR status = 'pending')
                 ORDER BY created_at DESC
                 LIMIT :limit
                 """
             ),
-            {"owner": owner_user_id, "limit": max(1, min(limit, 100))},
+            {
+                "owner": owner_user_id,
+                "limit": max(1, min(limit, 100)),
+                "include_deferred": int(include_deferred),
+            },
         ).mappings()
         for row in missing_rows:
             payload = _json_object(row["payload_json"])
