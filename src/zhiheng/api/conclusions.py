@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
@@ -23,6 +23,14 @@ class SourcePayload(BaseModel):
     text: str = Field(min_length=1, max_length=100000)
 
 
+class ClassificationPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    primary_domain_id: str = Field(min_length=1, max_length=128)
+    related_domain_ids: list[str] = Field(default_factory=list)
+    record_type: Literal["knowledge", "personal_archive_experience"] = "knowledge"
+    explanation: str | None = Field(default=None, max_length=1000)
+
+
 class DraftPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     source_id: str
@@ -32,7 +40,7 @@ class DraftPayload(BaseModel):
     premises: list[dict[str, Any]] = Field(default_factory=list)
     excerpt: str = Field(min_length=1, max_length=10000)
     evidence: list[dict[str, Any]] = Field(default_factory=list)
-    classification: dict[str, Any] | None = None
+    classification: ClassificationPayload | None = None
     valid_until: AwareDatetime | None = None
 
 
@@ -44,7 +52,7 @@ class DraftUpdatePayload(BaseModel):
     premises: list[dict[str, Any]] | None = None
     excerpt: str | None = Field(default=None, min_length=1, max_length=10000)
     evidence: list[dict[str, Any]] | None = None
-    classification: dict[str, Any] | None = None
+    classification: ClassificationPayload | None = None
     valid_until: AwareDatetime | None = None
 
 

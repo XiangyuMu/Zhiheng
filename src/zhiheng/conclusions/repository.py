@@ -226,9 +226,15 @@ class ConclusionRepository:
                 "applicability",
             }
         }
-        if "classification" in changes:
+        if "classification" in changes or "domain_id" in changes:
+            classification_value = changes.get("classification", payload.get("classification"))
+            if "domain_id" in changes:
+                classification_value = {
+                    **cast(dict[str, Any], classification_value or {}),
+                    "primary_domain_id": payload["domain_id"],
+                }
             classification = normalize_classification(
-                cast(dict[str, Any] | None, changes["classification"]),
+                cast(dict[str, Any] | None, classification_value),
                 fallback_domain_id=str(payload.get("domain_id", "education_learning")),
                 title=str(payload.get("title", "")),
                 claim=str(payload.get("claim", "")),
@@ -265,11 +271,6 @@ class ConclusionRepository:
     def approve(
         self, session: Session, owner: str, entry_id: str, etag: str, key: str
     ) -> dict[str, Any]:
-        item = self.get(session, owner, entry_id)
-        if item is None:
-            raise ValueError("conclusion not found")
-        if etag not in {"*", item["etag"]}:
-            raise ValueError("conclusion changed after it was read")
         existing = session.execute(
             text(
                 "SELECT result_json FROM conclusion_operations WHERE owner_user_id=:o AND operation_key=:k"
@@ -278,6 +279,11 @@ class ConclusionRepository:
         ).scalar_one_or_none()
         if existing:
             return cast(dict[str, Any], json.loads(str(existing)))
+        item = self.get(session, owner, entry_id)
+        if item is None:
+            raise ValueError("conclusion not found")
+        if etag not in {"*", item["etag"]}:
+            raise ValueError("conclusion changed after it was read")
         session.execute(
             text(
                 "UPDATE conclusion_entries SET status='formal',approved_version=current_version WHERE id=:id AND owner_user_id=:o"

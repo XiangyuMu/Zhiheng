@@ -4,15 +4,25 @@ from __future__ import annotations
 
 from typing import Any
 
+from zhiheng.classification.taxonomy import PRIMARY_DOMAINS
+
 _DOMAIN_KEYWORDS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("数学", "逻辑", "概率", "统计"), "mathematics_formal_sciences"),
+    (("物理", "化学", "生物", "地球", "宇宙"), "natural_sciences"),
     (("代码", "软件", "ai", "计算机"), "computing_engineering"),
     (("健康", "睡眠", "运动", "营养"), "medicine_health"),
+    (("心理", "情绪", "动机", "认知", "行为"), "psychology_cognition"),
+    (("社会", "政治", "法律", "政策", "制度"), "society_politics_law"),
+    (("历史", "哲学", "宗教", "伦理"), "history_philosophy_religion"),
+    (("语言", "文学", "艺术", "音乐", "创作"), "language_literature_arts"),
     (("学习", "记忆", "练习", "教育"), "education_learning"),
     (("工作", "职业", "求职", "团队"), "career_work_practice"),
     (("家庭", "关系", "沟通", "冲突"), "relationships_communication"),
     (("投资", "金融", "钱", "商业"), "economics_finance_business"),
     (("生活", "饮食", "出行", "居家"), "lifestyle_daily_life"),
+    (("体育", "游戏", "休闲", "娱乐"), "sports_games_leisure"),
 )
+_PRIMARY_DOMAIN_IDS = frozenset(domain.id for domain in PRIMARY_DOMAINS)
 
 
 def suggest_classification(*, title: str, claim: str, domain_id: str) -> dict[str, Any]:
@@ -38,8 +48,12 @@ def normalize_classification(
 ) -> dict[str, Any]:
     suggestion = suggest_classification(title=title, claim=claim, domain_id=fallback_domain_id)
     if not value:
+        if suggestion["primary_domain_id"] not in _PRIMARY_DOMAIN_IDS:
+            raise ValueError("unsupported conclusion primary domain")
         return suggestion
     primary = str(value.get("primary_domain_id") or fallback_domain_id)
+    if primary not in _PRIMARY_DOMAIN_IDS:
+        raise ValueError("unsupported conclusion primary domain")
     related = sorted(
         {
             str(item)
@@ -47,6 +61,8 @@ def normalize_classification(
             if str(item) and str(item) != primary
         }
     )
+    if any(item not in _PRIMARY_DOMAIN_IDS for item in related):
+        raise ValueError("unsupported conclusion related domain")
     record_type = str(value.get("record_type") or suggestion["record_type"])
     if record_type not in {"knowledge", "personal_archive_experience"}:
         raise ValueError("unsupported conclusion record type")
