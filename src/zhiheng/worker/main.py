@@ -20,11 +20,22 @@ from zhiheng.evolution.contracts import (
 )
 from zhiheng.evolution.jobs import EvolutionJobExecutor, process_jobs_once
 from zhiheng.evolution.orphan_gc import OrphanArtifactGC
-from zhiheng.jobs import KnowledgeIndexJobExecutor, OutboxRepository, process_knowledge_jobs_once
-from zhiheng.privacy.erase_journal import ExternalEraseJournal
+from zhiheng.jobs import (
+    ClassificationSuggestionJobExecutor,
+    KnowledgeIndexJobExecutor,
+    MemoryExtractionJobExecutor,
+    OutboxRepository,
+    PdfParseJobExecutor,
+    configured_pdf_parse_executor,
+    process_classification_jobs_once,
+    process_knowledge_jobs_once,
+    process_memory_extraction_jobs_once,
+)
+from zhiheng.recovery import startup_recovery_barrier
 
 logger = logging.getLogger(__name__)
 KnowledgeExecutorFactory = Callable[[Settings], KnowledgeIndexJobExecutor]
+PdfExecutorFactory = Callable[[Settings], PdfParseJobExecutor]
 WorkerRole = Literal["worker", "publisher"]
 DEFAULT_IDLE_SECONDS = 2.0
 DEFAULT_BACKOFF_SECONDS = 5.0
@@ -48,6 +59,7 @@ def process_worker_once(
     limit: int = 10,
     worker_id: str = "worker",
     knowledge_executor_factory: KnowledgeExecutorFactory | None = None,
+    pdf_executor_factory: PdfExecutorFactory | None = None,
 ) -> int:
     engine = create_sqlite_engine(settings)
     try:
@@ -65,6 +77,19 @@ def process_worker_once(
             _knowledge_executor(settings, knowledge_executor_factory),
             worker_id=worker_id,
             limit=limit,
+            pdf_executor=_pdf_executor(settings, pdf_executor_factory),
+        )
+        classified = process_classification_jobs_once(
+            session_factory,
+            ClassificationSuggestionJobExecutor(),
+            worker_id=worker_id,
+            limit=limit,
+        )
+        extracted = process_memory_extraction_jobs_once(
+            session_factory,
+            MemoryExtractionJobExecutor(),
+            worker_id=worker_id,
+            limit=limit,
         )
         executor = _evolution_executor(
             settings,
@@ -79,7 +104,7 @@ def process_worker_once(
             )
         finally:
             _close_executor(executor)
-        return enqueued + indexed + executed
+        return enqueued + indexed + classified + extracted + executed
     finally:
         engine.dispose()
 
@@ -90,6 +115,7 @@ def process_publisher_once(
     limit: int = 10,
     publisher_id: str = "publisher",
     knowledge_executor_factory: KnowledgeExecutorFactory | None = None,
+    pdf_executor_factory: PdfExecutorFactory | None = None,
 ) -> int:
     engine = create_sqlite_engine(settings)
     try:
@@ -99,6 +125,7 @@ def process_publisher_once(
             _knowledge_executor(settings, knowledge_executor_factory),
             worker_id=publisher_id,
             limit=limit,
+            pdf_executor=_pdf_executor(settings, pdf_executor_factory),
         )
         executor = _evolution_executor(
             settings,
@@ -129,9 +156,10 @@ def run_once(
     role: WorkerRole | str | None = None,
     limit: int = 10,
     worker_id: str | None = None,
+    pdf_executor_factory: PdfExecutorFactory | None = None,
 ) -> int:
     worker_settings = settings or get_settings()
-    _recover_configured_erase_journal()
+    _recover_configured_erase_journal(worker_settings)
     worker_role = _resolve_role(role)
     if worker_role == "publisher":
         process_outbox_once(worker_settings, limit=limit)
@@ -140,21 +168,26 @@ def run_once(
             limit=limit,
             publisher_id=worker_id or "publisher",
             knowledge_executor_factory=knowledge_executor_factory,
+            pdf_executor_factory=pdf_executor_factory,
         )
     return process_worker_once(
         worker_settings,
         limit=limit,
         worker_id=worker_id or "worker",
         knowledge_executor_factory=knowledge_executor_factory,
+        pdf_executor_factory=pdf_executor_factory,
     )
 
 
-def _recover_configured_erase_journal() -> None:
-    """Make worker startup fail closed after a crash, when the journal is configured."""
+def _recover_configured_erase_journal(settings: Settings) -> None:
+    """Validate and replay the journal before the worker can dispatch."""
     if os.environ.get("ZHIHENG_ERASE_JOURNAL_PATH"):
-        journal = ExternalEraseJournal.from_env()
-        journal.recover_pending()
-        journal.load()
+        engine = create_sqlite_engine(settings)
+        try:
+            session_factory = create_session_factory(engine)
+            startup_recovery_barrier(settings, session_factory)
+        finally:
+            engine.dispose()
 
 
 def log_startup(settings: Settings) -> None:
@@ -171,6 +204,7 @@ def serve_forever(
     idle_seconds: float = DEFAULT_IDLE_SECONDS,
     backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
     knowledge_executor_factory: KnowledgeExecutorFactory | None = None,
+    pdf_executor_factory: PdfExecutorFactory | None = None,
 ) -> int:
     if not all(math.isfinite(value) and value > 0 for value in (idle_seconds, backoff_seconds)):
         raise ValueError("worker wait intervals must be finite and positive")
@@ -182,6 +216,7 @@ def serve_forever(
                 role=role,
                 limit=limit,
                 worker_id=worker_id,
+                pdf_executor_factory=pdf_executor_factory,
             )
         except OperationalError:
             logger.warning(
@@ -289,6 +324,15 @@ def _knowledge_executor(
     if factory is not None:
         return factory(settings)
     return KnowledgeIndexJobExecutor(settings)
+
+
+def _pdf_executor(
+    settings: Settings,
+    factory: PdfExecutorFactory | None,
+) -> PdfParseJobExecutor | None:
+    if factory is None:
+        return configured_pdf_parse_executor(settings)
+    return factory(settings)
 
 
 def _evolution_executor(

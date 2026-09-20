@@ -10,18 +10,27 @@ from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import json_text, new_id
 from zhiheng.evolution.jobs import EvolutionJobType
+from zhiheng.jobs.memory_extraction import MEMORY_EXTRACTION_JOB_TYPE
 
 KNOWLEDGE_INDEX_JOB_TYPE = "knowledge.index"
+KNOWLEDGE_PARSE_PDF_EVENT = "knowledge.parse_pdf"
+KNOWLEDGE_PARSE_PDF_JOB_TYPE = "knowledge.parse_pdf"
 KNOWLEDGE_INDEX_EVENTS = frozenset(
     {
         "evidence.ingested",
         "knowledge.soft_deleted",
+        "knowledge.restored",
+        "knowledge.reindex_requested",
         "knowledge_candidate.created",
         "knowledge_candidate.confirmed",
     }
 )
 NOOP_AUDIT_EVENTS = frozenset({"evolution.proposal.user_decision"})
 PROPOSAL_VALIDATION_REQUESTED_EVENT = "evolution.proposal.validation_requested"
+CLASSIFICATION_SUGGESTION_EVENT = "knowledge.classification_suggestion_requested"
+CLASSIFICATION_SUGGESTION_JOB_TYPE = "classification.suggest"
+CONVERSATION_MEMORY_EVENT = "conversation.persisted"
+EVENT_INDEX_EVENT = "event.index_requested"
 
 
 @dataclass(frozen=True)
@@ -140,10 +149,18 @@ class OutboxRepository:
 
 
 def _job_type_for_event(event: ClaimedOutboxEvent) -> str | None:
+    if event.event_type == KNOWLEDGE_PARSE_PDF_EVENT:
+        return KNOWLEDGE_PARSE_PDF_JOB_TYPE
     if event.event_type in KNOWLEDGE_INDEX_EVENTS:
         return KNOWLEDGE_INDEX_JOB_TYPE
     if event.event_type == PROPOSAL_VALIDATION_REQUESTED_EVENT:
         return EvolutionJobType.PROPOSAL_EVALUATION.value
+    if event.event_type == CLASSIFICATION_SUGGESTION_EVENT:
+        return CLASSIFICATION_SUGGESTION_JOB_TYPE
+    if event.event_type == CONVERSATION_MEMORY_EVENT:
+        return MEMORY_EXTRACTION_JOB_TYPE
+    if event.event_type == EVENT_INDEX_EVENT:
+        return "event.index"
     if event.event_type in {item.value for item in EvolutionJobType}:
         return event.event_type
     if event.event_type == "strategy_release.promotion_requested":

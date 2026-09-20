@@ -55,7 +55,14 @@ class ConclusionRepository:
         ).scalar_one()
         return cast(dict[str, Any], json.loads(str(row)))
 
-    def persist_source(self, session: Session, owner: str, body: str, key: str) -> dict[str, Any]:
+    def persist_source(
+        self,
+        session: Session,
+        owner: str,
+        body: str,
+        key: str,
+        history_id: str | None = None,
+    ) -> dict[str, Any]:
         existing = session.execute(
             text(
                 "SELECT result_json FROM conclusion_operations WHERE owner_user_id=:o AND operation_key=:k"
@@ -66,8 +73,11 @@ class ConclusionRepository:
             return cast(dict[str, Any], json.loads(str(existing)))
         source_id = new_id()
         session.execute(
-            text("INSERT INTO conclusion_sources(id,owner_user_id,body) VALUES (:id,:o,:b)"),
-            {"id": source_id, "o": owner, "b": body},
+            text(
+                "INSERT INTO conclusion_sources(id,owner_user_id,body,history_id) "
+                "VALUES (:id,:o,:b,:h)"
+            ),
+            {"id": source_id, "o": owner, "b": body, "h": history_id},
         )
         result = {"id": source_id, "text": body}
         return self._write(session, owner, key, {"kind": "source", "body": body}, result)
