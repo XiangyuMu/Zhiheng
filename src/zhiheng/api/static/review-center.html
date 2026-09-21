@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>集中审核 · 知衡</title><link rel="stylesheet" href="/review-center.css"></head>
+<body>
+<main class="shell">
+  <header class="header"><div><p class="eyebrow">知衡 / 知识成熟</p><h1>集中审核</h1><p class="lead">跨会话查看结论草稿和个人信息冲突。关闭页面不会批准任何内容。</p></div><nav><a href="/knowledge-agent">研究问答</a><a href="/memory-center">个人上下文</a></nav></header>
+  <section class="summary" aria-label="待审核数量"><div><strong id="total">0</strong><span>待处理</span></div><div><strong id="conclusion-count">0</strong><span>结论草稿</span></div><div><strong id="conflict-count">0</strong><span>个人冲突</span></div><button id="refresh" type="button">刷新</button></section>
+  <p id="message" class="message" role="status"></p>
+  <section class="layout"><div><h2>审核队列</h2><div id="queue" class="queue" aria-live="polite"></div></div><aside id="detail" class="detail" aria-live="polite"><p class="muted">选择一项查看完整内容。</p></aside></section>
+</main><script src="/review-center.js" defer></script>
+</body></html>

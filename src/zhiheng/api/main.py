@@ -24,6 +24,7 @@ from zhiheng.api.knowledge import install_knowledge_routes
 from zhiheng.api.memory import install_memory_routes
 from zhiheng.api.personal_updates import install_personal_update_routes
 from zhiheng.api.retrieval import install_retrieval_routes
+from zhiheng.api.review import install_review_routes
 from zhiheng.api.taxonomy import install_taxonomy_routes
 from zhiheng.auth import SessionService
 from zhiheng.core.config import Settings, get_settings
@@ -85,6 +86,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_taxonomy_routes(app)
     install_memory_routes(app, app_settings)
     install_retrieval_routes(app, app_settings)
+    install_review_routes(app)
     install_decision_routes(app, app_settings)
     install_gap_routes(app, app_settings)
     install_evolution_routes(app, app_settings)

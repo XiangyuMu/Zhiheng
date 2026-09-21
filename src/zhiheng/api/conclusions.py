@@ -106,6 +106,28 @@ def update_draft(
         raise HTTPException(409, str(exc)) from exc
 
 
+@router.post("/{entry_id}/defer")
+def defer_draft(
+    entry_id: str, session: SessionDep, user: AuthDep, mutation: MutationDep
+) -> dict[str, Any]:
+    key, etag = mutation
+    try:
+        return repo.decide_draft(session, user, entry_id, etag, "deferred", key)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/{entry_id}/reject")
+def reject_draft(
+    entry_id: str, session: SessionDep, user: AuthDep, mutation: MutationDep
+) -> dict[str, Any]:
+    key, etag = mutation
+    try:
+        return repo.decide_draft(session, user, entry_id, etag, "rejected", key)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.get("/{entry_id}")
 def get(entry_id: str, session: SessionDep, user: AuthDep) -> dict[str, Any]:
     item = repo.get(session, user, entry_id)

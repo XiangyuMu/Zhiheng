@@ -181,7 +181,7 @@ class ConclusionRepository:
             text(
                 """
                 SELECT id FROM conclusion_entries
-                WHERE owner_user_id = :owner AND status = 'draft'
+                WHERE owner_user_id = :owner AND status IN ('draft', 'deferred')
                 ORDER BY datetime(created_at) DESC, id DESC
                 LIMIT :limit
                 """
@@ -298,6 +298,29 @@ class ConclusionRepository:
         )
         result = {**item, "status": "formal", "approved_version": item["version"]}
         return self._write(session, owner, key, {"entry_id": entry_id, "etag": etag}, result)
+
+    def decide_draft(
+        self, session: Session, owner: str, entry_id: str, etag: str, decision: str, key: str
+    ) -> dict[str, Any]:
+        if decision not in {"rejected", "deferred"}:
+            raise ValueError("invalid draft decision")
+        item = self.get(session, owner, entry_id)
+        if item is None or item["status"] not in {"draft", "deferred"}:
+            raise ValueError("draft conclusion not found")
+        if etag not in {"*", item["etag"]}:
+            raise ValueError("conclusion changed after it was read")
+        existing = session.execute(
+            text("SELECT result_json FROM conclusion_operations WHERE owner_user_id=:o AND operation_key=:k"),
+            {"o": owner, "k": key},
+        ).scalar_one_or_none()
+        if existing is not None:
+            return cast(dict[str, Any], json.loads(str(existing)))
+        session.execute(
+            text("UPDATE conclusion_entries SET status=:status WHERE id=:id AND owner_user_id=:o"),
+            {"status": decision, "id": entry_id, "o": owner},
+        )
+        result = {**item, "status": decision}
+        return self._write(session, owner, key, {"entry_id": entry_id, "etag": etag, "decision": decision}, result)
 
     def context(self, session: Session, owner: str, query: str) -> list[dict[str, Any]]:
         ConclusionApplicabilityService().sweep(session)
