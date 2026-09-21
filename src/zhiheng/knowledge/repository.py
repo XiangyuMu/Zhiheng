@@ -489,6 +489,7 @@ class KnowledgeRepository:
         source_kind: str,
         media_type: str,
         object_kind: str,
+        record_type: str = "knowledge",
         visibility_scope: str,
         lifecycle_status: str,
         chunk_status: str,

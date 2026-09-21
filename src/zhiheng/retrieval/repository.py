@@ -14,6 +14,44 @@ from zhiheng.retrieval.tokenizer import DEFAULT_TOKENIZER, Tokenizer
 from zhiheng.retrieval.vector_index import VectorIndexRepository
 
 
+class CitationContextRepository:
+    """Read an authorized serving chunk for citation replay."""
+    def get_chunk(
+        self,
+        session: Session,
+        *,
+        source_type: str,
+        source_id: str,
+        source_version_id: str,
+        chunk_id: str,
+    ) -> dict[str, object] | None:
+        row = session.execute(
+            text(
+                """
+                SELECT s.title, s.text, s.span_start, s.span_end,
+                       ko.object_kind, eo.media_type
+                FROM serving_chunks s
+                JOIN current_formal_knowledge cfk
+                  ON cfk.id=s.source_id AND cfk.current_version_id=s.source_version_id
+                JOIN knowledge_objects ko ON ko.id=cfk.id
+                JOIN content_versions cv
+                  ON cv.id=s.content_version_id AND cv.status='active'
+                JOIN evidence_objects eo
+                  ON eo.id=cv.evidence_object_id AND eo.status='active'
+                WHERE s.source_type=:source_type AND s.source_id=:source_id
+                  AND s.source_version_id=:source_version_id AND s.id=:chunk_id
+                """
+            ),
+            {
+                "source_type": source_type,
+                "source_id": source_id,
+                "source_version_id": source_version_id,
+                "chunk_id": chunk_id,
+            },
+        ).mappings().first()
+        return dict(row) if row is not None else None
+
+
 class VectorIndexSearchPort(Protocol):
     def active_generation_id(
         self,

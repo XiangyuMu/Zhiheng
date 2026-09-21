@@ -530,6 +530,7 @@ def process_knowledge_jobs_once(
     worker_id: str,
     limit: int = 10,
     repository: KnowledgeJobRepository | None = None,
+    pdf_executor: object | None = None,
 ) -> int:
     job_repository = repository or KnowledgeJobRepository()
     with session_scope(session_factory) as session:

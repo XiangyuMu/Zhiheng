@@ -25,12 +25,20 @@ from zhiheng.jobs.memory_extraction import (
     process_memory_extraction_jobs_once,
 )
 from zhiheng.jobs.outbox import OutboxRepository
-from zhiheng.jobs.pdf_parsing import (
-    KNOWLEDGE_PARSE_PDF_JOB_TYPE,
-    PdfParseJobExecutor,
-    PdfParseJobResult,
-    configured_pdf_parse_executor,
-)
+
+try:
+    from zhiheng.jobs.pdf_parsing import (
+        KNOWLEDGE_PARSE_PDF_JOB_TYPE,
+        PdfParseJobExecutor,
+        PdfParseJobResult,
+        configured_pdf_parse_executor,
+    )
+except ImportError:  # Optional PDF parser dependencies are outside the MVP runtime.
+    KNOWLEDGE_PARSE_PDF_JOB_TYPE = "knowledge.parse_pdf"
+    PdfParseJobExecutor = object
+    PdfParseJobResult = object
+    def configured_pdf_parse_executor(*args: object, **kwargs: object) -> None:
+        return None
 
 __all__ = [
     "KnowledgeIndexJobExecutor",

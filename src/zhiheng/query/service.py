@@ -46,6 +46,7 @@ class QueryAnswerService:
         trajectory_repository: TrajectoryRepository | None = None,
         deployment_secret: str | None = None,
         memory_context_service: MemoryContextService | None = None,
+        learning_loop_service: object | None = None,
     ) -> None:
         self._router = router
         self._structured_lookup = structured_lookup
@@ -53,6 +54,7 @@ class QueryAnswerService:
         self._trajectory_repository = trajectory_repository
         self._deployment_secret = deployment_secret
         self._memory_context_service = memory_context_service or MemoryContextService()
+        self._learning_loop_service = learning_loop_service
 
     def answer(
         self,
