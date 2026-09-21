@@ -131,7 +131,7 @@ def test_concurrent_relation_approvals_have_one_decision(tmp_path: Path) -> None
         f"/v1/conclusions/{old['id']}/approve", json={},
         headers=_headers(csrf, "race-old-approve", old["etag"]),
     ).status_code == 200
-    new = _source_and_draft(client, csrf, "race-new", "复习无效", "固定条件")
+    new = _source_and_draft(client, csrf, "race-new", "复习有效", "变化条件")
     relation = client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"][0]
     barrier = Barrier(2)
 
@@ -198,3 +198,100 @@ def test_changed_right_version_cannot_be_superseded(tmp_path: Path) -> None:
         assert session.execute(text(
             "SELECT approved_at FROM conclusion_versions WHERE entry_id=:id AND version=1"
         ), {"id": new["id"]}).scalar_one() is None
+
+
+def test_relation_approval_materializes_formal_knowledge_and_is_searchable(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+    csrf = _login(client)
+    old = _source_and_draft(client, csrf, "formal-source", "复习有效", "固定条件")
+    assert client.post(
+        f"/v1/conclusions/{old['id']}/approve", json={},
+        headers=_headers(csrf, "formal-source-approve", old["etag"]),
+    ).status_code == 200
+    new = _source_and_draft(client, csrf, "formal-relation", "复习无效", "变化条件")
+    relation = client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"][0]
+
+    approved = client.post(
+        f"/v1/conclusions/relations/{relation['id']}/approve", json={},
+        headers=_headers(csrf, "formal-relation-approve"),
+    )
+    assert approved.status_code == 200, approved.text
+    knowledge_id = approved.json()["knowledge_id"]
+    assert client.get(f"/v1/lookups/knowledge/{knowledge_id}").status_code == 200
+    assert client.get("/v1/conclusions/context", params={"query": "复习无效"}).json()["items"]
+
+    replay = client.post(
+        f"/v1/conclusions/relations/{relation['id']}/approve", json={},
+        headers=_headers(csrf, "formal-relation-approve"),
+    )
+    assert replay.status_code == 200
+    assert replay.json()["knowledge_id"] == knowledge_id
+
+
+def test_duplicate_relation_reuses_existing_knowledge_object(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+    csrf = _login(client)
+    old = _source_and_draft(client, csrf, "duplicate-old", "每天复习有效", "固定条件")
+    first = client.post(
+        f"/v1/conclusions/{old['id']}/approve", json={},
+        headers=_headers(csrf, "duplicate-old-approve", old["etag"]),
+    )
+    assert first.status_code == 200
+    new = _source_and_draft(client, csrf, "duplicate-new", "每天复习有效", "固定条件")
+    relation = next(
+        item for item in client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"]
+        if item["kind"] == "duplicate"
+    )
+    approved = client.post(
+        f"/v1/conclusions/relations/{relation['id']}/approve", json={},
+        headers=_headers(csrf, "duplicate-new-approve"),
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["knowledge_id"] == first.json()["knowledge_id"]
+
+
+def test_formalization_failure_rolls_back_and_retry_recovers(tmp_path, monkeypatch):
+    from sqlalchemy import text
+
+    from zhiheng.knowledge import KnowledgeRepository
+
+    client, sessions = _client(tmp_path)
+    csrf = _login(client)
+    old = _source_and_draft(client, csrf, "rollback-old", "复习有效", "固定条件")
+    assert client.post(f"/v1/conclusions/{old['id']}/approve", json={},
+                       headers=_headers(csrf, "rollback-old", old["etag"])).status_code == 200
+    new = _source_and_draft(client, csrf, "rollback-new", "复习有效", "新条件")
+    relation = client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"][0]
+    original = KnowledgeRepository.ingest_text
+
+    def fail(*args, **kwargs):
+        original(*args, **kwargs)
+        raise ValueError("injected failure after indexing")
+
+    monkeypatch.setattr(KnowledgeRepository, "ingest_text", fail)
+    url = f"/v1/conclusions/relations/{relation['id']}/approve"
+    headers = _headers(csrf, "rollback-approve")
+    assert client.post(url, json={}, headers=headers).status_code == 409
+    with sessions() as session:
+        assert session.execute(text("SELECT status FROM conclusion_entries WHERE id=:id"),
+                               {"id": new["id"]}).scalar_one() == "draft"
+        assert session.execute(text("SELECT count(*) FROM knowledge_objects")).scalar_one() == 1
+    monkeypatch.setattr(KnowledgeRepository, "ingest_text", original)
+    assert client.post(url, json={}, headers=headers).status_code == 200
+
+
+def test_confirmed_conflict_is_not_unconditional_retrieval(tmp_path):
+    client, _ = _client(tmp_path)
+    csrf = _login(client)
+    old = _source_and_draft(client, csrf, "conflict-old", "复习有效", "固定条件")
+    old_result = client.post(f"/v1/conclusions/{old['id']}/approve", json={},
+                            headers=_headers(csrf, "conflict-old", old["etag"])).json()
+    new = _source_and_draft(client, csrf, "conflict-new", "复习无效", "固定条件")
+    relation = client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"][0]
+    approved = client.post(f"/v1/conclusions/relations/{relation['id']}/approve", json={},
+                           headers=_headers(csrf, "conflict-approve"))
+    assert approved.status_code == 200
+    assert client.get("/v1/conclusions/context", params={"query": "复习"}).json()["items"] == []
+    for knowledge_id in [old_result["knowledge_id"], approved.json()["knowledge_id"]]:
+        response = client.get(f"/v1/lookups/knowledge/{knowledge_id}")
+        assert not response.json()["rows"]

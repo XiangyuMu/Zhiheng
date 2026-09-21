@@ -18,6 +18,84 @@ AuthDep = Annotated[str, Depends(require_user)]
 repo = ConclusionRepository()
 
 
+def _formalize_conclusion(
+    request: Request,
+    session: Session,
+    user: str,
+    entry_id: str,
+    item: dict[str, Any],
+    *,
+    relation_kind: str | None = None,
+    related_entry_id: str | None = None,
+) -> str:
+    """Materialize one approved conclusion through the shared knowledge path."""
+    existing = session.execute(
+        text("SELECT knowledge_id FROM conclusion_entries WHERE id=:id AND owner_user_id=:o"),
+        {"id": entry_id, "o": user},
+    ).scalar_one_or_none()
+    if existing is not None:
+        return str(existing)
+
+    if relation_kind == "duplicate" and related_entry_id is not None:
+        duplicate_knowledge_id = session.execute(
+            text(
+                "SELECT knowledge_id FROM conclusion_entries "
+                "WHERE id=:id AND owner_user_id=:o"
+            ),
+            {"id": related_entry_id, "o": user},
+        ).scalar_one_or_none()
+        if duplicate_knowledge_id is not None:
+            # Approved relation and immutable source retain duplicate provenance.
+            # Do not give a merged duplicate independent serving authority.
+            repo.attach_knowledge(session, user, entry_id, str(duplicate_knowledge_id))
+            return str(duplicate_knowledge_id)
+
+    premises = item.get("premises", [])
+    condition = "、".join(
+        str(p.get("text", "")) for p in premises if not p.get("confirmed", False)
+    )
+    text_value = f"如果{condition}，则{item['claim']}" if condition else str(item["claim"])
+    artifacts = knowledge_object_store_for_settings(
+        request.app.state.knowledge_settings
+    ).write_text_artifacts(text_value)
+    stored = KnowledgeRepository().ingest_text(
+        session,
+        TextEvidenceInput(
+            title=str(item["title"]),
+            text=text_value,
+            primary_domain_id=str(item["domain_id"]),
+            record_type=str(item.get("record_type", "knowledge")),
+            object_kind="conclusion",
+            source_kind="user_explicit",
+            source_metadata={
+                "conclusion_entry_id": entry_id,
+                "source_id": item["source"]["id"],
+                "excerpt": item.get("excerpt"),
+                "classification": item.get("classification", {}),
+                "related_domain_ids": item.get("classification", {}).get(
+                    "related_domain_ids", []
+                ),
+                "relation_kind": relation_kind,
+                "related_entry_id": related_entry_id,
+            },
+        ),
+        user_authority=KnowledgeUserAuthority(user),
+        stored_artifacts=artifacts,
+    )
+    repo.attach_knowledge(session, user, entry_id, stored.knowledge_object_id)
+    if relation_kind == "revision" and related_entry_id is not None:
+        old_knowledge_id = session.execute(
+            text(
+                "SELECT knowledge_id FROM conclusion_entries "
+                "WHERE id=:id AND owner_user_id=:o"
+            ),
+            {"id": related_entry_id, "o": user},
+        ).scalar_one_or_none()
+        if old_knowledge_id is not None:
+            KnowledgeRepository().soft_delete_knowledge(session, str(old_knowledge_id))
+    return stored.knowledge_object_id
+
+
 class SourcePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(min_length=1, max_length=100000)
@@ -147,47 +225,9 @@ def approve(
     key, etag = mutation
     try:
         result = repo.approve(session, user, entry_id, etag, key)
-        row = session.execute(
-            text("SELECT knowledge_id FROM conclusion_entries WHERE id=:id AND owner_user_id=:o"),
-            {"id": entry_id, "o": user},
-        ).scalar_one_or_none()
-        if row is None:
-            item = repo.get(session, user, entry_id)
-            assert item is not None
-            premises = item.get("premises", [])
-            condition = "、".join(
-                str(p.get("text", "")) for p in premises if not p.get("confirmed", False)
-            )
-            text_value = f"如果{condition}，则{item['claim']}" if condition else str(item["claim"])
-            artifacts = knowledge_object_store_for_settings(
-                request.app.state.knowledge_settings
-            ).write_text_artifacts(text_value)
-            stored = KnowledgeRepository().ingest_text(
-                session,
-                TextEvidenceInput(
-                    title=str(item["title"]),
-                    text=text_value,
-                    primary_domain_id=str(item["domain_id"]),
-                    record_type=str(item.get("record_type", "knowledge")),
-                    object_kind="conclusion",
-                    source_kind="user_explicit",
-                    source_metadata={
-                        "conclusion_entry_id": entry_id,
-                        "source_id": item["source"]["id"],
-                        "excerpt": item.get("excerpt"),
-                        "classification": item.get("classification", {}),
-                        "related_domain_ids": item.get("classification", {}).get(
-                            "related_domain_ids", []
-                        ),
-                    },
-                ),
-                user_authority=KnowledgeUserAuthority(user),
-                stored_artifacts=artifacts,
-            )
-            repo.attach_knowledge(session, user, entry_id, stored.knowledge_object_id)
-            result["knowledge_id"] = stored.knowledge_object_id
-            return result
-        result["knowledge_id"] = str(row)
+        item = repo.get(session, user, entry_id)
+        assert item is not None
+        result["knowledge_id"] = _formalize_conclusion(request, session, user, entry_id, item)
         return result
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -220,33 +260,47 @@ def _decide_relation(
     session: SessionDep,
     user: AuthDep,
     mutation: MutationDep,
+    request: Request,
 ) -> dict[str, Any]:
     key, _ = mutation
     try:
-        return repo.decide_relation(session, user, relation_id, decision, key)
+        result = repo.decide_relation(session, user, relation_id, decision, key)
+        if decision == "approved":
+            item = repo.get(session, user, str(result["left_id"]))
+            assert item is not None
+            result["knowledge_id"] = _formalize_conclusion(
+                request,
+                session,
+                user,
+                str(result["left_id"]),
+                item,
+                relation_kind=str(result["kind"]),
+                related_entry_id=str(result["right_id"]),
+            )
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/relations/{relation_id}/approve")
 def approve_relation(
-    relation_id: str, session: SessionDep, user: AuthDep, mutation: MutationDep
+    relation_id: str, request: Request, session: SessionDep, user: AuthDep, mutation: MutationDep
 ) -> dict[str, Any]:
-    return _decide_relation(relation_id, "approved", session, user, mutation)
+    return _decide_relation(relation_id, "approved", session, user, mutation, request)
 
 
 @router.post("/relations/{relation_id}/reject")
 def reject_relation(
-    relation_id: str, session: SessionDep, user: AuthDep, mutation: MutationDep
+    relation_id: str, request: Request, session: SessionDep, user: AuthDep, mutation: MutationDep
 ) -> dict[str, Any]:
-    return _decide_relation(relation_id, "rejected", session, user, mutation)
+    return _decide_relation(relation_id, "rejected", session, user, mutation, request)
 
 
 @router.post("/relations/{relation_id}/defer")
 def defer_relation(
-    relation_id: str, session: SessionDep, user: AuthDep, mutation: MutationDep
+    relation_id: str, request: Request, session: SessionDep, user: AuthDep, mutation: MutationDep
 ) -> dict[str, Any]:
-    return _decide_relation(relation_id, "deferred", session, user, mutation)
+    return _decide_relation(relation_id, "deferred", session, user, mutation, request)
 
 
 def install_conclusion_routes(app: FastAPI) -> None:

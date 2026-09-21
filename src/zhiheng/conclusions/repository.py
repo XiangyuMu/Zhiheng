@@ -154,8 +154,11 @@ class ConclusionRepository:
         payload = json.loads(str(row["payload_json"]))
         source = (
             session.execute(
-                text("SELECT id,body FROM conclusion_sources WHERE id=:id"),
-                {"id": row["source_id"]},
+                text(
+                    "SELECT id,body FROM conclusion_sources "
+                    "WHERE id=:id AND owner_user_id=:o"
+                ),
+                {"id": row["source_id"], "o": owner},
             )
             .mappings()
             .one()
@@ -271,17 +274,23 @@ class ConclusionRepository:
     def approve(
         self, session: Session, owner: str, entry_id: str, etag: str, key: str
     ) -> dict[str, Any]:
+        request_payload = {"entry_id": entry_id, "etag": etag}
         existing = session.execute(
             text(
-                "SELECT result_json FROM conclusion_operations WHERE owner_user_id=:o AND operation_key=:k"
+                "SELECT request_hash,result_json FROM conclusion_operations "
+                "WHERE owner_user_id=:o AND operation_key=:k"
             ),
             {"o": owner, "k": key},
-        ).scalar_one_or_none()
-        if existing:
-            return cast(dict[str, Any], json.loads(str(existing)))
+        ).mappings().first()
+        if existing is not None:
+            if str(existing["request_hash"]) != sha256_json(request_payload):
+                raise ValueError("operation key already used with different payload")
+            return cast(dict[str, Any], json.loads(str(existing["result_json"])))
         item = self.get(session, owner, entry_id)
         if item is None:
             raise ValueError("conclusion not found")
+        if item["status"] in {"merged", "superseded"}:
+            raise ValueError("conclusion is no longer approvable")
         if etag not in {"*", item["etag"]}:
             raise ValueError("conclusion changed after it was read")
         session.execute(
@@ -297,7 +306,7 @@ class ConclusionRepository:
             {"id": entry_id, "v": item["version"]},
         )
         result = {**item, "status": "formal", "approved_version": item["version"]}
-        return self._write(session, owner, key, {"entry_id": entry_id, "etag": etag}, result)
+        return self._write(session, owner, key, request_payload, result)
 
     def decide_draft(
         self, session: Session, owner: str, entry_id: str, etag: str, decision: str, key: str
@@ -326,7 +335,22 @@ class ConclusionRepository:
         ConclusionApplicabilityService().sweep(session)
         rows = session.execute(
             text(
-                "SELECT e.id,e.current_version,e.approved_version,v.payload_json FROM conclusion_entries e JOIN conclusion_versions v ON v.entry_id=e.id AND v.version=e.approved_version WHERE e.owner_user_id=:o AND e.status='formal' AND NOT EXISTS (SELECT 1 FROM conclusion_applicability a WHERE a.entry_id=e.id AND a.version=e.approved_version AND a.state='suspended') AND v.payload_json LIKE :q"
+                "SELECT e.id,e.current_version,e.approved_version,v.payload_json "
+                "FROM conclusion_entries e "
+                "JOIN conclusion_versions v ON v.entry_id=e.id AND v.version=e.approved_version "
+                "WHERE e.owner_user_id=:o AND e.status='formal' "
+                "AND NOT EXISTS (SELECT 1 FROM conclusion_applicability a "
+                "WHERE a.entry_id=e.id AND a.version=e.approved_version AND a.state='suspended') "
+                "AND NOT EXISTS (SELECT 1 FROM conclusion_relations r "
+                "JOIN conclusion_entries le ON le.id=r.left_id "
+                "AND le.owner_user_id=r.owner_user_id "
+                "JOIN conclusion_entries re ON re.id=r.right_id "
+                "AND re.owner_user_id=r.owner_user_id "
+                "WHERE r.owner_user_id=e.owner_user_id "
+                "AND r.status='approved' AND r.kind='conflict' "
+                "AND (r.left_id=e.id OR r.right_id=e.id) "
+                "AND le.status='formal' AND re.status='formal') "
+                "AND v.payload_json LIKE :q"
             ),
             {"o": owner, "q": f"%{query}%"},
         ).mappings()
@@ -389,6 +413,8 @@ class ConclusionRepository:
                 FROM conclusion_entries e
                 JOIN conclusion_versions v
                   ON v.entry_id=e.id AND v.version=e.approved_version
+                JOIN conclusion_sources s
+                  ON s.id=e.source_id AND s.owner_user_id=e.owner_user_id
                 WHERE e.owner_user_id=:o AND e.status='formal' AND e.id != :id
                 ORDER BY e.created_at ASC, e.id ASC
                 """
@@ -479,10 +505,16 @@ class ConclusionRepository:
             text(
                 """
                 SELECT r.*, le.source_id AS left_source_id, re.source_id AS right_source_id,
+                       le.status AS left_status, re.status AS right_status,
+                       ls.body AS left_source_body, rs.body AS right_source_body,
                        lv.payload_json AS left_payload, rv.payload_json AS right_payload
                 FROM conclusion_relations r
                 JOIN conclusion_entries le ON le.id=r.left_id AND le.owner_user_id=r.owner_user_id
                 JOIN conclusion_entries re ON re.id=r.right_id AND re.owner_user_id=r.owner_user_id
+                JOIN conclusion_sources ls
+                  ON ls.id=le.source_id AND ls.owner_user_id=r.owner_user_id
+                JOIN conclusion_sources rs
+                  ON rs.id=re.source_id AND rs.owner_user_id=r.owner_user_id
                 JOIN conclusion_versions lv ON lv.entry_id=r.left_id AND lv.version=r.left_version
                 JOIN conclusion_versions rv ON rv.entry_id=r.right_id AND rv.version=r.right_version
                 WHERE r.owner_user_id=:o AND (r.left_id=:id OR r.right_id=:id)
@@ -490,8 +522,48 @@ class ConclusionRepository:
             ),
             {"o": owner, "id": entry_id, **({"status": status} if status else {})},
         ).mappings()
+        relation_rows = list(rows)
+        relation_ids = [str(row["id"]) for row in relation_rows]
+        history_by_relation: dict[str, list[dict[str, Any]]] = {
+            relation_id: [] for relation_id in relation_ids
+        }
+        if relation_ids:
+            history_rows = session.execute(
+                text(
+                    """
+                    SELECT relation_id, id, from_status, to_status, actor_user_id,
+                           left_version, right_version, left_source_id, right_source_id,
+                           created_at
+                    FROM conclusion_relation_events
+                    WHERE owner_user_id=:o
+                      AND relation_id IN ({})
+                    ORDER BY datetime(created_at) ASC, id ASC
+                    """.format(",".join(f":relation_{index}" for index in range(len(relation_ids))))
+                ),
+                {
+                    "o": owner,
+                    **{
+                        f"relation_{index}": relation_id
+                        for index, relation_id in enumerate(relation_ids)
+                    },
+                },
+            ).mappings()
+            for event in history_rows:
+                history_by_relation[str(event["relation_id"])].append(
+                    {
+                        "id": event["id"],
+                        "from_status": event["from_status"],
+                        "to_status": event["to_status"],
+                        "actor_user_id": event["actor_user_id"],
+                        "left_version": event["left_version"],
+                        "right_version": event["right_version"],
+                        "left_source_id": event["left_source_id"],
+                        "right_source_id": event["right_source_id"],
+                        "created_at": event["created_at"],
+                    }
+                )
         out = []
-        for row in rows:
+        for row in relation_rows:
             left_payload = cast(dict[str, Any], json.loads(str(row["left_payload"])))
             right_payload = cast(dict[str, Any], json.loads(str(row["right_payload"])))
             out.append(
@@ -505,9 +577,22 @@ class ConclusionRepository:
                     "right_version": row["right_version"],
                     "left_source_id": row["left_source_id"],
                     "right_source_id": row["right_source_id"],
+                    "left_status": row["left_status"],
+                    "right_status": row["right_status"],
+                    "left_premises": left_payload.get("premises", []),
+                    "right_premises": right_payload.get("premises", []),
+                    "left_source": {
+                        "id": row["left_source_id"],
+                        "text": row["left_source_body"],
+                    },
+                    "right_source": {
+                        "id": row["right_source_id"],
+                        "text": row["right_source_body"],
+                    },
                     "left_claim": left_payload.get("claim"),
                     "right_claim": right_payload.get("claim"),
                     "explanation": relation_explanation(str(row["kind"])),
+                    "history": history_by_relation.get(str(row["id"]), []),
                 }
             )
         return out
@@ -542,6 +627,8 @@ class ConclusionRepository:
                 "FROM conclusion_relations r "
                 "JOIN conclusion_entries le ON le.id=r.left_id AND le.owner_user_id=r.owner_user_id "
                 "JOIN conclusion_entries re ON re.id=r.right_id AND re.owner_user_id=r.owner_user_id "
+                "JOIN conclusion_sources ls ON ls.id=le.source_id AND ls.owner_user_id=r.owner_user_id "
+                "JOIN conclusion_sources rs ON rs.id=re.source_id AND rs.owner_user_id=r.owner_user_id "
                 "WHERE r.id=:id AND r.owner_user_id=:o"
             ),
             {"id": relation_id, "o": owner},
@@ -573,12 +660,18 @@ class ConclusionRepository:
         if int(session.execute(text("SELECT changes()")).scalar_one()) != 1:
             raise ValueError("relation is no longer reviewable")
         if decision == "approved":
+            left_status = "merged" if row["kind"] == "duplicate" else "formal"
             session.execute(
                 text(
-                    "UPDATE conclusion_entries SET status='formal',approved_version=:version "
+                    "UPDATE conclusion_entries SET status=:status,approved_version=:version "
                     "WHERE id=:id AND owner_user_id=:o AND status='draft'"
                 ),
-                {"id": row["left_id"], "o": owner, "version": row["left_version"]},
+                {
+                    "id": row["left_id"],
+                    "o": owner,
+                    "version": row["left_version"],
+                    "status": left_status,
+                },
             )
             if int(session.execute(text("SELECT changes()")).scalar_one()) != 1:
                 raise ValueError("relation target is no longer a draft")
@@ -589,6 +682,19 @@ class ConclusionRepository:
                 ),
                 {"id": row["left_id"], "v": row["left_version"]},
             )
+            if row["kind"] == "duplicate":
+                # A merged duplicate keeps its approved version and points at the
+                # canonical knowledge object, while its relation remains the
+                # provenance record for the duplicate source.
+                session.execute(
+                    text(
+                        "UPDATE conclusion_entries SET knowledge_id=("
+                        "SELECT knowledge_id FROM conclusion_entries "
+                        "WHERE id=:right_id AND owner_user_id=:o) "
+                        "WHERE id=:left_id AND owner_user_id=:o"
+                    ),
+                    {"left_id": row["left_id"], "right_id": row["right_id"], "o": owner},
+                )
             if row["kind"] == "revision":
                 session.execute(
                     text(
