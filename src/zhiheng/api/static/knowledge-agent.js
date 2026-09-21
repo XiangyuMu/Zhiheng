@@ -99,10 +99,11 @@ async function fetchJson(url, options = {}) {
   }
   return response.json();
 }
-function mutate(url, payload) {
+function mutate(url, payload, ifMatch = "*") {
   return fetchJson(url, { method: "POST", headers: {
     "Content-Type": "application/json", "X-CSRF-Token": readCookie("zhiheng_csrf"),
     "Idempotency-Key": crypto.randomUUID(),
+    "If-Match": ifMatch,
   }, body: JSON.stringify(payload) });
 }
 function readCookie(name) {

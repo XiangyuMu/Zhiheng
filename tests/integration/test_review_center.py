@@ -51,3 +51,13 @@ def test_review_center_page_and_scripts_are_available(tmp_path: Path) -> None:
     assert page.status_code == 200
     assert "集中审核" in page.text
     assert "/v1/review/summary" in client.get("/review-center.js").text
+
+
+def test_review_and_context_scripts_send_write_preconditions(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+    _login(client)
+    review_script = client.get("/review-center.js").text
+    knowledge_script = client.get("/knowledge-agent.js").text
+    assert '"If-Match": etag' in review_script
+    assert '"If-Match": ifMatch' in knowledge_script
+    assert "/v1/personal-updates/context-prompts/" in knowledge_script

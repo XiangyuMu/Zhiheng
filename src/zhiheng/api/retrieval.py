@@ -492,7 +492,9 @@ def _contextual_prompts(
     result: AnswerEnvelope | StructuredLookupResult,
 ) -> list[dict[str, Any]]:
     service = PersonalUpdateService()
-    prompts = service.context_prompts(session, query=query, owner_user_id=user_id)
+    prompts = service.context_prompts(
+        session, query=query, owner_user_id=user_id, include_deferred=True
+    )
     if not prompts and _needs_personal_context(query, result):
         prompts.append(
             service.create_missing_prompt(
