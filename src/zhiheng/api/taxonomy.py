@@ -57,7 +57,12 @@ class DomainMigrationDecisionRequest(BaseModel):
 
 
 def install_taxonomy_routes(app: Any) -> None:
+    """Install taxonomy endpoints once; tests and embedders may call this explicitly."""
+    marker = "_zhiheng_taxonomy_routes_installed"
+    if getattr(app.state, marker, False):
+        return
     app.include_router(router)
+    setattr(app.state, marker, True)
 
 
 def _db_session(request: Request) -> Generator[Session, None, None]:

@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from zhiheng import __version__
+from zhiheng.api.classifications import install_classification_routes
 from zhiheng.api.conclusions import install_conclusion_routes
 from zhiheng.api.decisions import install_decision_routes
 from zhiheng.api.evolution import install_evolution_routes
@@ -82,6 +83,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = app_settings
     install_knowledge_routes(app, app_settings)
     install_conclusion_routes(app)
+    install_classification_routes(app)
     install_personal_update_routes(app)
     install_taxonomy_routes(app)
     install_memory_routes(app, app_settings)
@@ -104,7 +106,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "/knowledge-agent", "/memory-center", "/evolution-center",
         }:
             target = quote(str(request.url), safe="")
-            return RedirectResponse(url=f"/login?next={target}", status_code=status.HTTP_303_SEE_OTHER)
+            return RedirectResponse(
+                url=f"/login?next={target}", status_code=status.HTTP_303_SEE_OTHER
+            )
         return Response(content=str(exc.detail), status_code=exc.status_code)
 
     @app.get("/healthz", tags=["system"])

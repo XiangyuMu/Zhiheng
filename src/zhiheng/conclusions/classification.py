@@ -53,13 +53,27 @@ def suggest_classification(*, title: str, claim: str, domain_id: str) -> dict[st
 
 
 def normalize_classification(
-    value: dict[str, Any] | None, *, fallback_domain_id: str, title: str, claim: str
+    value: dict[str, Any] | None,
+    *,
+    fallback_domain_id: str,
+    title: str,
+    claim: str,
+    allowed_domain_ids: set[str] | None = None,
+    inactive_domain_ids: set[str] | None = None,
+    allowed_record_types: set[str] | None = None,
 ) -> dict[str, Any]:
     suggestion = suggest_classification(title=title, claim=claim, domain_id=fallback_domain_id)
+    user_value = value is not None
     if not value:
-        return suggestion
+        value = suggestion
     primary = str(value.get("primary_domain_id") or fallback_domain_id)
-    if not _is_known_domain(primary):
+    if not _is_known_domain(primary) or (
+        inactive_domain_ids is not None and primary in inactive_domain_ids
+    ) or (
+        allowed_domain_ids is not None
+        and primary not in allowed_domain_ids
+        and "." not in primary
+    ):
         raise ValueError("unsupported conclusion primary domain")
     related = sorted(
         {
@@ -68,15 +82,26 @@ def normalize_classification(
             if str(item) and str(item) != primary
         }
     )
-    if any(not _is_known_domain(item) for item in related):
+    if any(
+        not _is_known_domain(item)
+        or (inactive_domain_ids is not None and item in inactive_domain_ids)
+        or (
+            allowed_domain_ids is not None
+            and item not in allowed_domain_ids
+            and "." not in item
+        )
+        for item in related
+    ):
         raise ValueError("unsupported conclusion related domain")
     record_type = str(value.get("record_type") or suggestion["record_type"])
-    if record_type not in {"knowledge", "personal_archive_experience"}:
+    if record_type not in {"knowledge", "personal_archive_experience"} or (
+        allowed_record_types is not None and record_type not in allowed_record_types
+    ):
         raise ValueError("unsupported conclusion record type")
     return {
         "primary_domain_id": primary,
         "related_domain_ids": related,
         "record_type": record_type,
-        "source": "user" if value else suggestion["source"],
+        "source": "user" if user_value else suggestion["source"],
         "explanation": str(value.get("explanation") or suggestion["explanation"]),
     }

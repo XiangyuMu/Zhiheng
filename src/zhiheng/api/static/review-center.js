@@ -1,6 +1,6 @@
 (() => {
   const $ = (id) => document.getElementById(id);
-  const state = { items: [], selected: null };
+  const state = { items: [], selected: null, taxonomy: null };
   const CSRF_COOKIE = "zhiheng_csrf=";
   const csrf = () => document.cookie.split(";").map((x) => x.trim())
     .find((x) => x.startsWith(CSRF_COOKIE))?.slice(CSRF_COOKIE.length) || "";
@@ -160,7 +160,60 @@
         || "暂无关系建议"],
       ["原文来源", sourceText(item.source)],
     ].forEach(([key, value]) => definition.append(text("dt", key), text("dd", value)));
-    detail.append(definition, actionButtons(item, false));
+    detail.append(definition);
+    if (state.taxonomy) detail.append(classificationEditor(item));
+    detail.append(actionButtons(item, false));
+  }
+
+  function classificationEditor(item) {
+    const section = document.createElement("section");
+    section.className = "classification-review-editor";
+    section.append(text("h3", "审核分类"));
+    const classification = item.classification || {};
+    const primary = document.createElement("select");
+    primary.setAttribute("aria-label", "主领域");
+    state.taxonomy.domains.filter((domain) => domain.status === "active").forEach((domain) => {
+      const option = new Option(`${domain.name}（${domain.id}）`, domain.id);
+      option.selected = domain.id === (classification.primary_domain_id || item.domain_id);
+      primary.append(option);
+    });
+    const record = document.createElement("select");
+    record.setAttribute("aria-label", "记录类型");
+    state.taxonomy.record_types.filter((type) => type.status === "active").forEach((type) => {
+      const option = new Option(type.name, type.id);
+      option.selected = type.id === (classification.record_type || "knowledge");
+      record.append(option);
+    });
+    const related = document.createElement("select");
+    related.multiple = true;
+    related.setAttribute("aria-label", "跨域关联");
+    const selected = new Set(classification.related_domain_ids || []);
+    state.taxonomy.domains.filter((domain) => domain.status === "active").forEach((domain) => {
+      if (domain.id === primary.value) return;
+      const option = new Option(domain.name, domain.id);
+      option.selected = selected.has(domain.id);
+      related.append(option);
+    });
+    const save = addAction(section, "保存分类", async () => {
+      const relatedIds = [...related.selectedOptions].map((option) => option.value);
+      await mutation("/v1/conclusions/" + item.id, "PATCH", {
+        classification: {
+          primary_domain_id: primary.value,
+          related_domain_ids: relatedIds,
+          record_type: record.value,
+          explanation: "用户在审核中心确认",
+        },
+      }, item.etag);
+      $("message").textContent = "分类已保存。";
+      await load();
+    }, "secondary");
+    section.append(
+      text("label", "主领域"), primary,
+      text("label", "记录类型"), record,
+      text("label", "跨域关联（可多选）"), related,
+      save,
+    );
+    return section;
   }
 
   function renderRelationDetail(detail, item) {
@@ -187,26 +240,30 @@
     );
   }
 
+
+  function addAction(actions, label, fn, className = "") {
+    const button = text("button", label, className);
+    button.type = "button";
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        await fn();
+        $("message").textContent = "操作已保存。";
+        state.selected = null;
+        await load();
+      } catch (error) {
+        $("message").textContent = error.message;
+        button.disabled = false;
+      }
+    };
+    actions.append(button);
+    return button;
+  }
+
   function actionButtons(item, conflict, relation = false) {
     const actions = document.createElement("div");
     actions.className = "actions";
-    const add = (label, fn, className = "") => {
-      const button = text("button", label, className);
-      button.type = "button";
-      button.onclick = async () => {
-        button.disabled = true;
-        try {
-          await fn();
-          $("message").textContent = "操作已保存。";
-          state.selected = null;
-          await load();
-        } catch (error) {
-          $("message").textContent = error.message;
-          button.disabled = false;
-        }
-      };
-      actions.append(button);
-    };
+    const add = (label, fn, className = "") => addAction(actions, label, fn, className);
     if (conflict) {
       add("确认候选", () => mutation(
         `/v1/personal-updates/conflicts/${item.id}/decision`, "POST",
@@ -239,7 +296,11 @@
     await mutation(`/v1/conclusions/${item.id}`, "PATCH", { claim }, item.etag);
   }
   async function load() {
-    const data = await request("/v1/review/summary");
+    const [data, taxonomy] = await Promise.all([
+      request("/v1/review/summary"),
+      request("/v1/taxonomy"),
+    ]);
+    state.taxonomy = taxonomy;
     render(data);
   }
   $("refresh").onclick = () => load().catch((error) => { $("message").textContent = error.message; });

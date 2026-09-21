@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from sqlalchemy import text
+
 from tests.integration.test_memory_api import _client, _headers, _login
 
 
@@ -107,3 +109,58 @@ def test_pending_conclusion_can_be_updated_before_approval(tmp_path: Path) -> No
     assert updated.json()["version"] == 2
     assert updated.json()["claim"] == "补充后的判断"
     assert updated.json()["premises"] == [{"text": "新增前提"}]
+
+
+def test_conclusion_review_uses_active_dynamic_taxonomy(tmp_path: Path) -> None:
+    client, session_factory = _client(tmp_path)
+    csrf = _login(client)
+    with session_factory() as session:
+        session.execute(
+            text(
+                "INSERT INTO domain_catalog "
+                "(id,name,description,sort_order,schema_version,status) "
+                "VALUES ('custom.research','自定义研究','用户新增领域',999,2,'active')"
+            )
+        )
+        session.commit()
+    source = client.post(
+        "/v1/conclusions/sources",
+        json={"text": "自定义领域来源"},
+        headers=_headers(csrf, "dynamic-taxonomy-source"),
+    ).json()
+    draft = client.post(
+        "/v1/conclusions",
+        json={
+            "source_id": source["id"],
+            "title": "自定义领域结论",
+            "claim": "自定义领域结论可被审核",
+            "domain_id": "education_learning",
+            "classification": {
+                "primary_domain_id": "custom.research",
+                "related_domain_ids": [],
+                "record_type": "knowledge",
+            },
+            "premises": [],
+            "excerpt": "自定义领域来源",
+        },
+        headers=_headers(csrf, "dynamic-taxonomy-draft"),
+    )
+    assert draft.status_code == 200, draft.text
+    assert draft.json()["classification"]["primary_domain_id"] == "custom.research"
+    with session_factory() as session:
+        session.execute(
+            text("UPDATE domain_catalog SET status='inactive' WHERE id='custom.research'")
+        )
+        session.commit()
+    rejected = client.patch(
+        f"/v1/conclusions/{draft.json()['id']}",
+        json={
+            "classification": {
+                "primary_domain_id": "custom.research",
+                "related_domain_ids": [],
+                "record_type": "knowledge",
+            }
+        },
+        headers=_headers(csrf, "dynamic-taxonomy-inactive", draft.json()["etag"]),
+    )
+    assert rejected.status_code == 409
