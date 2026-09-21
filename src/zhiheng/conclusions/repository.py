@@ -522,12 +522,26 @@ class ConclusionRepository:
     ) -> dict[str, Any]:
         if decision not in {"approved", "rejected", "deferred"}:
             raise ValueError("invalid relation decision")
+        existing = session.execute(
+            text(
+                "SELECT request_hash,result_json FROM conclusion_operations "
+                "WHERE owner_user_id=:o AND operation_key=:k"
+            ),
+            {"o": owner, "k": key},
+        ).mappings().first()
+        if existing is not None:
+            request_hash = sha256_json({"relation_id": relation_id, "decision": decision})
+            if str(existing["request_hash"]) != request_hash:
+                raise ValueError("operation key already used with different payload")
+            return cast(dict[str, Any], json.loads(str(existing["result_json"])))
         row = session.execute(
             text(
-                "SELECT r.*, le.source_id AS left_source_id, re.source_id AS right_source_id "
+                "SELECT r.*, le.source_id AS left_source_id, re.source_id AS right_source_id, "
+                "le.current_version AS left_current_version, le.status AS left_status, "
+                "re.current_version AS right_current_version, re.status AS right_status "
                 "FROM conclusion_relations r "
-                "JOIN conclusion_entries le ON le.id=r.left_id "
-                "JOIN conclusion_entries re ON re.id=r.right_id "
+                "JOIN conclusion_entries le ON le.id=r.left_id AND le.owner_user_id=r.owner_user_id "
+                "JOIN conclusion_entries re ON re.id=r.right_id AND re.owner_user_id=r.owner_user_id "
                 "WHERE r.id=:id AND r.owner_user_id=:o"
             ),
             {"id": relation_id, "o": owner},
@@ -536,27 +550,38 @@ class ConclusionRepository:
             raise ValueError("relation not found")
         if row["status"] not in {"proposed", "deferred"}:
             raise ValueError("relation is no longer reviewable")
-        existing = session.execute(
-            text(
-                "SELECT result_json FROM conclusion_operations "
-                "WHERE owner_user_id=:o AND operation_key=:k"
-            ),
-            {"o": owner, "k": key},
-        ).scalar_one_or_none()
-        if existing is not None:
-            return cast(dict[str, Any], json.loads(str(existing)))
+        if decision == "approved" and (
+            row["left_status"] != "draft"
+            or row["right_status"] != "formal"
+            or int(row["left_current_version"]) != int(row["left_version"])
+            or int(row["right_current_version"]) != int(row["right_version"])
+        ):
+            raise ValueError("relation is stale; refresh and regenerate the proposal")
         session.execute(
-            text("UPDATE conclusion_relations SET status=:status WHERE id=:id AND owner_user_id=:o"),
+            text(
+                "UPDATE conclusion_relations SET status=:status "
+                "WHERE id=:id AND owner_user_id=:o AND status IN ('proposed','deferred') "
+                "AND (:status != 'approved' OR ("
+                "EXISTS (SELECT 1 FROM conclusion_entries e WHERE e.id=left_id "
+                "AND e.current_version=left_version AND e.status='draft') AND "
+                "EXISTS (SELECT 1 FROM conclusion_entries e WHERE e.id=right_id "
+                "AND e.current_version=right_version AND e.approved_version=right_version "
+                "AND e.status='formal')))"
+            ),
             {"status": decision, "id": relation_id, "o": owner},
         )
+        if int(session.execute(text("SELECT changes()")).scalar_one()) != 1:
+            raise ValueError("relation is no longer reviewable")
         if decision == "approved":
             session.execute(
                 text(
-                    "UPDATE conclusion_entries SET status='formal',approved_version=current_version "
+                    "UPDATE conclusion_entries SET status='formal',approved_version=:version "
                     "WHERE id=:id AND owner_user_id=:o AND status='draft'"
                 ),
-                {"id": row["left_id"], "o": owner},
+                {"id": row["left_id"], "o": owner, "version": row["left_version"]},
             )
+            if int(session.execute(text("SELECT changes()")).scalar_one()) != 1:
+                raise ValueError("relation target is no longer a draft")
             session.execute(
                 text(
                     "UPDATE conclusion_versions SET approved_at=CURRENT_TIMESTAMP "

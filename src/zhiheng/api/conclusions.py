@@ -225,7 +225,7 @@ def _decide_relation(
     try:
         return repo.decide_relation(session, user, relation_id, decision, key)
     except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/relations/{relation_id}/approve")
