@@ -15,7 +15,8 @@ fs.mkdirSync(output, { recursive: true });
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   const checks = [];
-  await page.goto(`${base}/login`);
+  try {
+    await page.goto(`${base}/login`);
   await page.evaluate(async () => {
     const response = await fetch("/auth/bootstrap", {
       method: "POST",
@@ -74,9 +75,11 @@ fs.mkdirSync(output, { recursive: true });
   assert.equal(result.after.length, 1);
   checks.push("unapproved conclusions stay out of cross-conversation context");
   await page.screenshot({ path: path.join(output, "qualification.png"), fullPage: true });
-  fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ checks }, null, 2));
-  console.log("PASS", checks[0]);
-  await browser.close();
+    fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ checks }, null, 2));
+    console.log("PASS", checks[0]);
+  } finally {
+    await browser.close();
+  }
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

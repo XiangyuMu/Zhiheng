@@ -16,6 +16,9 @@ mkdir -p "${OUTPUT_DIR}" "${OBJECT_STORE}"
 cleanup() {
   if [[ -n "${WORKER_PID}" ]]; then kill "${WORKER_PID}" 2>/dev/null || true; fi
   if [[ -n "${API_PID}" ]]; then kill "${API_PID}" 2>/dev/null || true; fi
+  if [[ -n "${WORKER_PID}" ]]; then wait "${WORKER_PID}" 2>/dev/null || true; fi
+  if [[ -n "${API_PID}" ]]; then wait "${API_PID}" 2>/dev/null || true; fi
+  rm -rf "${RUN_DIR}"
 }
 trap cleanup EXIT
 
@@ -48,7 +51,7 @@ node tests/e2e/check_review_relations.cjs "${BASE_URL}" "${OUTPUT_DIR}/relations
 node tests/e2e/check_qualification.cjs "${BASE_URL}" "${OUTPUT_DIR}/qualification"
 
 git_sha="$(git rev-parse HEAD)"
-python - "${OUTPUT_DIR}/report.json" "${git_sha}" "${PORT}" <<'PY'
+uv run python - "${OUTPUT_DIR}/report.json" "${git_sha}" "${PORT}" <<'PY'
 import json
 import subprocess
 import sys
