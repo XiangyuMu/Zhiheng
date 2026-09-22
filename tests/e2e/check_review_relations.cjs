@@ -16,7 +16,7 @@ fs.mkdirSync(output, { recursive: true });
 (async () => {
   const browser = await chromium.launch({
     headless: true,
-    channel: process.env.BROWSER_CHANNEL || "msedge",
+    channel: process.env.BROWSER_CHANNEL || "chromium",
   });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
   const page = await context.newPage();
@@ -78,13 +78,13 @@ fs.mkdirSync(output, { recursive: true });
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: "issue13-browser",
-          password: "issue13 browser acceptance passphrase",
+          username: "issue17-workspace",
+          password: "issue17 workspace passphrase",
         }),
       });
     });
-    await page.locator("#username").fill("issue13-browser");
-    await page.locator("#password").fill("issue13 browser acceptance passphrase");
+    await page.locator("#username").fill("issue17-workspace");
+    await page.locator("#password").fill("issue17 workspace passphrase");
     await page.locator("#form button").click();
     await page.waitForURL("**/knowledge-agent**");
 

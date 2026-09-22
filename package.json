@@ -1,0 +1,10 @@
+{
+  "name": "zhiheng-acceptance",
+  "private": true,
+  "scripts": {
+    "acceptance": "bash scripts/browser_acceptance.sh"
+  },
+  "devDependencies": {
+    "playwright": "1.55.0"
+  }
+}

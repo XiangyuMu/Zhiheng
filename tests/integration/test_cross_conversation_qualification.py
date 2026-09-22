@@ -85,7 +85,7 @@ def test_rejected_or_deferred_drafts_never_gain_cross_conversation_qualification
         headers={**_headers(csrf, "qualification-decision-source"), "If-Match": "*"},
     ).json()
     drafts = []
-    for index, decision in enumerate(("reject", "defer"), start=1):
+    for decision in ("reject", "defer"):
         response = client.post(
             "/v1/conclusions",
             json={
@@ -106,4 +106,7 @@ def test_rejected_or_deferred_drafts_never_gain_cross_conversation_qualification
         )
         assert decided.status_code == 200, decided.text
 
-    assert client.get("/v1/conclusions/context", params={"query": "跨会话不可用"}).json()["items"] == []
+    assert (
+        client.get("/v1/conclusions/context", params={"query": "跨会话不可用"}).json()["items"]
+        == []
+    )
