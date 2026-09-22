@@ -92,6 +92,8 @@ class MemoryContextService:
         *,
         query_hash: str,
         topic_prefix: str | None = None,
+        query: str | None = None,
+        intent: str | None = None,
     ) -> MemoryContextSnapshot:
         if not _is_sha256_hex(query_hash):
             raise ValueError("query_hash must be a sha256 hex digest")

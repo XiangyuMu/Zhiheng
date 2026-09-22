@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -67,6 +68,7 @@ class QueryAnswerService:
         release_preview: ReleasePreview | None = None,
         idempotency_key: str | None = None,
         memory_topic_prefix: str | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> AnswerEnvelope | StructuredLookupResult:
         query_hash = sha256_text(query)
         release = self._resolve_release(session, preview=release_preview)
@@ -114,6 +116,7 @@ class QueryAnswerService:
                     release_context=release.context,
                     behavior=release.behavior,
                     memory_context=memory_context,
+                    conversation_context=conversation_context,
                 )
         except Exception as exc:
             self._ingest_trajectory(
