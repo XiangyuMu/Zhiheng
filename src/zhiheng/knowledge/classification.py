@@ -1,26 +1,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import bindparam, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import json_text, new_id
-
-
-@dataclass(frozen=True)
-class ClassificationNode:
-    id: str
-    domain_id: str
-    parent_id: str | None
-    level: int
-    name: str
-    description: str
-    path: str
-    sort_order: int
-    status: str
 
 
 class ClassificationRepository:
@@ -132,7 +119,7 @@ class ClassificationRepository:
                     "sort_order": sort_order,
                 },
             )
-        except Exception as exc:
+        except IntegrityError as exc:
             if "UNIQUE" in str(exc).upper():
                 raise ValueError("classification name already exists under parent") from exc
             raise
@@ -424,4 +411,4 @@ class ClassificationRepository:
         return [dict(row) for row in rows]
 
 
-__all__ = ["ClassificationNode", "ClassificationRepository"]
+__all__ = ["ClassificationRepository"]

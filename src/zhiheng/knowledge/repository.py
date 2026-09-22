@@ -117,7 +117,6 @@ class KnowledgeRepository:
         *,
         user_authority: KnowledgeUserAuthority,
         stored_artifacts: StoredTextArtifacts,
-        owner_user_id: str | None = None,
     ) -> IngestedKnowledge:
         self._validate_user_authority(user_authority)
         if not item.text:
