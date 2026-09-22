@@ -154,6 +154,7 @@ class AnswerModelPort(Protocol):
         citations: Sequence[Citation],
         max_output_tokens: int | None = None,
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> GeneratedAnswer: ...
 
 

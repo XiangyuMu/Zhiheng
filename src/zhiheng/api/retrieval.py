@@ -382,7 +382,9 @@ def answer_question(
                 detail="cached answer lacks current authority proof",
             )
         response = AnswerResponse.model_validate(replay["response"])
-        current_proof = _answer_authority_digest(session, request.app, payload, response)
+        current_proof = _answer_authority_digest(
+            session, request.app, payload, response, user_id=user_id, replay=True
+        )
         if current_proof is None or current_proof != replay.get("authority_digest"):
             raise HTTPException(status_code=409, detail="cached answer source authority changed")
         replay = response.model_dump(mode="json")
@@ -444,7 +446,9 @@ def answer_question(
         response.insufficiencies.append(
             "回答中依赖冲突个人信息的部分暂缓，请先确认或补充；不依赖冲突的信息仍可继续使用。"
         )
-    authority_digest = _answer_authority_digest(session, request.app, payload, response)
+    authority_digest = _answer_authority_digest(
+        session, request.app, payload, response, user_id=user_id
+    )
     if authority_digest is None:
         raise HTTPException(status_code=409, detail="answer source authority changed")
     memory_source_ids: list[str] = []
@@ -691,7 +695,21 @@ def _answer_authority_digest(
     app: Any,
     payload: AnswerRequest,
     response: AnswerResponse,
+    *,
+    user_id: str,
+    replay: bool = False,
 ) -> str | None:
+    conversation_context: list[dict[str, str]] = []
+    if payload.conversation_id is not None:
+        conversation_context = ConversationRepository().context(
+            session,
+            conversation_id=payload.conversation_id,
+            owner_user_id=user_id,
+        )
+        if replay and conversation_context:
+            latest = conversation_context[-1]
+            if latest.get("query") == payload.query and latest.get("answer") == response.answer:
+                conversation_context = conversation_context[:-1]
     if response.route.route == "structured":
         route = app.state.query_router.route(
             payload.query,
@@ -710,8 +728,8 @@ def _answer_authority_digest(
         current_rows = [_json_safe_row(row) for row in rows]
         if current_rows != response.rows:
             return None
-        return sha256_json({"rows": current_rows})
-    return CitationReplayValidator().digest(
+        return sha256_json({"rows": current_rows, "conversation_context": conversation_context})
+    citation_digest = CitationReplayValidator().digest(
         session,
         [
             Citation(
@@ -731,6 +749,11 @@ def _answer_authority_digest(
             )
             for item in response.citations
         ],
+    )
+    if citation_digest is None:
+        return None
+    return sha256_json(
+        {"citations": citation_digest, "conversation_context": conversation_context}
     )
 
 

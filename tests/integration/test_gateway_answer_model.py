@@ -116,6 +116,7 @@ def test_gateway_answer_model_uses_privacy_pipeline_and_strict_scope(
         citations=(citation,),
         max_output_tokens=20,
         memory_context=memory_context,
+        conversation_context=({"query": "前一问", "answer": "当前会话前文"},),
     )
 
     assert result.answer == "基于证据回答，并按用户目标调整表达。"
@@ -131,6 +132,7 @@ def test_gateway_answer_model_uses_privacy_pipeline_and_strict_scope(
     assert payload["USER_CONFIRMED_CONTEXT"]["entries"][0]["value"] == {
         "goal": "prefer concise answers"
     }
+    assert payload["CONVERSATION_CONTEXT"] == [{"query": "前一问", "answer": "当前会话前文"}]
     provenance = payload["USER_CONFIRMED_CONTEXT"]["entries"][0]["provenance"]
     assert provenance["memory_ref_id"] == _wire_memory_ref(expected_ref)
     assert "formal_memory_id" not in provenance

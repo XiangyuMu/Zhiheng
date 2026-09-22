@@ -402,6 +402,7 @@ class BoundedAgenticRagService:
                 citations=citations,
                 max_output_tokens=self._budget.max_output_tokens,
                 memory_context=memory_context,
+                conversation_context=conversation_context,
             )
         except PermissionError:
             return self._final_evidence_only(

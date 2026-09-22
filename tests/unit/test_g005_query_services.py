@@ -116,6 +116,7 @@ class _Model:
         self.manifests: list[AuthorizedContextManifest] = []
         self.citations_seen: list[tuple[Citation, ...]] = []
         self.max_output_tokens_seen: list[int | None] = []
+        self.conversation_context_seen: list[Sequence[dict[str, str]] | None] = []
 
     def generate_answer(
         self,
@@ -125,12 +126,14 @@ class _Model:
         citations: Sequence[Citation],
         max_output_tokens: int | None = None,
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[dict[str, str]] | None = None,
     ) -> GeneratedAnswer:
         del memory_context
         self.calls += 1
         self.manifests.append(manifest)
         self.citations_seen.append(tuple(citations))
         self.max_output_tokens_seen.append(max_output_tokens)
+        self.conversation_context_seen.append(conversation_context)
         if self.fail is not None:
             raise self.fail
         citation_id = self.citation_id or citations[0].citation_id
@@ -269,6 +272,27 @@ def test_model_answer_claims_must_reference_sealed_citation_ids() -> None:
     assert answer.stop_reason is StopReason.CITATION_VALIDATION_FAILED
     assert answer.claims == ()
     assert answer.citations
+
+
+def test_current_conversation_context_reaches_answer_model() -> None:
+    model = _Model()
+    service = BoundedAgenticRagService(
+        structured_lookup=_Lookup(),
+        hybrid_retrieval=_Hybrid([_manifest()]),
+        evidence_verifier=_Verifier(),
+        model_gateway=model,
+    )
+
+    context = [{"query": "前一问", "answer": "当前会话的前文"}]
+    answer = service.answer(
+        QuerySessionStub(),
+        "当前问题",
+        route=QueryRoute.HYBRID,
+        conversation_context=context,
+    )  # type: ignore[arg-type]
+
+    assert answer.stop_reason is StopReason.COMPLETED
+    assert model.conversation_context_seen == [context]
 
 
 def test_privacy_denied_returns_authorized_evidence_only() -> None:
