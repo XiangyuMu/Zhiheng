@@ -26,6 +26,7 @@ from zhiheng.jobs import (
     KnowledgeIndexJobExecutor,
     MemoryExtractionJobExecutor,
     OutboxRepository,
+    PdfCapabilityUnavailable,
     PdfParseJobExecutor,
     configured_pdf_parse_executor,
     process_classification_jobs_once,
@@ -334,7 +335,14 @@ def _pdf_executor(
     factory: PdfExecutorFactory | None,
 ) -> PdfParseJobExecutor | None:
     if factory is None:
-        return configured_pdf_parse_executor(settings)
+        try:
+            return configured_pdf_parse_executor(settings)
+        except PdfCapabilityUnavailable as exc:
+            logger.warning(
+                "optional worker capability unavailable",
+                extra={"capability": "pdf_parser", "error_code": exc.code},
+            )
+            return None
     return factory(settings)
 
 

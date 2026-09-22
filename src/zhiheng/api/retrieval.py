@@ -806,20 +806,15 @@ def _answer_model_for_settings(app: Any) -> Any:
     configured_provider = settings.answer_provider_id
     configured_model = settings.answer_model_id
     database_default = False
-    try:
-        with app.state.session_factory() as session:
-            selected = model_defaults(session).get("text")
-        if selected:
-            # Once a user saves a route in SQLite it is authoritative.  The
-            # environment values serve only as the initial bootstrap fallback
-            # and must not silently overwrite a page-configured default.
-            configured_provider = str(selected["provider_id"])
-            configured_model = str(selected["model_id"])
-            database_default = True
-    except Exception:
-        # A fresh/legacy database may not have the defaults table yet; retain
-        # the deployment environment fallback in that case.
-        pass
+    with app.state.session_factory() as session:
+        selected = model_defaults(session).get("text")
+    if selected:
+        # Once a user saves a route in SQLite it is authoritative.  The
+        # environment values serve only as the initial bootstrap fallback
+        # and must not silently overwrite a page-configured default.
+        configured_provider = str(selected["provider_id"])
+        configured_model = str(selected["model_id"])
+        database_default = True
     if configured_provider is None and configured_model is None:
         return EvidenceBoundAnswerModel()
     if configured_provider is None or configured_model is None:
@@ -858,13 +853,10 @@ class _DynamicGatewayAnswerModel:
         from zhiheng.query.gateway_model import GatewayAnswerModel
 
         provider_id, model_id = self._fallback
-        try:
-            with self._session_factory() as session:
-                selected = model_defaults(session).get("text")
-            if selected:
-                provider_id, model_id = str(selected["provider_id"]), str(selected["model_id"])
-        except Exception:
-            pass
+        with self._session_factory() as session:
+            selected = model_defaults(session).get("text")
+        if selected:
+            provider_id, model_id = str(selected["provider_id"]), str(selected["model_id"])
         return GatewayAnswerModel(
             gateway=self._gateway,
             provider_id=provider_id,
