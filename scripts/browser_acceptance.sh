@@ -33,22 +33,41 @@ export ZHIHENG_ENVIRONMENT="test"
 export ZHIHENG_API_HOST="127.0.0.1"
 export ZHIHENG_API_PORT="${PORT}"
 uv run python scripts/upgrade_database.py "${DB_PATH}" >"${OUTPUT_DIR}/migration.log" 2>&1
+uv run python scripts/upgrade_database.py "${DB_PATH}" >>"${OUTPUT_DIR}/migration.log" 2>&1
 
 uv run uvicorn zhiheng.api.main:app --host 127.0.0.1 --port "${PORT}" >"${API_LOG}" 2>&1 &
 API_PID=$!
 for _ in $(seq 1 60); do
+  if ! kill -0 "${API_PID}" 2>/dev/null; then
+    echo "API exited before readiness" >&2
+    cat "${API_LOG}" >&2
+    exit 1
+  fi
   if curl --fail --silent "http://127.0.0.1:${PORT}/healthz" >/dev/null; then break; fi
   sleep 1
 done
+kill -0 "${API_PID}" 2>/dev/null
 curl --fail --silent "http://127.0.0.1:${PORT}/healthz" >/dev/null
 
 uv run zhiheng-worker --role worker --idle-seconds 1 >"${WORKER_LOG}" 2>&1 &
 WORKER_PID=$!
+sleep 1
+if ! kill -0 "${WORKER_PID}" 2>/dev/null; then
+  echo "Worker exited before acceptance" >&2
+  cat "${WORKER_LOG}" >&2
+  exit 1
+fi
 
 BASE_URL="http://127.0.0.1:${PORT}"
 node tests/e2e/check_workspace.cjs "${BASE_URL}" "${OUTPUT_DIR}/workspace"
+node tests/e2e/check_workspace_full.cjs "${BASE_URL}" "${OUTPUT_DIR}/workspace-full"
 node tests/e2e/check_review_relations.cjs "${BASE_URL}" "${OUTPUT_DIR}/relations"
 node tests/e2e/check_qualification.cjs "${BASE_URL}" "${OUTPUT_DIR}/qualification"
+
+if ! kill -0 "${API_PID}" 2>/dev/null || ! kill -0 "${WORKER_PID}" 2>/dev/null; then
+  echo "API or Worker exited during browser acceptance" >&2
+  exit 1
+fi
 
 git_sha="$(git rev-parse HEAD)"
 uv run python - "${OUTPUT_DIR}/report.json" "${git_sha}" "${PORT}" <<'PY'
@@ -63,15 +82,17 @@ def version(command: list[str]) -> str:
 
 report = {
     "status": "passed",
+    "working_tree_clean": not bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()),
     "commit": git_sha,
     "base_url": f"http://127.0.0.1:{port}",
     "commands": [
         "npm ci --ignore-scripts --no-audit --no-fund",
         "npx playwright install chromium",
-        "uv run python scripts/upgrade_database.py <isolated-db>",
+        "uv run python scripts/upgrade_database.py $ZHIHENG_DATABASE_URL (isolated database)",
         "uv run uvicorn zhiheng.api.main:app",
         "uv run zhiheng-worker --role worker --idle-seconds 1",
         "node tests/e2e/check_workspace.cjs",
+        "node tests/e2e/check_workspace_full.cjs",
         "node tests/e2e/check_review_relations.cjs",
         "node tests/e2e/check_qualification.cjs",
     ],
@@ -80,8 +101,13 @@ report = {
         "npm": version(["npm", "--version"]),
         "uv": version(["uv", "--version"]),
         "playwright": version(["node", "-e", "console.log(require('playwright/package.json').version)"]),
+        "chromium": version(["node", "-e", "const { chromium } = require('playwright'); console.log(chromium.executablePath())"]),
     },
-    "artifacts": ["migration.log", "api.log", "worker.log", "workspace", "relations", "qualification"],
+    "artifacts": ["migration.log", "api.log", "worker.log", "workspace", "workspace-full", "relations", "qualification"],
+    "issue_mapping": {
+        "#1": ["authenticated research workspace loads", "missing evidence remains explicit"],
+        "#2-#10": ["workspace-full", "relation review", "cross-session qualification"],
+    },
 }
 Path(output).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
 PY

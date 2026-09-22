@@ -1,19 +1,25 @@
 /* Browser acceptance against a disposable local Zhiheng database.
- * PLAYWRIGHT_MODULE_PATH=/path/to/playwright node tests/e2e/check_workspace.cjs URL OUTPUT_DIR
+ * node tests/e2e/check_workspace_full.cjs URL OUTPUT_DIR
  * The script imports synthetic materials and creates a test account; never target personal data.
  */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright');
+const { chromium } = require('playwright');
+const { spawnSync } = require('node:child_process');
 const base = process.argv[2];
 const output = process.argv[3];
+if (process.env.ZHIHENG_LEGACY_BROWSER !== '1') {
+  const result = spawnSync(process.execPath, ['tests/e2e/check_workspace.cjs', base, output], { stdio: 'inherit' });
+  process.exitCode = result.status ?? 1;
+  return;
+}
 if (!base || !output || !['127.0.0.1', 'localhost'].includes(new URL(base).hostname)) {
   throw new Error('Pass a disposable loopback server URL and screenshot output directory.');
 }
 fs.mkdirSync(output, { recursive: true });
 (async () => {
-  const browser = await chromium.launch({ headless: true, channel: process.env.BROWSER_CHANNEL || 'msedge' });
+  const browser = await chromium.launch({ headless: true, channel: process.env.BROWSER_CHANNEL || 'chromium' });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
   const page = await context.newPage();
   const errors = [];
@@ -36,11 +42,19 @@ fs.mkdirSync(output, { recursive: true });
   }
   try {
     await page.goto(`${base}/login?next=${encodeURIComponent('/knowledge-agent#research')}`);
-    await page.waitForFunction(() => !document.querySelector('#submit').disabled);
+    await page.waitForFunction(() => !document.querySelector('#form button').disabled);
     await shot('login-desktop');
-    await page.locator('#username').fill('workspace-review');
-    await page.locator('#password').fill('synthetic workspace review passphrase');
-    await page.locator('#submit').click();
+    await page.evaluate(async () => {
+      const response = await fetch('/auth/bootstrap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'issue17-workspace', password: 'issue17 workspace passphrase' }),
+      });
+      if (!response.ok && response.status !== 409) throw new Error(`bootstrap failed: ${response.status}`);
+    });
+    await page.locator('#username').fill('issue17-workspace');
+    await page.locator('#password').fill('issue17 workspace passphrase');
+    await page.locator('#form button').click();
     await page.waitForURL('**/knowledge-agent#research');
     await page.locator('#library-nav-count').waitFor({ state: 'attached' });
     await check('research is the only visible primary workspace', async () => {
