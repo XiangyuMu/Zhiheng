@@ -111,6 +111,8 @@ class QueryAnswerService:
                     session,
                     query_hash=query_hash,
                     topic_prefix=memory_topic_prefix,
+                    query=query,
+                    intent=intent,
                 )
                 session.commit()
                 result = self._rag.answer(
