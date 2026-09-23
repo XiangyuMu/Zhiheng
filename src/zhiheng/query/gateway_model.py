@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, replace
 from typing import Any
 
@@ -31,6 +31,7 @@ class GatewayAnswerModel:
         citations: Sequence[Citation],
         max_output_tokens: int | None = None,
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> GeneratedAnswer:
         _validate_citations(manifest, citations)
         # Manifest/citation IDs are fresh per retrieval. Stable, content-bound wire
@@ -48,6 +49,7 @@ class GatewayAnswerModel:
             citations=wire_citations,
             max_output_tokens=max_output_tokens,
             memory_context=memory_context,
+            conversation_context=conversation_context,
         )
         response = self._gateway.complete(
             ModelRequest(
@@ -107,6 +109,7 @@ def _canonical_prompt(
     citations: Sequence[Citation],
     max_output_tokens: int | None,
     memory_context: MemoryContextSnapshot | None,
+    conversation_context: Sequence[Mapping[str, str]] | None,
 ) -> str:
     citation_ids_by_chunk = _citation_ids_by_chunk(citations)
     payload = {
@@ -142,6 +145,10 @@ def _canonical_prompt(
             "personalization_refs": ["memory_ref_id"],
         },
         "USER_CONFIRMED_CONTEXT": _memory_payload(memory_context),
+        "CONVERSATION_CONTEXT": [
+            {"query": str(turn.get("query", "")), "answer": str(turn.get("answer", ""))}
+            for turn in (conversation_context or ())
+        ],
         "max_output_tokens": max_output_tokens,
         "manifest": {
             "query_hash": manifest.query_hash,

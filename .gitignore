@@ -12,6 +12,7 @@ node_modules/
 dist/
 build/
 coverage/
+artifacts/browser-acceptance/
 *.log
 data/private/
 data/indexes/

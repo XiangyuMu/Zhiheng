@@ -153,6 +153,7 @@ class KnowledgeRepository:
             erasable=item.erasable,
             index_fts=True,
             stored_artifacts=stored_artifacts,
+            owner_user_id=user_authority.user_id,
         )
 
     def create_external_candidate(
@@ -502,6 +503,7 @@ class KnowledgeRepository:
         erasable: bool,
         index_fts: bool,
         stored_artifacts: StoredTextArtifacts,
+        owner_user_id: str | None = None,
     ) -> IngestedKnowledge:
 
         evidence_id = new_id()
@@ -583,18 +585,20 @@ class KnowledgeRepository:
             text(
                 """
                 INSERT INTO knowledge_objects (
-                  id, primary_domain_id, title, object_kind, record_type, lifecycle_status,
-                  visibility_scope, current_version_id, confirmation_generation,
+                  id, owner_user_id, primary_domain_id, title, object_kind, record_type,
+                  lifecycle_status, visibility_scope, current_version_id, confirmation_generation,
                   sensitivity_level
                 )
                 VALUES (
-                  :id, :primary_domain_id, :title, :object_kind, :record_type, :lifecycle_status,
-                  :visibility_scope, NULL, :confirmation_generation, :sensitivity_level
+                  :id, :owner_user_id, :primary_domain_id, :title, :object_kind, :record_type,
+                  :lifecycle_status, :visibility_scope, NULL, :confirmation_generation,
+                  :sensitivity_level
                 )
                 """
             ),
             {
                 "id": knowledge_object_id,
+                "owner_user_id": owner_user_id,
                 "primary_domain_id": primary_domain_id,
                 "title": title,
                 "object_kind": object_kind,

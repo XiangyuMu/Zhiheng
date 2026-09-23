@@ -15,6 +15,19 @@ from zhiheng.core.ids import json_text, new_id, sha256_json
 
 
 class ConclusionRepository:
+    @staticmethod
+    def _classification_catalog(session: Session) -> tuple[set[str], set[str], set[str]]:
+        domain_rows = list(session.execute(text("SELECT id,status FROM domain_catalog")))
+        domains = {str(row[0]) for row in domain_rows if str(row[1]) == "active"}
+        inactive_domains = {str(row[0]) for row in domain_rows if str(row[1]) != "active"}
+        record_types = {
+            str(row[0])
+            for row in session.execute(
+                text("SELECT id FROM record_types WHERE status='active'")
+            )
+        }
+        return domains, record_types, inactive_domains
+
     def _write(
         self,
         session: Session,
@@ -102,11 +115,15 @@ class ConclusionRepository:
         ).scalar_one_or_none()
         if existing:
             return cast(dict[str, Any], json.loads(str(existing)))
+        allowed_domains, allowed_record_types, inactive_domains = self._classification_catalog(session)
         classification = normalize_classification(
             payload.get("classification"),
             fallback_domain_id=str(payload.get("domain_id", "education_learning")),
             title=str(payload.get("title", "")),
             claim=str(payload.get("claim", "")),
+            allowed_domain_ids=allowed_domains,
+            allowed_record_types=allowed_record_types,
+            inactive_domain_ids=inactive_domains,
         )
         payload = {
             **payload,
@@ -236,11 +253,15 @@ class ConclusionRepository:
                     **cast(dict[str, Any], classification_value or {}),
                     "primary_domain_id": payload["domain_id"],
                 }
+            allowed_domains, allowed_record_types, inactive_domains = self._classification_catalog(session)
             classification = normalize_classification(
                 cast(dict[str, Any] | None, classification_value),
                 fallback_domain_id=str(payload.get("domain_id", "education_learning")),
                 title=str(payload.get("title", "")),
                 claim=str(payload.get("claim", "")),
+                allowed_domain_ids=allowed_domains,
+                allowed_record_types=allowed_record_types,
+                inactive_domain_ids=inactive_domains,
             )
             payload["classification"] = classification
             payload["domain_id"] = classification["primary_domain_id"]

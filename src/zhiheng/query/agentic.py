@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from inspect import Parameter, signature
-from typing import Protocol, TypedDict
+from typing import Any, Protocol, TypedDict, cast
 
 from sqlalchemy.orm import Session
 
@@ -136,6 +136,7 @@ class BoundedAgenticRagService:
         release_context: ReleaseContext | None = None,
         behavior: ReleaseBehaviorConfig | None = None,
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> AnswerEnvelope:
         if route is QueryRoute.STRUCTURED:
             raise ValueError("structured queries must use direct lookup, not agentic RAG")
@@ -166,6 +167,7 @@ class BoundedAgenticRagService:
                 release_context=release_context,
                 retrieval_run_ids=(result.run_id,),
                 memory_context=memory_context,
+                conversation_context=conversation_context,
             )
 
         started = time.monotonic()
@@ -297,6 +299,7 @@ class BoundedAgenticRagService:
             release_context=release_context,
             retrieval_run_ids=tuple(retrieval_run_ids),
             memory_context=memory_context,
+            conversation_context=conversation_context,
         )
 
     def answer_from_manifest(
@@ -311,6 +314,7 @@ class BoundedAgenticRagService:
         release_context: ReleaseContext | None = None,
         retrieval_run_ids: tuple[str, ...] = (),
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> AnswerEnvelope:
         return self._answer_from_manifest(
             session,
@@ -322,6 +326,7 @@ class BoundedAgenticRagService:
             release_context=release_context,
             retrieval_run_ids=retrieval_run_ids,
             memory_context=memory_context,
+            conversation_context=conversation_context,
         )
 
     def _answer_from_manifest(
@@ -336,6 +341,7 @@ class BoundedAgenticRagService:
         release_context: ReleaseContext | None = None,
         retrieval_run_ids: tuple[str, ...] = (),
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> AnswerEnvelope:
         started = time.monotonic() - usage.wall_clock_ms / 1000
         if not self._evidence_verifier.validate_manifest(session, manifest):
@@ -396,6 +402,7 @@ class BoundedAgenticRagService:
                 citations=citations,
                 max_output_tokens=self._budget.max_output_tokens,
                 memory_context=memory_context,
+                conversation_context=conversation_context,
             )
         except PermissionError:
             return self._final_evidence_only(
@@ -534,6 +541,7 @@ def _citations_for_manifest(manifest: AuthorizedContextManifest) -> tuple[Citati
 class _GenerationOptions(TypedDict, total=False):
     max_output_tokens: int
     memory_context: MemoryContextSnapshot | None
+    conversation_context: Sequence[Mapping[str, str]] | None
 
 
 def _generate_answer(
@@ -544,29 +552,33 @@ def _generate_answer(
     citations: tuple[Citation, ...],
     max_output_tokens: int,
     memory_context: MemoryContextSnapshot | None = None,
+    conversation_context: Sequence[Mapping[str, str]] | None = None,
 ) -> GeneratedAnswer:
     parameters = signature(model_gateway.generate_answer).parameters
     accepts_kwargs = any(
         parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters.values()
     )
     supports_memory_context = "memory_context" in parameters or accepts_kwargs
+    supports_conversation_context = "conversation_context" in parameters or accepts_kwargs
     if memory_context is not None and memory_context.entries and not supports_memory_context:
         raise ValueError("answer model does not support confirmed memory context")
     options: _GenerationOptions = {}
     if supports_memory_context:
         options["memory_context"] = memory_context
+    if supports_conversation_context:
+        options["conversation_context"] = conversation_context
     supports_output_limit = (
         "max_output_tokens" in parameters
         or any(parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters.values())
     )
     if supports_output_limit:
         options["max_output_tokens"] = max_output_tokens
-    return model_gateway.generate_answer(
+    return cast(GeneratedAnswer, cast(Any, model_gateway).generate_answer(
         query=query,
         manifest=manifest,
         citations=citations,
         **options,
-    )
+    ))
 
 
 def _search_hybrid(
