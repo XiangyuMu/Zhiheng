@@ -1,0 +1,63 @@
+{
+  "schema_version": "pdf-parser.manifest.v1",
+  "task_id": "fixture-manifest-contract-example",
+  "source": {
+    "evidence_object_id": "fixture-source-contract-example",
+    "uri": "zhiheng-artifact:source/manifest-contract-example.pdf",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "parser": {
+    "backend": "deepdoc",
+    "version": "fixture-parser-v1",
+    "attempt_id": "fixture-attempt-contract-example"
+  },
+  "pages": [
+    {
+      "page_no": 1,
+      "width": 612,
+      "height": 792,
+      "rotation": 0,
+      "crop_box": [
+        0,
+        0,
+        612,
+        792
+      ],
+      "user_unit": 1,
+      "render": null,
+      "status": "parsed"
+    }
+  ],
+  "blocks": [
+    {
+      "key": "paragraph-1",
+      "page_no": 1,
+      "region_type": "paragraph",
+      "reading_order": 0,
+      "bbox": [
+        36,
+        36,
+        360,
+        72
+      ],
+      "raw_bbox": [
+        36,
+        720,
+        360,
+        756
+      ],
+      "raw_space": "pdf_bottom_left",
+      "transform_version": "pdf-crop-rotate-v1",
+      "text": "A stable PDF manifest contract example.",
+      "quote_hash": "741416bf682f2ce2873681305cd5397d7632525c531621b25805659afbd65b1d",
+      "confidence": 0.99,
+      "status": "formal",
+      "parent_key": null,
+      "text_source": "text_layer"
+    }
+  ],
+  "tables": [],
+  "images": [],
+  "diagnostics": [],
+  "artifacts": []
+}
