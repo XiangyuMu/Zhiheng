@@ -116,6 +116,8 @@ fs.mkdirSync(output, { recursive: true });
       await page.screenshot({ path: path.join(output, "relation-detail.png"), fullPage: true });
     });
 
+    const deferredRelation = (await apiJson(`/v1/conclusions/${deferred.id}/relations`)).items[0];
+    await page.locator(`button.queue-item[data-entry-id="${deferredRelation.id}"]`).click();
     await page.getByRole("button", { name: "稍后处理", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     await check("deferred relation remains reviewable", async () => {
@@ -124,7 +126,8 @@ fs.mkdirSync(output, { recursive: true });
       await page.locator(".queue-item").filter({ hasText: "关系建议" }).nth(2).waitFor();
     });
 
-    await page.locator(".queue-item").filter({ hasText: "关系建议" }).filter({ hasText: "每天复习不能提高记忆" }).last().click();
+    const rejectedRelation = (await apiJson(`/v1/conclusions/${rejected.id}/relations`)).items[0];
+    await page.locator(`button.queue-item[data-entry-id="${rejectedRelation.id}"]`).click();
     await page.getByRole("button", { name: "拒绝关系", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     await check("reject relation records the real API decision", async () => {
@@ -132,7 +135,8 @@ fs.mkdirSync(output, { recursive: true });
       assert(Number(await page.locator("#relation-count").innerText()) >= 2);
     });
 
-    await page.locator(".queue-item").filter({ hasText: "关系建议" }).filter({ hasText: "每天复习需要更多样本" }).last().click();
+    const approvedRelation = (await apiJson(`/v1/conclusions/${approved.id}/relations`)).items[0];
+    await page.locator(`button.queue-item[data-entry-id="${approvedRelation.id}"]`).click();
     await page.getByRole("button", { name: "批准关系", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     await check("approved relation enters formal searchable knowledge", async () => {
