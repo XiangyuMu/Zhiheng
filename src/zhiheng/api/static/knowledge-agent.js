@@ -787,13 +787,23 @@ function renderMaterials() {
     && (!favoriteOnly || Boolean(item.is_favorite))
     && (!pinnedOnly || Boolean(item.is_pinned))
     && `${item.title} ${item.summary || ""}`.toLocaleLowerCase().includes(search));
-  $("library-count").textContent = `${items.length} 份资料${search || state.domain ? ` / 已加载 ${state.materials.length} 份` : ""}`;
+  const hasFilters = Boolean(search || state.domain || sourceFilter || statusFilter || favoriteOnly || pinnedOnly);
+  $("library-count").textContent = `${items.length} 份资料${hasFilters ? ` / 已加载 ${state.materials.length} 份` : ""}`;
   $("knowledge-items").replaceChildren();
   updateBulkToolbar(items);
   if (!items.length) {
     const li = node("li", undefined, "empty-state");
-    li.append(node("strong", state.materials.length ? "没有匹配的资料" : "你的资料库，从这里开始"), node("p", state.materials.length ? "试试其他标题关键词，或清除领域筛选。" : "添加第一份材料，之后就能从自己的知识中查找答案。"));
-    li.append(state.materials.length ? action("清除筛选", () => { state.domain = ""; $("library-search").value = ""; renderDomains(); renderMaterials(); }) : action("添加资料", () => openDialog("import-dialog")));
+    li.append(node("strong", hasFilters ? "没有匹配的资料" : "你的资料库，从这里开始"), node("p", hasFilters ? "试试其他标题关键词，或清除筛选。" : "添加第一份材料，之后就能从自己的知识中查找答案。"));
+    li.append(hasFilters ? action("清除筛选", () => {
+      state.domain = "";
+      $("library-search").value = "";
+      $("library-source-filter").value = "";
+      $("library-status-filter").value = "";
+      $("library-favorite-filter").checked = false;
+      $("library-pinned-filter").checked = false;
+      renderDomains();
+      state.usingSearchApi ? loadKnowledge() : renderMaterials();
+    }) : action("添加资料", () => openDialog("import-dialog")));
     $("knowledge-items").append(li); return;
   }
   items.forEach((item) => {
