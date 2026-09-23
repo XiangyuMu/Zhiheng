@@ -40,16 +40,24 @@ def defaults(session: Session) -> dict[str, object]:
         if not _is_missing_table(exc, "model_defaults"):
             raise
     else:
-        return {
-            str(row["modality"]): {
-                "provider_id": str(row["provider_id"]),
-                "model_id": str(row["model_id"]),
-            }
-            for row in rows
-        }
+        legacy_result: dict[str, object] = {}
+        for row in rows:
+            modality = row["modality"]
+            provider_id = row["provider_id"]
+            model_id = row["model_id"]
+            if (
+                modality not in {"text", "multimodal"}
+                or not isinstance(provider_id, str)
+                or not provider_id
+                or not isinstance(model_id, str)
+                or not model_id
+            ):
+                raise RuntimeError("model defaults contain an invalid route")
+            legacy_result[str(modality)] = {"provider_id": provider_id, "model_id": model_id}
+        return legacy_result
 
     try:
-        row = (
+        route_row = (
             session.execute(
                 text(
                     """
@@ -68,22 +76,33 @@ def defaults(session: Session) -> dict[str, object]:
         if _is_missing_table(exc, "model_route_defaults"):
             return {}
         raise
-    if row is None:
+    if route_row is None:
         return {"etag": "defaults:0", "text": None, "multimodal": None}
+    if not isinstance(route_row["etag"], str) or not route_row["etag"]:
+        raise RuntimeError("model defaults contain an invalid etag")
+    for provider_key, model_key in (
+        ("text_provider_id", "text_model_id"),
+        ("multimodal_provider_id", "multimodal_model_id"),
+    ):
+        if (route_row[provider_key] is None) != (route_row[model_key] is None):
+            raise RuntimeError("model defaults contain an incomplete route")
     result: dict[str, object] = {
-        "etag": str(row["etag"]),
+        "etag": str(route_row["etag"]),
         "text": None,
         "multimodal": None,
     }
-    if row["text_provider_id"] is not None and row["text_model_id"] is not None:
+    if route_row["text_provider_id"] is not None and route_row["text_model_id"] is not None:
         result["text"] = {
-            "provider_id": str(row["text_provider_id"]),
-            "model_id": str(row["text_model_id"]),
+            "provider_id": str(route_row["text_provider_id"]),
+            "model_id": str(route_row["text_model_id"]),
         }
-    if row["multimodal_provider_id"] is not None and row["multimodal_model_id"] is not None:
+    if (
+        route_row["multimodal_provider_id"] is not None
+        and route_row["multimodal_model_id"] is not None
+    ):
         result["multimodal"] = {
-            "provider_id": str(row["multimodal_provider_id"]),
-            "model_id": str(row["multimodal_model_id"]),
+            "provider_id": str(route_row["multimodal_provider_id"]),
+            "model_id": str(route_row["multimodal_model_id"]),
         }
     return result
 

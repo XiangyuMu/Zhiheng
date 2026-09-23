@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from alembic import command
@@ -13,6 +13,7 @@ from sqlalchemy import text
 from zhiheng.api.main import create_app
 from zhiheng.core.config import Settings
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
+from zhiheng.models.configuration import defaults
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -267,6 +268,24 @@ def test_defaults_are_read_from_persisted_route_and_stale_etag_is_rejected(
         json={"text": None},
     )
     assert stale.status_code == 412
+
+
+def test_defaults_reject_incomplete_persisted_route(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    app: Any = client.app
+    with app.state.session_factory.begin() as session:
+        session.execute(
+            text(
+                "INSERT INTO model_route_defaults "
+                "(id, text_provider_id, text_model_id, etag) "
+                "VALUES ('broken-default', :provider, NULL, 'broken')"
+            ),
+                {"provider": "provider-test"},
+        )
+    with app.state.session_factory() as session, pytest.raises(
+        RuntimeError, match="incomplete route"
+    ):
+        defaults(session)
 
 
 def test_provider_update_rejects_stale_etag(tmp_path: Path) -> None:
