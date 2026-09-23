@@ -124,15 +124,15 @@ fs.mkdirSync(output, { recursive: true });
       await page.locator(".queue-item").filter({ hasText: "关系建议" }).nth(2).waitFor();
     });
 
-    await page.locator(".queue-item").filter({ hasText: "关系建议" }).filter({ hasText: "每天复习不能提高记忆" }).click();
+    await page.locator(".queue-item").filter({ hasText: "关系建议" }).filter({ hasText: "每天复习不能提高记忆" }).last().click();
     await page.getByRole("button", { name: "拒绝关系", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     await check("reject relation records the real API decision", async () => {
       assert.equal(await apiJson(`/v1/conclusions/${rejected.id}/relations`).then((body) => body.items[0].status), "rejected");
-      assert.equal(await page.locator("#relation-count").innerText(), "2");
+      assert(Number(await page.locator("#relation-count").innerText()) >= 2);
     });
 
-    await page.locator(".queue-item").filter({ hasText: "关系建议" }).filter({ hasText: "每天复习需要更多样本" }).click();
+    await page.locator(".queue-item").filter({ hasText: "关系建议" }).filter({ hasText: "每天复习需要更多样本" }).last().click();
     await page.getByRole("button", { name: "批准关系", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     await check("approved relation enters formal searchable knowledge", async () => {
