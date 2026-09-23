@@ -23,6 +23,11 @@ cleanup() {
 trap cleanup EXIT
 
 cd "${ROOT_DIR}"
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "Browser acceptance requires a clean checkout" >&2
+  git status --short >&2
+  exit 1
+fi
 npm ci --ignore-scripts --no-audit --no-fund
 npx playwright install chromium
 
@@ -60,7 +65,7 @@ fi
 
 BASE_URL="http://127.0.0.1:${PORT}"
 node tests/e2e/check_workspace.cjs "${BASE_URL}" "${OUTPUT_DIR}/workspace"
-node tests/e2e/check_workspace_full.cjs "${BASE_URL}" "${OUTPUT_DIR}/workspace-full"
+ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs "${BASE_URL}" "${OUTPUT_DIR}/workspace-full"
 node tests/e2e/check_review_relations.cjs "${BASE_URL}" "${OUTPUT_DIR}/relations"
 node tests/e2e/check_qualification.cjs "${BASE_URL}" "${OUTPUT_DIR}/qualification"
 
@@ -92,7 +97,7 @@ report = {
         "uv run uvicorn zhiheng.api.main:app",
         "uv run zhiheng-worker --role worker --idle-seconds 1",
         "node tests/e2e/check_workspace.cjs",
-        "node tests/e2e/check_workspace_full.cjs",
+        "ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs",
         "node tests/e2e/check_review_relations.cjs",
         "node tests/e2e/check_qualification.cjs",
     ],
@@ -107,6 +112,10 @@ report = {
     "issue_mapping": {
         "#1": ["authenticated research workspace loads", "missing evidence remains explicit"],
         "#2-#10": ["workspace-full", "relation review", "cross-session qualification"],
+        "#15": ["taxonomy APIs are reachable from the authenticated browser"],
+        "#16": ["unapproved conclusions stay out of both browser sessions; approved conclusions become visible in a separate browser session"],
+        "#17": ["workspace-full", "relation review", "cross-session qualification"],
+        "#18": ["API and worker remain alive during browser acceptance"],
     },
 }
 Path(output).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
