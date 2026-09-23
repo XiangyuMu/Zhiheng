@@ -780,12 +780,13 @@ function renderMaterials() {
   const statusFilter = $("library-status-filter").value;
   const favoriteOnly = $("library-favorite-filter").checked;
   const pinnedOnly = $("library-pinned-filter").checked;
-  const items = state.materials.filter((item) => (!state.usingSearchApi && (!state.domain || item.primary_domain_id === state.domain))
-    && (!state.usingSearchApi && !sourceFilter || state.usingSearchApi || sourceKind(item) === sourceFilter)
-    && (!state.usingSearchApi && !statusFilter || state.usingSearchApi || lifecycleFilter(item, statusFilter))
-    && (!state.usingSearchApi && !favoriteOnly || state.usingSearchApi || Boolean(item.is_favorite))
-    && (!state.usingSearchApi && !pinnedOnly || state.usingSearchApi || Boolean(item.is_pinned))
-    && (!state.usingSearchApi && `${item.title} ${item.summary || ""}`.toLocaleLowerCase().includes(search) || state.usingSearchApi));
+  const items = state.usingSearchApi ? state.materials : state.materials.filter((item) =>
+    (!state.domain || item.primary_domain_id === state.domain)
+    && (!sourceFilter || sourceKind(item) === sourceFilter)
+    && (!statusFilter || lifecycleFilter(item, statusFilter))
+    && (!favoriteOnly || Boolean(item.is_favorite))
+    && (!pinnedOnly || Boolean(item.is_pinned))
+    && `${item.title} ${item.summary || ""}`.toLocaleLowerCase().includes(search));
   $("library-count").textContent = `${items.length} 份资料${search || state.domain ? ` / 已加载 ${state.materials.length} 份` : ""}`;
   $("knowledge-items").replaceChildren();
   updateBulkToolbar(items);
