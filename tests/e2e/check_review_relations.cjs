@@ -78,12 +78,12 @@ fs.mkdirSync(output, { recursive: true });
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: "issue17-workspace",
+          username: "issue17-relations",
           password: "issue17 workspace passphrase",
         }),
       });
     });
-    await page.locator("#username").fill("issue17-workspace");
+    await page.locator("#username").fill("issue17-relations");
     await page.locator("#password").fill("issue17 workspace passphrase");
     await page.locator("#form button").click();
     await page.waitForURL("**/knowledge-agent**");
@@ -98,8 +98,6 @@ fs.mkdirSync(output, { recursive: true });
     }
 
     await page.goto(`${base}/review-center`);
-    await page.waitForTimeout(1000);
-    console.log("SUMMARY", await page.locator("#relation-count").innerText(), await page.locator("#queue").innerText());
     await page.locator("#relation-count").filter({ hasText: "3" }).waitFor();
     await check("relation suggestions appear in the central review queue", async () => {
       assert.equal(await page.locator(".queue-item").filter({ hasText: "关系建议" }).count(), 3);
