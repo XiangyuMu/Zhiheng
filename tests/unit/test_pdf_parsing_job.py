@@ -10,6 +10,7 @@ from zhiheng.jobs.knowledge_indexing import ClaimedKnowledgeJob
 from zhiheng.jobs.pdf_parsing import PdfParseJobExecutor
 from zhiheng.knowledge.pdf_worker import (
     ParserManifestReference,
+    ParserParseRequest,
     ParserProtocolError,
     ParserReceipt,
     ParserStatus,
@@ -39,7 +40,10 @@ def _job(job_type: str = "knowledge.parse_pdf") -> ClaimedKnowledgeJob:
     )
 
 
-def test_parse_job_submits_polls_loads_and_publishes() -> None:
+def test_parse_job_submits_polls_loads_and_publishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Lease fencing is exercised against a real jobs table in the integration
+    # contract tests. Keep this test focused on parser orchestration.
+    monkeypatch.setattr(pdf_parsing, "_assert_current_lease", lambda *_: None)
     parser = Mock()
     parser.submit.return_value.attempt_id = "attempt-1"
     parser.status.side_effect = [
@@ -172,7 +176,7 @@ def test_parse_job_does_not_fallback_partial_or_authentication_failures() -> Non
     mineru.submit.assert_not_called()
 
 
-def _request_from_job_for_test():
+def _request_from_job_for_test() -> ParserParseRequest:
     from zhiheng.jobs.pdf_parsing import _request_from_job
 
     return _request_from_job(_job())
