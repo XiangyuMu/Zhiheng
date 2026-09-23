@@ -107,7 +107,7 @@
       button.type = "button";
       button.setAttribute("aria-current", state.selected?.id === item.id ? "true" : "false");
       const label = item.kind === "conclusion"
-        ? item.claim
+        ? item.title
         : item.kind === "relation"
           ? item.title
           : `${item.state_key} · 个人信息冲突`;
@@ -116,7 +116,7 @@
         : item.kind === "relation"
           ? "关系建议"
           : "冲突待确认";
-      button.append(text("strong", label), text("small", `${type} · ${item.status || "pending"}`));
+      button.append(text("strong", label), text("small", `${type} · ${item.status || "pending"}${item.kind === "conclusion" && item.claim ? ` · ${item.claim}` : ""}`));
       button.onclick = () => {
         state.selected = item;
         renderDetail(item);
