@@ -1,3 +1,4 @@
+body { overflow-x: hidden; }
 @import url('/knowledge-agent.css');
 
 :root {
