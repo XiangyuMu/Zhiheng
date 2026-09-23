@@ -185,13 +185,12 @@ def run_once(
 
 def _recover_configured_erase_journal(settings: Settings) -> None:
     """Validate and replay the journal before the worker can dispatch."""
-    if os.environ.get("ZHIHENG_ERASE_JOURNAL_PATH"):
-        engine = create_sqlite_engine(settings)
-        try:
-            session_factory = create_session_factory(engine)
-            startup_recovery_barrier(settings, session_factory)
-        finally:
-            engine.dispose()
+    engine = create_sqlite_engine(settings)
+    try:
+        session_factory = create_session_factory(engine)
+        startup_recovery_barrier(settings, session_factory)
+    finally:
+        engine.dispose()
 
 
 def log_startup(settings: Settings) -> None:

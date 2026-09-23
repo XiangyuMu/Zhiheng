@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterable
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -111,7 +111,7 @@ def _read_text(store: Any, uri: str | None) -> str:
     if not uri:
         return ""
     try:
-        return store.read_bytes(str(uri)).decode("utf-8")
+        return cast(str, store.read_bytes(str(uri)).decode("utf-8"))
     except (OSError, UnicodeDecodeError, ValueError):
         return ""
 

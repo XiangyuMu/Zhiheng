@@ -97,3 +97,52 @@ def test_startup_rejects_missing_journal_after_erase_history(
 
     with pytest.raises(RuntimeError, match="required erase journal is missing"):
         create_app(settings)
+
+
+def test_startup_rejects_unmigrated_database_without_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from zhiheng.recovery import startup_recovery_barrier
+
+    monkeypatch.delenv("ZHIHENG_ERASE_JOURNAL_PATH", raising=False)
+    settings = Settings(environment="test", database_url=f"sqlite:///{tmp_path / 'empty.db'}")
+    engine = create_sqlite_engine(settings)
+    try:
+        with pytest.raises(RuntimeError, match="migration"):
+            startup_recovery_barrier(settings, create_session_factory(engine))
+    finally:
+        engine.dispose()
+
+
+def test_startup_rejects_old_revision_without_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from zhiheng.recovery import startup_recovery_barrier
+
+    monkeypatch.delenv("ZHIHENG_ERASE_JOURNAL_PATH", raising=False)
+    database = tmp_path / "old.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database}")
+    command.upgrade(config, "0034_conclusion_applicability")
+    settings = Settings(environment="test", database_url=f"sqlite:///{database}")
+    engine = create_sqlite_engine(settings)
+    try:
+        with pytest.raises(RuntimeError, match="migration"):
+            startup_recovery_barrier(settings, create_session_factory(engine))
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("entrypoint", ["api", "worker"])
+def test_process_entrypoints_reject_missing_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entrypoint: str
+) -> None:
+    from zhiheng.worker.main import run_once
+
+    monkeypatch.delenv("ZHIHENG_ERASE_JOURNAL_PATH", raising=False)
+    settings = Settings(environment="test", database_url=f"sqlite:///{tmp_path / 'empty.db'}")
+    with pytest.raises(RuntimeError, match="migration"):
+        if entrypoint == "api":
+            create_app(settings)
+        else:
+            run_once(settings)

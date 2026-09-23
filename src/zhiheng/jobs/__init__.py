@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from zhiheng.core.config import Settings
 from zhiheng.jobs.classification import (
     ClaimedClassificationJob,
     ClassificationSuggestionJobExecutor,
@@ -25,6 +26,14 @@ from zhiheng.jobs.memory_extraction import (
     process_memory_extraction_jobs_once,
 )
 from zhiheng.jobs.outbox import OutboxRepository
+from zhiheng.jobs.pdf_parsing import (
+    KNOWLEDGE_PARSE_PDF_JOB_TYPE,
+    PdfParseJobExecutor,
+    PdfParseJobResult,
+)
+from zhiheng.jobs.pdf_parsing import (
+    configured_pdf_parse_executor as _configured_pdf_parse_executor,
+)
 
 
 class PdfCapabilityUnavailable(RuntimeError):
@@ -33,27 +42,12 @@ class PdfCapabilityUnavailable(RuntimeError):
     code = "unsupported_pdf_parser"
 
 
-try:
-    from zhiheng.jobs.pdf_parsing import (  # type: ignore[import-not-found]
-        KNOWLEDGE_PARSE_PDF_JOB_TYPE,
-        PdfParseJobExecutor,
-        PdfParseJobResult,
-        configured_pdf_parse_executor,
-    )
-except ModuleNotFoundError as exc:  # Optional PDF parser dependencies are outside the MVP runtime.
-    if exc.name != "zhiheng.jobs.pdf_parsing":
-        raise
-
-    KNOWLEDGE_PARSE_PDF_JOB_TYPE = "knowledge.parse_pdf"
-    PdfParseJobExecutor = object
-    PdfParseJobResult = object
-
-    def configured_pdf_parse_executor(*args: object, **kwargs: object) -> None:
+def configured_pdf_parse_executor(settings: Settings | None = None) -> PdfParseJobExecutor | None:
+    if settings is None:
         raise PdfCapabilityUnavailable(
             "PDF parsing is unsupported: install the optional PDF parser dependencies"
         )
-
-
+    return _configured_pdf_parse_executor(settings)
 
 __all__ = [
     "KnowledgeIndexJobExecutor",

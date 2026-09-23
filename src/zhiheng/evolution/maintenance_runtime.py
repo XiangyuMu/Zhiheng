@@ -113,7 +113,7 @@ class MaintenanceRuntime:
         if not worker_id.strip():
             raise ValueError("worker_id is required")
         expires = datetime.now(UTC) + timedelta(seconds=self.lease_seconds)
-        result = session.execute(
+        session.execute(
             text(
                 """
                 UPDATE maintenance_runs
@@ -128,7 +128,7 @@ class MaintenanceRuntime:
             ),
             {"id": run_id, "owner": worker_id, "expires": expires},
         )
-        return bool(result.rowcount)
+        return int(session.execute(text("SELECT changes()")).scalar_one()) == 1
 
     def apply(self, session: Session, *, run_id: str, worker_id: str) -> MaintenanceRun:
         row = (
@@ -348,7 +348,7 @@ class MaintenanceRuntime:
         target_type = str(action["target_type"])
         target_id = str(action["target_id"])
         if target_type == "memory_candidate":
-            result = session.execute(
+            session.execute(
                 text(
                     """
                     UPDATE memory_candidates SET status='rejected', updated_at=CURRENT_TIMESTAMP
@@ -357,9 +357,9 @@ class MaintenanceRuntime:
                 ),
                 {"id": target_id},
             )
-            state = "applied" if result.rowcount else "skipped"
+            state = "applied" if int(session.execute(text("SELECT changes()")).scalar_one()) else "skipped"
         elif target_type == "derived_index":
-            result = session.execute(
+            session.execute(
                 text(
                     """
                     UPDATE embedding_generations SET index_status='retired'
@@ -368,7 +368,7 @@ class MaintenanceRuntime:
                 ),
                 {"id": target_id},
             )
-            state = "applied" if result.rowcount else "skipped"
+            state = "applied" if int(session.execute(text("SELECT changes()")).scalar_one()) else "skipped"
         else:
             state = "skipped"
         session.execute(

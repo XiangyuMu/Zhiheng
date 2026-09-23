@@ -13,7 +13,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -216,7 +216,7 @@ class ParserWorkerClient:
             validate_manifest(manifest)
         except ValueError as exc:
             raise ParserManifestError(str(exc)) from exc
-        return manifest
+        return cast(dict[str, Any], manifest)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         try:

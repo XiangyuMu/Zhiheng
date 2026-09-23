@@ -11,11 +11,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import new_id, sha256_text
 from zhiheng.db.session import session_scope
+from zhiheng.jobs.knowledge_contract import job_etag, retry_idempotency_key
 from zhiheng.knowledge import KnowledgeRepository
 from zhiheng.retrieval.embeddings import BgeM3QueryEmbedder
 from zhiheng.retrieval.vector_index import VectorIndexRepository
 
 KNOWLEDGE_INDEX_JOB_TYPE = "knowledge.index"
+KNOWLEDGE_PARSE_PDF_JOB_TYPE = "knowledge.parse_pdf"
+KNOWLEDGE_JOB_TYPES = (KNOWLEDGE_INDEX_JOB_TYPE, KNOWLEDGE_PARSE_PDF_JOB_TYPE)
 
 
 class TextEmbeddingPort(Protocol):
@@ -41,11 +44,25 @@ class ClaimedKnowledgeJob:
     attempt_id: str | None = None
 
 
+class KnowledgeJobExecutorPort(Protocol):
+    def execute(
+        self, session_factory: sessionmaker[Session], job: ClaimedKnowledgeJob
+    ) -> Any: ...
+
+
 @dataclass(frozen=True, slots=True)
 class KnowledgeIndexResult:
     fts_indexed: int
     vector_indexed: int
     generation_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeRetryResult:
+    previous_job_id: str
+    job_id: str
+    status: str
+    etag: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +94,83 @@ class BgeM3TextEmbedder:
 
 
 class KnowledgeJobRepository:
+    def retry_failed_job(
+        self,
+        session: Session,
+        *,
+        knowledge_object_id: str,
+        expected_job_id: str,
+        expected_etag: str,
+        operation_key: str,
+    ) -> KnowledgeRetryResult:
+        row = (
+            session.execute(
+                text(
+                    """
+                    SELECT id, status, attempts, max_attempts, updated_at, payload_json
+                    FROM jobs
+                    WHERE id = :job_id
+                      AND job_type = :job_type
+                      AND json_extract(payload_json, '$.knowledge_object_id') = :knowledge_object_id
+                    """
+                ),
+                {
+                    "job_id": expected_job_id,
+                    "job_type": KNOWLEDGE_INDEX_JOB_TYPE,
+                    "knowledge_object_id": knowledge_object_id,
+                },
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise ValueError("knowledge job not found")
+        current = dict(row)
+        if job_etag(current) != expected_etag:
+            raise ValueError("stale knowledge job etag")
+        if str(row["status"]) not in {"failed", "dead"}:
+            raise ValueError("only failed or dead knowledge jobs can be retried")
+
+        retry_key = retry_idempotency_key(operation_key)
+        session.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO jobs (
+                  id, job_type, idempotency_key, payload_json, status
+                )
+                VALUES (
+                  :id, :job_type, :idempotency_key, :payload_json, 'pending'
+                )
+                """
+            ),
+            {
+                "id": new_id(),
+                "job_type": KNOWLEDGE_INDEX_JOB_TYPE,
+                "idempotency_key": retry_key,
+                "payload_json": row["payload_json"],
+            },
+        )
+        retry_row = (
+            session.execute(
+                text(
+                    """
+                    SELECT id, status, attempts, max_attempts, updated_at
+                    FROM jobs
+                    WHERE job_type = :job_type AND idempotency_key = :idempotency_key
+                    """
+                ),
+                {"job_type": KNOWLEDGE_INDEX_JOB_TYPE, "idempotency_key": retry_key},
+            )
+            .mappings()
+            .one()
+        )
+        return KnowledgeRetryResult(
+            previous_job_id=expected_job_id,
+            job_id=str(retry_row["id"]),
+            status=str(retry_row["status"]),
+            etag=job_etag(dict(retry_row)),
+        )
+
     def claim_available(
         self,
         session: Session,
@@ -92,7 +186,7 @@ class KnowledgeJobRepository:
                 SELECT id, job_type, idempotency_key, payload_json, attempts
                 FROM jobs
                 WHERE available_at <= CURRENT_TIMESTAMP
-                  AND job_type = :job_type
+                  AND job_type IN (:index_job_type, :parse_job_type)
                   AND (
                     status = 'pending'
                     OR (
@@ -106,7 +200,11 @@ class KnowledgeJobRepository:
                 LIMIT :limit
                 """
                 ),
-                {"job_type": KNOWLEDGE_INDEX_JOB_TYPE, "limit": limit},
+                {
+                    "index_job_type": KNOWLEDGE_INDEX_JOB_TYPE,
+                    "parse_job_type": KNOWLEDGE_PARSE_PDF_JOB_TYPE,
+                    "limit": limit,
+                },
             )
             .mappings()
             .all()
@@ -126,7 +224,7 @@ class KnowledgeJobRepository:
                         attempts = attempts + 1,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = :job_id
-                      AND job_type = :job_type
+                      AND job_type IN (:index_job_type, :parse_job_type)
                       AND available_at <= CURRENT_TIMESTAMP
                       AND (
                         status = 'pending'
@@ -141,7 +239,8 @@ class KnowledgeJobRepository:
                 ),
                 {
                     "job_id": row["id"],
-                    "job_type": KNOWLEDGE_INDEX_JOB_TYPE,
+                    "index_job_type": KNOWLEDGE_INDEX_JOB_TYPE,
+                    "parse_job_type": KNOWLEDGE_PARSE_PDF_JOB_TYPE,
                     "worker_id": worker_id,
                     "lease_delta": f"+{lease_seconds} seconds",
                 },
@@ -168,7 +267,7 @@ class KnowledgeJobRepository:
         session: Session,
         job: ClaimedKnowledgeJob,
         *,
-        result: KnowledgeIndexResult,
+        result: Any,
     ) -> bool:
         if job.lease_owner is None or job.attempt_id is None:
             return False
@@ -205,15 +304,73 @@ class KnowledgeJobRepository:
             attempt_id=job.attempt_id,
             status="completed",
             error_class=None,
-            error_message=json.dumps(
-                {
-                    "fts_indexed": result.fts_indexed,
-                    "vector_indexed": result.vector_indexed,
-                    "generation_id": result.generation_id,
-                },
-                sort_keys=True,
-            ),
+            error_message=json.dumps(_completion_metadata(result), sort_keys=True),
         )
+        return True
+
+    def mark_unsupported(
+        self,
+        session: Session,
+        job: ClaimedKnowledgeJob,
+        *,
+        code: str,
+        message: str,
+    ) -> bool:
+        """Finish a job as an explicit capability failure without retrying it."""
+        if job.lease_owner is None or job.attempt_id is None:
+            return False
+        row = session.execute(
+            text("SELECT payload_json FROM jobs WHERE id=:job_id"),
+            {"job_id": job.id},
+        ).scalar_one_or_none()
+        payload = _json_object(row)
+        payload.update(
+            {
+                "failure_code": code,
+                "failure_stage": "parse",
+                "retryable": False,
+            }
+        )
+        session.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status='unsupported',
+                    payload_json=:payload_json,
+                    lease_owner=NULL,
+                    lease_expires_at=NULL,
+                    heartbeat_at=CURRENT_TIMESTAMP,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=:job_id AND status='processing'
+                  AND attempts=:attempts AND lease_owner=:owner
+                """
+            ),
+            {
+                "job_id": job.id,
+                "payload_json": json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                "attempts": job.attempts,
+                "owner": job.lease_owner,
+            },
+        )
+        if int(session.execute(text("SELECT changes()")).scalar_one()) != 1:
+            return False
+        self._record_attempt_finish(
+            session,
+            job_id=job.id,
+            attempt_id=job.attempt_id,
+            status="unsupported",
+            error_class=code,
+            error_message=message,
+        )
+        task_id = payload.get("task_id")
+        if task_id:
+            session.execute(
+                text(
+                    "UPDATE pdf_tasks SET state='unsupported', updated_at=CURRENT_TIMESTAMP "
+                    "WHERE id=:task_id"
+                ),
+                {"task_id": str(task_id)},
+            )
         return True
 
     def fail(self, session: Session, job: ClaimedKnowledgeJob, *, exc: Exception) -> bool:
@@ -301,7 +458,7 @@ class KnowledgeJobRepository:
                 WHERE id IN (
                     SELECT id FROM jobs
                     WHERE available_at <= CURRENT_TIMESTAMP
-                      AND job_type = :job_type
+                      AND job_type IN (:index_job_type, :parse_job_type)
                       AND status = 'processing'
                       AND lease_expires_at IS NOT NULL
                       AND lease_expires_at <= CURRENT_TIMESTAMP
@@ -311,7 +468,11 @@ class KnowledgeJobRepository:
                 RETURNING id, payload_json
                 """
                 ),
-                {"job_type": KNOWLEDGE_INDEX_JOB_TYPE, "limit": limit},
+                {
+                    "index_job_type": KNOWLEDGE_INDEX_JOB_TYPE,
+                    "parse_job_type": KNOWLEDGE_PARSE_PDF_JOB_TYPE,
+                    "limit": limit,
+                },
             )
             .mappings()
             .all()
@@ -542,7 +703,7 @@ def process_knowledge_jobs_once(
     worker_id: str,
     limit: int = 10,
     repository: KnowledgeJobRepository | None = None,
-    pdf_executor: object | None = None,
+    pdf_executor: KnowledgeJobExecutorPort | None = None,
 ) -> int:
     job_repository = repository or KnowledgeJobRepository()
     with session_scope(session_factory) as session:
@@ -550,8 +711,26 @@ def process_knowledge_jobs_once(
 
     completed = 0
     for job in claimed:
+        if job.job_type == KNOWLEDGE_PARSE_PDF_JOB_TYPE:
+            if pdf_executor is None:
+                with session_scope(session_factory) as session:
+                    completed += int(
+                        job_repository.mark_unsupported(
+                            session,
+                            job,
+                            code="unsupported_pdf_parser",
+                            message=(
+                                "PDF parsing is unsupported: configure a parser service "
+                                "before retrying this import"
+                            ),
+                        )
+                    )
+                continue
+            executor_for_job = pdf_executor
+        else:
+            executor_for_job = executor
         try:
-            result = executor.execute(session_factory, job)
+            result = executor_for_job.execute(session_factory, job)
         except Exception as exc:
             with session_scope(session_factory) as session:
                 job_repository.fail(session, job, exc=exc)
@@ -567,3 +746,19 @@ def _json_object(value: Any) -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise TypeError("job payload must be a JSON object")
     return dict(loaded)
+
+
+def _completion_metadata(result: Any) -> dict[str, Any]:
+    if isinstance(result, KnowledgeIndexResult):
+        return {
+            "fts_indexed": result.fts_indexed,
+            "vector_indexed": result.vector_indexed,
+            "generation_id": result.generation_id,
+        }
+    publication = getattr(result, "publication", None)
+    return {
+        "parser_state": getattr(result, "parser_state", "succeeded"),
+        "attempt_id": getattr(publication, "attempt_id", None),
+        "formal_block_count": getattr(publication, "formal_block_count", None),
+        "indexed": getattr(publication, "indexed", None),
+    }

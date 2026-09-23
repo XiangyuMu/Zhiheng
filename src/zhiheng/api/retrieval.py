@@ -810,7 +810,7 @@ def _answer_model_for_settings(app: Any) -> Any:
     database_default = False
     with app.state.session_factory() as session:
         selected = model_defaults(session).get("text")
-    if selected:
+    if isinstance(selected, dict):
         # Once a user saves a route in SQLite it is authoritative.  The
         # environment values serve only as the initial bootstrap fallback
         # and must not silently overwrite a page-configured default.
@@ -857,7 +857,7 @@ class _DynamicGatewayAnswerModel:
         provider_id, model_id = self._fallback
         with self._session_factory() as session:
             selected = model_defaults(session).get("text")
-        if selected:
+        if isinstance(selected, dict):
             provider_id, model_id = str(selected["provider_id"]), str(selected["model_id"])
         return GatewayAnswerModel(
             gateway=self._gateway,

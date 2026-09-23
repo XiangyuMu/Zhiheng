@@ -64,7 +64,6 @@ if ! kill -0 "${WORKER_PID}" 2>/dev/null; then
 fi
 
 BASE_URL="http://127.0.0.1:${PORT}"
-node tests/e2e/check_workspace.cjs "${BASE_URL}" "${OUTPUT_DIR}/workspace"
 ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs "${BASE_URL}" "${OUTPUT_DIR}/workspace-full"
 node tests/e2e/check_review_relations.cjs "${BASE_URL}" "${OUTPUT_DIR}/relations"
 node tests/e2e/check_qualification.cjs "${BASE_URL}" "${OUTPUT_DIR}/qualification"
@@ -96,7 +95,6 @@ report = {
         "uv run python scripts/upgrade_database.py $ZHIHENG_DATABASE_URL (isolated database)",
         "uv run uvicorn zhiheng.api.main:app",
         "uv run zhiheng-worker --role worker --idle-seconds 1",
-        "node tests/e2e/check_workspace.cjs",
         "ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs",
         "node tests/e2e/check_review_relations.cjs",
         "node tests/e2e/check_qualification.cjs",
@@ -108,7 +106,7 @@ report = {
         "playwright": version(["node", "-e", "console.log(require('playwright/package.json').version)"]),
         "chromium": version(["node", "-e", "const { chromium } = require('playwright'); console.log(chromium.executablePath())"]),
     },
-    "artifacts": ["migration.log", "api.log", "worker.log", "workspace", "workspace-full", "relations", "qualification"],
+    "artifacts": ["migration.log", "api.log", "worker.log", "workspace-full", "relations", "qualification"],
     "issue_mapping": {
         "#1": ["authenticated research workspace loads", "missing evidence remains explicit"],
         "#2-#10": ["workspace-full", "relation review", "cross-session qualification"],

@@ -677,6 +677,23 @@ def search_knowledge(
     conditions = [
         "(ko.owner_user_id = :user_id OR ko.owner_user_id IS NULL)",
         "ko.lifecycle_status <> 'privacy_erased'",
+        """
+        EXISTS (
+          SELECT 1
+          FROM serving_chunks eligible_chunk
+          WHERE eligible_chunk.source_id = ko.id
+            AND EXISTS (
+              SELECT 1
+              FROM jobs completed_index
+              WHERE completed_index.job_type = 'knowledge.index'
+                AND completed_index.status = 'completed'
+                AND (
+                  json_extract(completed_index.payload_json, '$.knowledge_object_id') = ko.id
+                  OR json_extract(completed_index.payload_json, '$.aggregate_id') = ko.id
+                )
+            )
+        )
+        """,
     ]
     params: dict[str, Any] = {
         "user_id": user_id,
@@ -685,7 +702,9 @@ def search_knowledge(
     }
     has_query = bool(q and q.strip())
     if has_query:
-        params["fts_query"] = segment_for_fts(q.strip())
+        query_text = q
+        if query_text is not None:
+            params["fts_query"] = segment_for_fts(query_text.strip())
     if domain_id:
         conditions.append("ko.primary_domain_id = :domain_id")
         params["domain_id"] = domain_id
@@ -749,15 +768,41 @@ def search_knowledge(
                  min(c.raw_text) AS match_text
           FROM fts_chunks
           JOIN chunks c ON c.rowid = fts_chunks.rowid
+          JOIN serving_chunks eligible_chunk ON eligible_chunk.id = c.id
           WHERE fts_chunks MATCH :fts_query
+            AND EXISTS (
+              SELECT 1
+              FROM jobs completed_index
+              WHERE completed_index.job_type = 'knowledge.index'
+                AND completed_index.status = 'completed'
+                AND (
+                  json_extract(completed_index.payload_json, '$.knowledge_object_id')
+                    = c.source_id
+                  OR json_extract(completed_index.payload_json, '$.aggregate_id')
+                    = c.source_id
+                )
+            )
           GROUP BY c.source_id
         ) hit ON hit.source_id = ko.id
         """
         if has_query
         else """
         LEFT JOIN (
-          SELECT source_id, min(rowid) AS rowid
-          FROM chunks
+          SELECT c.source_id, min(c.rowid) AS rowid
+          FROM chunks c
+          JOIN serving_chunks eligible_chunk ON eligible_chunk.id = c.id
+          WHERE EXISTS (
+            SELECT 1
+            FROM jobs completed_index
+            WHERE completed_index.job_type = 'knowledge.index'
+              AND completed_index.status = 'completed'
+              AND (
+                json_extract(completed_index.payload_json, '$.knowledge_object_id')
+                  = c.source_id
+                OR json_extract(completed_index.payload_json, '$.aggregate_id')
+                  = c.source_id
+              )
+          )
           GROUP BY source_id
         ) hit ON hit.source_id = ko.id
         """
@@ -1172,6 +1217,46 @@ def knowledge_processing_status(
             .mappings()
             .first()
         )
+    if row is None:
+        with session_scope(session_factory) as session:
+            row = (
+                session.execute(
+                    text(
+                        """
+                    SELECT
+                      oe.id,
+                      'pending' AS status,
+                      0 AS attempts,
+                      3 AS max_attempts,
+                      oe.updated_at,
+                      oe.payload_json,
+                      NULL AS error_class,
+                      NULL AS error_message,
+                      ko.lifecycle_status,
+                      0 AS searchable
+                    FROM outbox_events oe
+                    LEFT JOIN knowledge_objects ko ON ko.id = :knowledge_object_id
+                    WHERE oe.event_type IN (
+                      'evidence.ingested',
+                      'knowledge.reindex_requested',
+                      'knowledge_candidate.created',
+                      'knowledge_candidate.confirmed'
+                    )
+                      AND (
+                        oe.aggregate_id = :knowledge_object_id
+                        OR json_extract(oe.payload_json, '$.knowledge_object_id')
+                           = :knowledge_object_id
+                      )
+                      AND oe.status IN ('pending', 'processing')
+                    ORDER BY oe.created_at DESC, oe.id DESC
+                    LIMIT 1
+                    """
+                    ),
+                    {"knowledge_object_id": knowledge_object_id},
+                )
+                .mappings()
+                .first()
+            )
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

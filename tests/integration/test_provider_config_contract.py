@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import cast
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
@@ -185,3 +186,166 @@ def test_provider_management_supports_modal_defaults_health_and_archive(tmp_path
         ).status_code
         == 200
     )
+
+
+def test_provider_secret_refs_are_validated_and_never_echoed(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    csrf = _login(client)
+
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "provider-create-bad-secret",
+        },
+        json={
+            "provider_kind": "deepseek",
+            "display_name": "Bad Secret",
+            "base_url": "https://api.deepseek.com/v1",
+            "secret_ref": "env:PUBLIC_KEY",
+            "text_models": ["deepseek-chat"],
+        },
+    )
+    assert created.status_code == 422
+    assert "PUBLIC_KEY" not in created.text
+    assert "secret_ref" in created.text
+
+    provider = client.get("/v1/model-config/providers").json()[0]
+    updated = client.patch(
+        f"/v1/model-config/providers/{provider['provider_id']}",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": provider["etag"],
+            "Idempotency-Key": "provider-update-bad-secret",
+        },
+        json={"secret_ref": "env:PUBLIC_KEY"},
+    )
+    assert updated.status_code == 422
+    assert "PUBLIC_KEY" not in updated.text
+
+    body = client.get("/v1/model-config/providers").json()
+    assert "secret_ref" not in json.dumps(body)
+    assert "ZHIHENG_PRIVATE_TEST_SECRET" not in json.dumps(body)
+
+
+def test_defaults_are_read_from_persisted_route_and_stale_etag_is_rejected(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    csrf = _login(client)
+    provider = client.get("/v1/model-config/providers").json()[0]
+    initial_defaults = client.get("/v1/model-config/status").json()["defaults"]
+
+    saved = client.put(
+        "/v1/model-config/defaults",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": initial_defaults["etag"],
+            "Idempotency-Key": "defaults-first-save",
+        },
+        json={"text": {"provider_id": provider["provider_id"], "model_id": "model-a"}},
+    )
+    assert saved.status_code == 200
+    saved_body = saved.json()
+    assert saved_body["etag"] != initial_defaults["etag"]
+
+    status_defaults = client.get("/v1/model-config/status").json()["defaults"]
+    assert status_defaults["etag"] == saved_body["etag"]
+    assert status_defaults["text"] == {
+        "provider_id": provider["provider_id"],
+        "model_id": "model-a",
+    }
+    assert status_defaults["multimodal"] is None
+
+    stale = client.put(
+        "/v1/model-config/defaults",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": initial_defaults["etag"],
+            "Idempotency-Key": "defaults-stale-save",
+        },
+        json={"text": None},
+    )
+    assert stale.status_code == 412
+
+
+def test_provider_update_rejects_stale_etag(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    csrf = _login(client)
+    provider = client.get("/v1/model-config/providers").json()[0]
+
+    first = client.patch(
+        f"/v1/model-config/providers/{provider['provider_id']}",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": provider["etag"],
+            "Idempotency-Key": "provider-first-patch",
+        },
+        json={"display_name": "Updated"},
+    )
+    assert first.status_code == 200
+
+    stale = client.patch(
+        f"/v1/model-config/providers/{provider['provider_id']}",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": provider["etag"],
+            "Idempotency-Key": "provider-stale-patch",
+        },
+        json={"display_name": "Stale"},
+    )
+    assert stale.status_code == 412
+    assert client.get("/v1/model-config/providers").json()[0]["display_name"] == "Updated"
+
+
+def test_connectivity_failure_marks_unhealthy_and_records_secret_free_audit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _client(tmp_path)
+    csrf = _login(client)
+    provider = client.get("/v1/model-config/providers").json()[0]
+
+    def failed_probe(
+        *,
+        endpoint_url: str,
+        provider_kind: str,
+        secret_ref: str | None,
+        timeout: float = 5.0,
+    ) -> tuple[str, str, str]:
+        assert endpoint_url == "https://models.example.test/v1"
+        assert provider_kind == "openai-compatible"
+        assert secret_ref == "env:ZHIHENG_PRIVATE_TEST_SECRET"
+        assert timeout == 5.0
+        return "failed", "network_error", "无法连接到供应商地址"
+
+    monkeypatch.setattr(
+        "zhiheng.models.gateway.probe_model_provider_connectivity",
+        failed_probe,
+    )
+
+    result = client.post(
+        f"/v1/model-config/providers/{provider['provider_id']}/connectivity-test",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "connectivity-failure",
+        },
+    )
+    assert result.status_code == 200
+    assert result.json()["status"] == "failed"
+    assert result.json()["diagnostic_code"] == "network_error"
+    assert "secret_ref" not in result.text
+    assert "ZHIHENG_PRIVATE_TEST_SECRET" not in result.text
+
+    refreshed = client.get("/v1/model-config/providers").json()[0]
+    assert refreshed["health_status"] == "unhealthy"
+    assert refreshed["health_error"] == "无法连接到供应商地址"
+    assert "secret_ref" not in json.dumps(refreshed)
+
+    audits = client.get(
+        f"/v1/model-config/audits?provider_id={provider['provider_id']}&status=failed"
+    )
+    assert audits.status_code == 200
+    audit_body = audits.json()
+    assert audit_body[0]["diagnostic_code"] == "network_error"
+    assert "secret_ref" not in json.dumps(audit_body)
+    assert "ZHIHENG_PRIVATE_TEST_SECRET" not in json.dumps(audit_body)

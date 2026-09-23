@@ -8,7 +8,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from zhiheng.core.config import Settings
@@ -26,6 +30,7 @@ def startup_recovery_barrier(
     established journals fail closed. A truly fresh database may initialize an
     empty journal, but no application work starts until replay has completed.
     """
+    _require_current_schema(session_factory)
     raw_path = os.environ.get("ZHIHENG_ERASE_JOURNAL_PATH")
     if not raw_path:
         return
@@ -84,3 +89,19 @@ def _shared_journal_lock(path: Path) -> Iterator[None]:
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
+
+
+def _require_current_schema(session_factory: sessionmaker[Session]) -> None:
+    root = Path(__file__).resolve().parents[2]
+    config = Config()
+    config.set_main_option("script_location", str(root / "migrations"))
+    expected = set(ScriptDirectory.from_config(config).get_heads())
+    try:
+        with session_factory() as session:
+            current = set(MigrationContext.configure(session.connection()).get_current_heads())
+    except SQLAlchemyError as exc:
+        raise RuntimeError(
+            "startup migration check failed; upgrade database before startup"
+        ) from exc
+    if current != expected:
+        raise RuntimeError("startup migration required; upgrade database before startup")

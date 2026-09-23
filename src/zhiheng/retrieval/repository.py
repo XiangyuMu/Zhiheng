@@ -9,7 +9,12 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import json_text, new_id, sha256_text
-from zhiheng.retrieval.contracts import AuthorizedChunk, RetrievalCandidate, RetrievalSource
+from zhiheng.retrieval.contracts import (
+    AuthorizedChunk,
+    RetrievalCandidate,
+    RetrievalFilters,
+    RetrievalSource,
+)
 from zhiheng.retrieval.tokenizer import DEFAULT_TOKENIZER, Tokenizer
 from zhiheng.retrieval.vector_index import VectorIndexRepository
 
@@ -132,7 +137,15 @@ class LexicalRetriever:
     def __init__(self, tokenizer: Tokenizer = DEFAULT_TOKENIZER) -> None:
         self._tokenizer = tokenizer
 
-    def search(self, session: Session, query: str, *, limit: int = 10) -> list[RetrievalCandidate]:
+    def search(
+        self,
+        session: Session,
+        query: str,
+        *,
+        limit: int = 10,
+        filters: RetrievalFilters | None = None,
+    ) -> list[RetrievalCandidate]:
+        del filters
         segmented_query = self._tokenizer.segment(query)
         rows = session.execute(
             text(
@@ -148,6 +161,35 @@ class LexicalRetriever:
                 JOIN chunks c ON c.rowid = fts_chunks.rowid
                 JOIN serving_chunks s ON s.id = c.id
                 WHERE fts_chunks MATCH :query
+                  AND (
+                    s.source_type <> 'knowledge_object'
+                    OR EXISTS (
+                    SELECT 1
+                    FROM jobs completed_index
+                    WHERE completed_index.job_type = 'knowledge.index'
+                      AND completed_index.status = 'completed'
+                      AND (
+                        json_extract(completed_index.payload_json, '$.knowledge_object_id')
+                          = s.source_id
+                        OR json_extract(completed_index.payload_json, '$.aggregate_id')
+                          = s.source_id
+                      )
+                    )
+                  )
+                  AND (
+                    s.source_type <> 'knowledge_object'
+                    OR EXISTS (
+                      SELECT 1
+                      FROM knowledge_objects ko
+                      JOIN knowledge_versions kv ON kv.id = ko.current_version_id
+                      JOIN content_versions cv ON cv.id = kv.content_version_id
+                      JOIN evidence_objects eo ON eo.id = cv.evidence_object_id
+                      WHERE ko.id = s.source_id
+                        AND ko.current_version_id = s.source_version_id
+                        AND cv.status = 'active'
+                        AND eo.status = 'active'
+                    )
+                  )
                 ORDER BY score
                 LIMIT :limit
                 """
@@ -229,7 +271,9 @@ class VectorRetriever:
         *,
         generation_id: str,
         limit: int = 10,
+        filters: RetrievalFilters | None = None,
     ) -> list[RetrievalCandidate]:
+        del filters
         if not query_embedding:
             raise ValueError("query_embedding cannot be empty")
         generation = self.generation_metadata(session, generation_id=generation_id)

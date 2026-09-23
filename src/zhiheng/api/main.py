@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hmac
 import json
-from collections.abc import Generator
+from collections.abc import AsyncIterator, Generator
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Annotated
@@ -136,10 +137,16 @@ SessionDep = Annotated[Session, Depends(get_db_session)]
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or get_settings()
-    app = FastAPI(title="Zhiheng API", version=__version__)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        startup_recovery_barrier(app_settings, session_factory)
+        yield
+
+    app = FastAPI(title="Zhiheng API", version=__version__, lifespan=lifespan)
     engine = create_sqlite_engine(app_settings)
     session_factory = create_session_factory(engine)
-    startup_recovery_barrier(app_settings, session_factory)
+    if settings is not None:
+        startup_recovery_barrier(app_settings, session_factory)
     session_service = SessionService()
     app.state.session_factory = session_factory
     app.state.settings = app_settings
@@ -585,15 +592,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_defaults = defaults(session)
         # A modality omitted from the request keeps its current route.  An
         # explicit null still clears that route, matching PUT semantics.
-        text_route = (
+        current_text_route = current_defaults.get("text")
+        current_multimodal_route = current_defaults.get("multimodal")
+        text_route: dict[str, object] | None = (
             payload.text.model_dump()
             if "text" in payload.model_fields_set
-            else current_defaults.get("text")
+            and payload.text is not None
+            else dict(current_text_route)
+            if isinstance(current_text_route, dict)
+            else None
         )
-        multimodal_route = (
+        multimodal_route: dict[str, object] | None = (
             payload.multimodal.model_dump()
             if "multimodal" in payload.model_fields_set
-            else current_defaults.get("multimodal")
+            and payload.multimodal is not None
+            else dict(current_multimodal_route)
+            if isinstance(current_multimodal_route, dict)
+            else None
         )
         fingerprint = _model_config_fingerprint(
             "defaults:update",

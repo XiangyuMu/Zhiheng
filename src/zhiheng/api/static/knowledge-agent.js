@@ -477,24 +477,30 @@ async function pollPdfTask(id) {
   if (!entry || entry.polling) return;
   entry.polling = true;
   renderProcessing();
+  let failures = 0;
   try {
     for (let attempt = 0; attempt < 60; attempt += 1) {
       try {
         const current = await fetchJson(`/v1/knowledge/pdf-imports/${encodeURIComponent(id)}`);
+        failures = 0;
         if (!state.processing.has(id)) return;
         Object.assign(entry, {
           kind: "pdf", ...current,
           retryable: Boolean(current.retryable ?? ["failed", "dead"].includes(current.state)),
-          terminal: ["parsed", "partial", "failed", "dead"].includes(current.state),
+          terminal: ["parsed", "partial", "failed", "dead", "unsupported"].includes(current.state),
         });
         renderProcessing();
-        if (["parsed", "partial", "failed", "dead"].includes(current.state)) {
-          await loadKnowledge();
+        if (["parsed", "partial", "failed", "dead", "unsupported"].includes(current.state)) {
+          if (current.state === "parsed" && current.searchable === true) await loadKnowledge();
           return;
         }
-      } catch (_) {
-        entry.label = "暂时无法读取进度，正在重试";
+      } catch (error) {
+        failures += 1;
+        entry.label = error.status === 404 ? "当前服务版本不支持该任务状态" : "暂时无法确认状态";
         renderProcessing();
+        if (error.status === 404 || (error.status && error.status < 500) || failures >= 3) return;
+        await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** (failures - 1))));
+        continue;
       }
       await new Promise((resolve) => setTimeout(resolve, 1500));
     }
@@ -508,24 +514,39 @@ async function pollProcessing(id) {
   const entry = state.processing.get(id);
   if (!entry || entry.polling) return;
   entry.polling = true;
+  let failures = 0;
   try {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       let current;
-      try { current = await fetchJson(`/v1/knowledge/${encodeURIComponent(id)}/processing`); }
-      catch (error) {
-        entry.label = error.status === 404 ? "已接收，等待建立处理任务" : readableError(error);
+      try {
+        current = await fetchJson(`/v1/knowledge/${encodeURIComponent(id)}/processing`);
+        failures = 0;
+      } catch (error) {
+        failures += 1;
+        entry.label = error.status === 404
+          ? "当前服务版本不支持该任务状态"
+          : "暂时无法确认状态";
         renderProcessing();
-        if (error.status !== 404) return;
+        if (error.status === 404 || (error.status && error.status < 500) || failures >= 3) return;
+        await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** (failures - 1))));
+        continue;
       }
-      if (current) {
-        entry.label = current.searchable ? "已可检索" : processingNames[current.public_status || current.status] || "资料处理中";
-        entry.ready = Boolean(current.searchable);
-        if (current.job_status === "failed" || current.job_status === "dead" || ["failed", "dead", "cancelled"].includes(current.status)) {
-          entry.label = current.redacted_summary ? `处理未完成：${current.redacted_summary}` : "处理未完成，请稍后检查或重新处理。";
-          renderProcessing(); return;
-        }
+      Object.assign(entry, { etag: current.etag, retryable: current.retryable });
+      const status = current.public_status || current.status;
+      entry.ready = status === "succeeded" && current.searchable === true;
+      entry.label = entry.ready ? "已可检索" : processingNames[status] || "资料处理中";
+      if (["failed", "unsupported", "partial", "dead_letter", "dead", "cancelled", "parse_failed"].includes(status)) {
+        entry.terminal = true;
+        entry.state = status;
+        entry.label = `${current.error_code || current.failure_code || status}：${current.redacted_summary || "处理未完成，请补充资料或重新处理。"}`;
         renderProcessing();
-        if (entry.ready) { await loadKnowledge(); return; }
+        return;
+      }
+      renderProcessing();
+      if (entry.ready) {
+        state.processing.delete(id);
+        await loadKnowledge();
+        return;
       }
       await new Promise((resolve) => setTimeout(resolve, 1500));
     }
@@ -557,6 +578,7 @@ function renderProcessing() {
       actions.append(action("刷新进度", () => entry.kind === "pdf" ? pollPdfTask(id) : pollProcessing(id), "secondary small"));
     }
     if (entry.retryable && entry.terminal) actions.append(action("重试", (event) => retryImportTask(id, entry, event.currentTarget), "secondary small"));
+    if (entry.terminal) actions.append(action("补充资料", () => openDialog("import-dialog"), "secondary small"));
     if (entry.kind === "pdf" && entry.terminal) actions.append(action("查看详情", () => loadPdfDetail(entry), "quiet small"));
     actions.querySelectorAll("button").forEach((button) => { button.disabled = Boolean(entry.polling); });
     li.append(actions);
@@ -564,6 +586,7 @@ function renderProcessing() {
   }));
 }
 function entryLabel(entry) {
+  if (entry.kind === "pdf" && entry.label) return entry.label;
   if (entry.kind === "pdf") return processingNames[entry.state] || entry.state || "正在解析 PDF";
   if (entry.failure && entry.terminal) return entry.failure.redacted_summary || "处理失败";
   return entry.label || processingNames[entry.status] || "资料处理中";
@@ -583,12 +606,13 @@ async function retryImportTask(id, entry, button) {
         "If-Match": entry.etag || "",
         "Idempotency-Key": crypto.randomUUID(),
       };
-      const response = await fetchJson(`/v1/knowledge/pdf-imports/${encodeURIComponent(id)}/retry`, {
+      const retryUrl = entry.kind === "pdf" ? `/v1/knowledge/pdf-imports/${encodeURIComponent(id)}/retry` : `/v1/knowledge/${encodeURIComponent(id)}/retry`;
+      const response = await fetchJson(retryUrl, {
         method: "POST", headers, body: "{}",
       });
       Object.assign(entry, { state: response.state || "queued", terminal: false, retryable: false, failure: null });
       renderProcessing();
-      pollPdfTask(id);
+      if (entry.kind === "pdf") pollPdfTask(id); else pollProcessing(id);
   }, null);
 }
 function loadPdfDetail(entry) {

@@ -342,8 +342,6 @@ def _assert_current_lease(session: Session, job: ClaimedKnowledgeJob) -> None:
     )
     if row is None:
         raise ParserProtocolError("lease_lost")
-    if not isinstance(row, Mapping):
-        return
     if str(row["status"]) != "processing":
         raise ParserProtocolError("lease_lost")
     if int(row["attempts"] or 0) != int(job.attempts):

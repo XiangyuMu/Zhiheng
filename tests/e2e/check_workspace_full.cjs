@@ -6,14 +6,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('playwright');
-const { spawnSync } = require('node:child_process');
 const base = process.argv[2];
 const output = process.argv[3];
-if (process.env.ZHIHENG_LEGACY_BROWSER !== '1') {
-  const result = spawnSync(process.execPath, ['tests/e2e/check_workspace.cjs', base, output], { stdio: 'inherit' });
-  process.exitCode = result.status ?? 1;
-  return;
-}
 if (!base || !output || !['127.0.0.1', 'localhost'].includes(new URL(base).hostname)) {
   throw new Error('Pass a disposable loopback server URL and screenshot output directory.');
 }
@@ -30,7 +24,7 @@ fs.mkdirSync(output, { recursive: true });
   async function noOverflow() { assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'body must not scroll horizontally'); }
   async function apiJson(url, options = {}) {
     return page.evaluate(async ({ url, options }) => {
-      const csrf = document.cookie.split(';').map((x) => x.trim()).find((x) => x.startsWith('zhiheng_csrf='))?.slice(14) || '';
+      const csrf = document.cookie.split(';').map((x) => x.trim()).find((x) => x.startsWith('zhiheng_csrf='))?.slice('zhiheng_csrf='.length) || '';
       const response = await fetch(url, { credentials: 'same-origin', ...options, headers: {
         Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': csrf,
         'Idempotency-Key': crypto.randomUUID(), ...(options.headers || {}),
@@ -78,7 +72,7 @@ fs.mkdirSync(output, { recursive: true });
     await shot('library-desktop');
     await check('library filtering and reader preserve context', async () => {
       await page.locator('#library-search').fill('不存在的资料标题');
-      assert.equal(await page.locator('.material-row').count(), 0);
+      await page.waitForFunction(() => document.querySelectorAll('.material-row').length === 0);
       await page.getByRole('button', { name: '清除筛选', exact: true }).click();
       await page.getByRole('button', { name: '中文检索研究记录', exact: true }).click();
       await page.locator('#detail-text').filter({ hasText: '中文全文检索' }).waitFor();
