@@ -78,12 +78,12 @@ fs.mkdirSync(output, { recursive: true });
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: "issue17-relations",
+          username: "issue17-workspace",
           password: "issue17 workspace passphrase",
         }),
       });
     });
-    await page.locator("#username").fill("issue17-relations");
+    await page.locator("#username").fill("issue17-workspace");
     await page.locator("#password").fill("issue17 workspace passphrase");
     await page.locator("#form button").click();
     await page.waitForURL("**/knowledge-agent**");
@@ -98,7 +98,7 @@ fs.mkdirSync(output, { recursive: true });
     }
 
     await page.goto(`${base}/review-center`);
-    await page.locator("#relation-count").filter({ hasText: "3" }).waitFor();
+    await page.locator(".queue-item").filter({ hasText: "关系建议" }).filter({ hasText: "关系审核" }).nth(2).waitFor();
     await check("relation suggestions appear in the central review queue", async () => {
       assert.equal(await page.locator(".queue-item").filter({ hasText: "关系建议" }).count(), 3);
       await page.locator(".queue-item").filter({ hasText: "关系建议" }).filter({ hasText: "每天复习无效" }).click();
@@ -116,7 +116,7 @@ fs.mkdirSync(output, { recursive: true });
     await check("deferred relation remains reviewable", async () => {
       assert.equal(await apiJson(`/v1/conclusions/${deferred.id}/relations`).then((body) => body.items[0].status), "deferred");
       await page.reload();
-      await page.locator("#relation-count").filter({ hasText: "3" }).waitFor();
+      await page.locator(".queue-item").filter({ hasText: "关系建议" }).filter({ hasText: "关系审核" }).nth(2).waitFor();
     });
 
     await page.locator(".queue-item").filter({ hasText: "关系建议" }).filter({ hasText: "每天复习不能提高记忆" }).click();
