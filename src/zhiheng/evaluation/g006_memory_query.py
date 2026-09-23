@@ -4,6 +4,7 @@ The migrated serving baseline remains intact. This offline probe injects only
 the candidate's declared router knob, not a forged approved release or score.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Any, Never
 
 from sqlalchemy.orm import Session
@@ -44,7 +45,9 @@ class _CountingRagBoundary(BoundedAgenticRagService):
         release_context: ReleaseContext | None = None,
         behavior: ReleaseBehaviorConfig | None = None,
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> Never:
+        del conversation_context
         self.calls += 1
         raise _UnexpectedRagCall("structured retention entered the RAG boundary")
 

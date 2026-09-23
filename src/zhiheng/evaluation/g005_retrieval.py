@@ -42,7 +42,7 @@ from zhiheng.retrieval import (
     VectorIndexRepository,
     VectorRetriever,
 )
-from zhiheng.retrieval.contracts import Citation, HybridRetrievalResult
+from zhiheng.retrieval.contracts import AuthorizedContextManifest, Citation, HybridRetrievalResult
 
 
 @dataclass(frozen=True)
@@ -83,12 +83,13 @@ class _DeterministicAnswerModel:
         self,
         *,
         query: str,
-        manifest: object,
+        manifest: AuthorizedContextManifest,
         citations: Sequence[Citation],
         max_output_tokens: int | None = None,
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> GeneratedAnswer:
-        del memory_context
+        del memory_context, conversation_context, manifest
         if not citations:
             return GeneratedAnswer(
                 answer="知识库中没有足够的已授权证据支撑回答。",

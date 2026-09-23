@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import text
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import new_id
@@ -233,4 +234,4 @@ class ConversationRepository:
             ),
             {"favorite": favorite, "id": history_id, "owner": owner_user_id},
         )
-        return result.rowcount > 0
+        return bool(cast(CursorResult[Any], result).rowcount > 0)

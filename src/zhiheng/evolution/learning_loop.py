@@ -143,16 +143,16 @@ class LearningLoopService:
         """Record one immutable observation; duplicate trajectory observations replay."""
         attribution = self._attributor.attribute(envelope)
         if evaluation_id is None:
-            row = session.execute(
+            evaluation_row = session.execute(
                 text(
                     "SELECT id FROM task_evaluations "
                     "WHERE trajectory_id=:trajectory_id ORDER BY created_at, id LIMIT 1"
                 ),
                 {"trajectory_id": envelope.trajectory_id},
             ).first()
-            if row is None:
+            if evaluation_row is None:
                 raise ValueError("trajectory evaluation is required before learning observation")
-            evaluation_id = str(row[0])
+            evaluation_id = str(evaluation_row[0])
         signal_key = sha256_text(f"{envelope.trajectory_id}:{evaluation_id}:learning.v1")
         evidence_refs = tuple(attribution.evidence_refs)
         eligible = (
@@ -192,7 +192,7 @@ class LearningLoopService:
                 "details_json": json_text(payload),
             },
         )
-        row = session.execute(
+        signal_row = session.execute(
             text(
                 """
                 SELECT id, learning_eligible, evidence_refs_json
@@ -202,13 +202,13 @@ class LearningLoopService:
             {"signal_key": signal_key},
         ).mappings().one()
         return LearningSignal(
-            signal_id=str(row["id"]),
+            signal_id=str(signal_row["id"]),
             trajectory_id=envelope.trajectory_id,
             evaluation_id=evaluation_id,
             attribution=attribution.kind,
             attribution_confidence=attribution.confidence,
-            learning_eligible=bool(row["learning_eligible"]),
-            evidence_refs=tuple(_string_list(row["evidence_refs_json"])),
+            learning_eligible=bool(signal_row["learning_eligible"]),
+            evidence_refs=tuple(_string_list(signal_row["evidence_refs_json"])),
         )
 
     def cluster_gaps(
