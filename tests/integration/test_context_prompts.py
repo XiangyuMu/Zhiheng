@@ -7,9 +7,12 @@ from tests.integration.test_personal_updates import _update
 def test_relevant_conflict_is_returned_with_sources_and_can_be_deferred(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
     csrf = _login(client)
-    assert client.post(
-        "/v1/personal-updates", json=_update("北京"), headers=_headers(csrf, "context-city-1")
-    ).status_code == 200
+    assert (
+        client.post(
+            "/v1/personal-updates", json=_update("北京"), headers=_headers(csrf, "context-city-1")
+        ).status_code
+        == 200
+    )
     conflict = client.post(
         "/v1/personal-updates", json=_update("上海"), headers=_headers(csrf, "context-city-2")
     ).json()["result"]
@@ -74,6 +77,9 @@ def test_missing_context_prompt_is_relevant_persistent_and_skippable(tmp_path: P
     )
     assert skipped.status_code == 200, skipped.text
     assert skipped.json()["result"]["status"] == "skipped"
-    assert client.get(
-        "/v1/personal-updates/context-prompts", params={"query": "我的工作偏好是什么？"}
-    ).json()["items"] == []
+    assert (
+        client.get(
+            "/v1/personal-updates/context-prompts", params={"query": "我的工作偏好是什么？"}
+        ).json()["items"]
+        == []
+    )

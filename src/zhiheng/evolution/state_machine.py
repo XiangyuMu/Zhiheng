@@ -13,12 +13,8 @@ from zhiheng.evolution.contracts import (
 )
 
 _PROPOSAL_TRANSITIONS: Mapping[ProposalState, frozenset[ProposalState]] = {
-    ProposalState.CANDIDATE: frozenset(
-        {ProposalState.EVIDENCE_READY, ProposalState.DEPRECATED}
-    ),
-    ProposalState.EVIDENCE_READY: frozenset(
-        {ProposalState.VALIDATING, ProposalState.DEPRECATED}
-    ),
+    ProposalState.CANDIDATE: frozenset({ProposalState.EVIDENCE_READY, ProposalState.DEPRECATED}),
+    ProposalState.EVIDENCE_READY: frozenset({ProposalState.VALIDATING, ProposalState.DEPRECATED}),
     ProposalState.VALIDATING: frozenset(
         {
             ProposalState.APPROVED,
@@ -61,9 +57,7 @@ _ROLE_CAPABILITIES: Mapping[EvolutionRole, frozenset[EvolutionCapability]] = {
 
 @dataclass(frozen=True, slots=True)
 class EvolutionStateMachine:
-    def can_transition_proposal(
-        self, current: ProposalState, next_state: ProposalState
-    ) -> bool:
+    def can_transition_proposal(self, current: ProposalState, next_state: ProposalState) -> bool:
         return next_state in _PROPOSAL_TRANSITIONS[current]
 
     def validate_proposal_transition(

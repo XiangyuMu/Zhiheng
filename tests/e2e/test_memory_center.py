@@ -44,8 +44,8 @@ def test_memory_center_page_and_assets_are_authenticated_same_origin(
     assert js.status_code == 200
     assert b"innerHTML" not in js.content
     assert b"textContent" in js.content
-    assert b'editItem: (id) => `/v1/memory/items/${encodeURIComponent(id)}`' in js.content
-    assert b'mutate(isFormal ? API.editItem(item.id) : API.editCandidate(item.id)' in js.content
+    assert b"editItem: (id) => `/v1/memory/items/${encodeURIComponent(id)}`" in js.content
+    assert b"mutate(isFormal ? API.editItem(item.id) : API.editCandidate(item.id)" in js.content
     assert b'"PATCH"' in js.content
     assert "编辑正式记忆".encode() in js.content
     assert "保存为新正式版本".encode() in js.content
@@ -56,6 +56,9 @@ def test_memory_center_page_and_assets_are_authenticated_same_origin(
     assert "修改依据".encode() in js.content
     assert "版本绑定证据".encode() in js.content
     assert "后端未返回影响说明".encode() in js.content
+    assert b"/v1/memory/profile-preview" in js.content
+    assert "正式画像预览".encode() in page.content
+    assert "候选记忆不会出现在这里".encode() in page.content
     assert b'"X-CSRF-Token"' in js.content
     assert b'"Idempotency-Key"' in js.content
     assert b'"If-Match"' in js.content

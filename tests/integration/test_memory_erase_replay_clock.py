@@ -19,7 +19,8 @@ from zhiheng.privacy.erase_journal import ExternalEraseJournal
 
 @pytest.mark.parametrize("target_type", ["formal_memory", "memory_candidate"])
 def test_memory_erase_replay_preserves_terminal_row_across_clock_change(
-    tmp_path: Path, target_type: str,
+    tmp_path: Path,
+    target_type: str,
 ) -> None:
     database_url = f"sqlite:///{tmp_path / 'memory.sqlite'}"
     config = Config("alembic.ini")
@@ -39,26 +40,38 @@ def test_memory_erase_replay_preserves_terminal_row_across_clock_change(
                 repository = MemoryRepository()
                 if target_type == "formal_memory":
                     result = repository.commit_explicit_memory(
-                        session, MemoryValue("goal", "goal.clock", {"text": "synthetic sentinel"}),
+                        session,
+                        MemoryValue("goal", "goal.clock", {"text": "synthetic sentinel"}),
                         operation_key="synthetic-clock-seed",
                     )
                     assert result.formal_memory_id is not None
                     target_id = result.formal_memory_id
                 else:
-                    target_id = repository.propose_candidate(session, MemoryCandidateInput(
-                        candidate_type="inferred", memory_type="goal", state_key="goal.clock",
-                        proposed_value={"text": "synthetic candidate sentinel"},
-                        rationale="synthetic clock probe", source_kind="agent_inferred",
-                        confidence=0.7,
-                    ))
+                    target_id = repository.propose_candidate(
+                        session,
+                        MemoryCandidateInput(
+                            candidate_type="inferred",
+                            memory_type="goal",
+                            state_key="goal.clock",
+                            proposed_value={"text": "synthetic candidate sentinel"},
+                            rationale="synthetic clock probe",
+                            source_kind="agent_inferred",
+                            confidence=0.7,
+                        ),
+                    )
                 session.commit()
                 intent = service.request_erase(
-                    session, target_type=target_type, target_id=target_id,
-                    requester="synthetic-user", reason="synthetic clock probe",
+                    session,
+                    target_type=target_type,
+                    target_id=target_id,
+                    requester="synthetic-user",
+                    reason="synthetic clock probe",
                 )
                 service.execute_memory_erase(
-                    session, request_id=intent.request_id,
-                    target_type=target_type, target_id=target_id,
+                    session,
+                    request_id=intent.request_id,
+                    target_type=target_type,
+                    target_id=target_id,
                 )
                 session.commit()
                 query = text(f"SELECT * FROM {table} WHERE id = :id")
@@ -74,9 +87,10 @@ def test_memory_erase_replay_preserves_terminal_row_across_clock_change(
                     assert repository.l0_context(session) == {}
                     session.commit()
                 with pytest.raises(IntegrityError, match="is terminal"):
-                    session.execute(text(
-                        f"UPDATE {table} SET status = 'active' WHERE id = :id"
-                    ), {"id": target_id})
+                    session.execute(
+                        text(f"UPDATE {table} SET status = 'active' WHERE id = :id"),
+                        {"id": target_id},
+                    )
                 session.rollback()
     finally:
         engine.dispose()

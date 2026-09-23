@@ -198,12 +198,17 @@ class JobRepository:
         return claimed
 
     def _dead_letter_exhausted_leases(
-        self, session: Session, *, allowed_json: str, limit: int,
+        self,
+        session: Session,
+        *,
+        allowed_json: str,
+        limit: int,
     ) -> None:
         """A crash on the last allowed attempt must not leave a job processing forever."""
-        rows = session.execute(
-            text(
-                """
+        rows = (
+            session.execute(
+                text(
+                    """
                 UPDATE jobs
                 SET status='dead', lease_owner=NULL, lease_expires_at=NULL,
                     updated_at=CURRENT_TIMESTAMP
@@ -217,8 +222,12 @@ class JobRepository:
                 )
                 RETURNING id, payload_json
                 """
-            ), {"allowed_json": allowed_json, "limit": limit},
-        ).mappings().all()
+                ),
+                {"allowed_json": allowed_json, "limit": limit},
+            )
+            .mappings()
+            .all()
+        )
         for row in rows:
             session.execute(
                 text(
@@ -226,15 +235,20 @@ class JobRepository:
                     "error_class='LeaseExpired', "
                     "error_message='final attempt lease expired; effect outcome may be committed' "
                     "WHERE job_id=:job_id AND status='processing' AND finished_at IS NULL"
-                ), {"job_id": row["id"]},
+                ),
+                {"job_id": row["id"]},
             )
             session.execute(
                 text(
                     "INSERT INTO dead_letters (id, job_id, payload_json, failure_summary) "
                     "VALUES (:id, :job_id, :payload_json, :failure_summary)"
                 ),
-                {"id": new_id(), "job_id": row["id"], "payload_json": row["payload_json"],
-                 "failure_summary": "LeaseExpired: final attempt exhausted; reconcile effects"},
+                {
+                    "id": new_id(),
+                    "job_id": row["id"],
+                    "payload_json": row["payload_json"],
+                    "failure_summary": "LeaseExpired: final attempt exhausted; reconcile effects",
+                },
             )
 
     def complete(
@@ -264,8 +278,12 @@ class JobRepository:
                   )
                 """
             ),
-            {"job_id": job.id, "attempts": job.attempts, "owner": job.lease_owner,
-             "attempt_id": job.attempt_id},
+            {
+                "job_id": job.id,
+                "attempts": job.attempts,
+                "owner": job.lease_owner,
+                "attempt_id": job.attempt_id,
+            },
         )
         if int(session.execute(text("SELECT changes()")).scalar_one()) != 1:
             return False
@@ -628,7 +646,9 @@ class EvolutionJobExecutor:
         session_factory = self._stage_session_factory()
         with session_scope(session_factory) as session:
             outputs = self._execute_maintenance_in_session(
-                session, job.payload, idempotency_key=job.idempotency_key,
+                session,
+                job.payload,
+                idempotency_key=job.idempotency_key,
             )
         return JobResult(
             status="completed",

@@ -28,8 +28,7 @@ def test_g006_canary_case_blocks_undersampled_canary_before_stable(
     }
     assert facts["sample_counts"] == [0, 1, 2, 3, 4]
     assert all(
-        attempt["error_message"]
-        == "canary requires real append-only observations before stable"
+        attempt["error_message"] == "canary requires real append-only observations before stable"
         for attempt in facts["attempts"]
     )
     assert all(
@@ -71,8 +70,7 @@ def test_g006_canary_case_fails_if_preflight_is_removed(
     assert outcomes["release.insufficient_canary_samples_blocks_stable"] is False
     assert outcomes["release.no_stable_promotion"] is True
     assert all(
-        attempt["error_message"]
-        != "canary requires real append-only observations before stable"
+        attempt["error_message"] != "canary requires real append-only observations before stable"
         for attempt in facts["attempts"]
     )
 
@@ -128,7 +126,8 @@ def test_g006_canary_case_does_not_authorize_five_observation_probe(
 
 
 def test_promotion_rejects_caller_owned_deferred_transaction(
-    monkeypatch: Any, tmp_path: Path,
+    monkeypatch: Any,
+    tmp_path: Path,
 ) -> None:
     original = g006_canary_case._insert_negative_canary_probe
 
@@ -140,7 +139,9 @@ def test_promotion_rejects_caller_owned_deferred_transaction(
     monkeypatch.setattr(g006_canary_case, "_CANARY_SAMPLE_COUNTS", (0,))
     monkeypatch.setattr(g006_canary_case, "_insert_negative_canary_probe", with_open_transaction)
     facts, outcomes = execute_canary_case(
-        project_root=Path.cwd(), work_dir=tmp_path, candidate_id="deferred-transaction",
+        project_root=Path.cwd(),
+        work_dir=tmp_path,
+        candidate_id="deferred-transaction",
         target_component="retrieval.answer_strategy",
         artifact_payload=default_release_artifact(),
     )

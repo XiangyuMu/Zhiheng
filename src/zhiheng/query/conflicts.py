@@ -36,7 +36,7 @@ def explicit_constraint_conflicts(claims: Sequence[AnswerClaim]) -> tuple[str, .
             positive = match["modal"] == "必须"
             for negative, affirmative in _OPPOSITES.items():
                 if action.startswith(negative):
-                    action = affirmative + action[len(negative):]
+                    action = affirmative + action[len(negative) :]
                     positive = not positive
                     break
             polarities = seen.setdefault((scope, action), {})

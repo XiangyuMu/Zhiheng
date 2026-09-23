@@ -1,0 +1,249 @@
+{
+  "schema_version": "pdf-parser.manifest.v1",
+  "task_id": "fixture-mixed-layout",
+  "source": {
+    "evidence_object_id": "fixture-source",
+    "uri": "zhiheng-artifact:source/mixed-layout.pdf",
+    "sha256": "9033221356fa5b198ba5dc6566bc4ed392a87a0ab1c49e6d23ac3f88302d1075"
+  },
+  "parser": {
+    "backend": "deepdoc",
+    "version": "source-b9df87c4+adapter-v1",
+    "attempt_id": "fixture-attempt"
+  },
+  "pages": [
+    {
+      "page_no": 1,
+      "width": 612,
+      "height": 792,
+      "rotation": 0,
+      "crop_box": [0, 0, 612, 792],
+      "user_unit": 1,
+      "render": null,
+      "status": "parsed"
+    },
+    {
+      "page_no": 2,
+      "width": 612,
+      "height": 792,
+      "rotation": 0,
+      "crop_box": [0, 0, 612, 792],
+      "user_unit": 1,
+      "render": null,
+      "status": "parsed"
+    },
+    {
+      "page_no": 3,
+      "width": 576,
+      "height": 744,
+      "rotation": 90,
+      "crop_box": [18, 24, 594, 768],
+      "user_unit": 1,
+      "render": null,
+      "status": "failed"
+    }
+  ],
+  "blocks": [
+    {
+      "key": "title-1",
+      "page_no": 1,
+      "region_type": "title",
+      "reading_order": 0,
+      "bbox": [36, 36, 300, 72],
+      "raw_bbox": [36, 684, 300, 720],
+      "raw_space": "pdf_bottom_left",
+      "transform_version": "pdf-crop-rotate-v1",
+      "text": "Mixed PDF",
+      "quote_hash": "e551ac988d1bca1563be8afe5e92bb6b21160da1eff857ab4ade7ae0e1b614d3",
+      "confidence": 0.99,
+      "status": "formal",
+      "parent_key": null,
+      "text_source": "text_layer"
+    },
+    {
+      "key": "body-1",
+      "page_no": 1,
+      "region_type": "paragraph",
+      "reading_order": 1,
+      "bbox": [36, 90, 360, 126],
+      "raw_bbox": [36, 666, 360, 702],
+      "raw_space": "pdf_bottom_left",
+      "transform_version": "pdf-crop-rotate-v1",
+      "text": "Healthy text layer survives.",
+      "quote_hash": "de7b791944a131790328063ecbf9236642b93c791b6c3af84968d4f4e387aea3",
+      "confidence": 0.98,
+      "status": "formal",
+      "parent_key": null,
+      "text_source": "text_layer"
+    },
+    {
+      "key": "table-1",
+      "page_no": 1,
+      "region_type": "table",
+      "reading_order": 2,
+      "bbox": [36, 160, 360, 280],
+      "raw_bbox": [36, 512, 360, 632],
+      "raw_space": "pdf_bottom_left",
+      "transform_version": "pdf-crop-rotate-v1",
+      "text": "Name | Value\nAlpha | 1\nBeta | 2",
+      "quote_hash": "0a074cbdf75a30ae8d9045fe3ad6a855e093c51239b685c0ce1eb00646e6daf2",
+      "confidence": 0.91,
+      "status": "formal",
+      "parent_key": null,
+      "text_source": "text_layer"
+    },
+    {
+      "key": "image-1",
+      "page_no": 1,
+      "region_type": "image",
+      "reading_order": 3,
+      "bbox": [390, 160, 576, 300],
+      "raw_bbox": [390, 492, 576, 632],
+      "raw_space": "pdf_bottom_left",
+      "transform_version": "pdf-crop-rotate-v1",
+      "text": "",
+      "quote_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "confidence": null,
+      "status": "formal",
+      "parent_key": null,
+      "text_source": "none"
+    },
+    {
+      "key": "caption-1",
+      "page_no": 1,
+      "region_type": "caption",
+      "reading_order": 4,
+      "bbox": [390, 310, 576, 334],
+      "raw_bbox": [390, 458, 576, 482],
+      "raw_space": "pdf_bottom_left",
+      "transform_version": "pdf-crop-rotate-v1",
+      "text": "Figure 1: architecture overview",
+      "quote_hash": "fe7f31bdf7016097bbbd56b8c2e7fb0fb6c2421224a3b6b793cab3d5d4502372",
+      "confidence": 0.96,
+      "status": "formal",
+      "parent_key": null,
+      "text_source": "text_layer"
+    },
+    {
+      "key": "ocr-2",
+      "page_no": 2,
+      "region_type": "paragraph",
+      "reading_order": 0,
+      "bbox": [36, 36, 360, 72],
+      "raw_bbox": [36, 720, 360, 756],
+      "raw_space": "pdf_bottom_left",
+      "transform_version": "pdf-crop-rotate-v1",
+      "text": "Scanned page OCR text.",
+      "quote_hash": "9e77a1699a6d072d2af80a2266b3225a753cbcc6becbc3b537745bfd771e7616",
+      "confidence": 0.84,
+      "status": "formal",
+      "parent_key": null,
+      "text_source": "ocr",
+      "ocr_trigger": "missing"
+    }
+  ],
+  "tables": [
+    {
+      "key": "table-1",
+      "block_key": "table-1",
+      "rows": 3,
+      "cols": 2,
+      "cells": [
+        {
+          "row": 0,
+          "col": 0,
+          "rowspan": 1,
+          "colspan": 2,
+          "bbox": [36, 160, 360, 200],
+          "text": "Name | Value",
+          "is_header": true,
+          "status": "formal"
+        },
+        {
+          "row": 1,
+          "col": 0,
+          "rowspan": 1,
+          "colspan": 1,
+          "bbox": [36, 200, 198, 240],
+          "text": "Alpha",
+          "is_header": false,
+          "status": "formal"
+        },
+        {
+          "row": 1,
+          "col": 1,
+          "rowspan": 1,
+          "colspan": 1,
+          "bbox": [198, 200, 360, 240],
+          "text": "1",
+          "is_header": false,
+          "status": "formal"
+        },
+        {
+          "row": 2,
+          "col": 0,
+          "rowspan": 1,
+          "colspan": 1,
+          "bbox": [36, 240, 198, 280],
+          "text": "Beta",
+          "is_header": false,
+          "status": "formal"
+        },
+        {
+          "row": 2,
+          "col": 1,
+          "rowspan": 1,
+          "colspan": 1,
+          "bbox": [198, 240, 360, 280],
+          "text": "2",
+          "is_header": false,
+          "status": "formal"
+        }
+      ],
+      "merges": [{"row": 0, "col": 0, "rowspan": 1, "colspan": 2}],
+      "linear_text": "Name | Value\nAlpha | 1\nBeta | 2",
+      "structure_sha256": "3f728d5647dce7d2d86b4a5a51d03af40cbfeab4e1fc19593f4bb70f66b73a75"
+    }
+  ],
+  "images": [
+    {
+      "key": "image-1",
+      "block_key": "image-1",
+      "page_no": 1,
+      "bbox": [390, 160, 576, 300],
+      "artifact": {
+        "uri": "zhiheng-artifact:attempt/fixture/image-1.png",
+        "sha256": "d790cddd916ab1ec00386ae571ed61ed4ee6bd79a0ce7dfdb75266c5e7fe691e",
+        "media_type": "image/png",
+        "bytes": 25
+      },
+      "caption_block_keys": ["caption-1"],
+      "caption": "Figure 1: architecture overview",
+      "description": null,
+      "description_origin": "model",
+      "status": "retryable"
+    }
+  ],
+  "diagnostics": [
+    {
+      "code": "page_parse_failed",
+      "scope": "page",
+      "target": "3",
+      "retryable": true
+    },
+    {
+      "code": "image_model_timeout",
+      "scope": "image",
+      "target": "image-1",
+      "retryable": true
+    }
+  ],
+  "artifacts": [
+    {
+      "uri": "zhiheng-artifact:attempt/fixture/image-1.png",
+      "sha256": "d790cddd916ab1ec00386ae571ed61ed4ee6bd79a0ce7dfdb75266c5e7fe691e",
+      "media_type": "image/png",
+      "bytes": 25
+    }
+  ]
+}

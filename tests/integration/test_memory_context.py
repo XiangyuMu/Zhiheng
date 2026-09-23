@@ -260,7 +260,14 @@ def test_l0_and_complete_snapshot_have_separate_serialized_limits(tmp_path: Path
     }
     l0_size = len(json.dumps(l0, ensure_ascii=False, sort_keys=True).encode())
     assert l0_size <= L0_MAX_SERIALIZED_BYTES
-    assert len(json.dumps(
-        snapshot.canonical_payload(), ensure_ascii=False, sort_keys=True,
-    ).encode()) <= MAX_TOTAL_SERIALIZED_BYTES
+    assert (
+        len(
+            json.dumps(
+                snapshot.canonical_payload(),
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode()
+        )
+        <= MAX_TOTAL_SERIALIZED_BYTES
+    )
     assert snapshot.truncated

@@ -34,10 +34,18 @@ class OrphanArtifactGC:
     def prepare(self, session: Session, *, now: int | None = None) -> GCPlan:
         current = int(time.time() if now is None else now)
         cutoff = datetime.fromtimestamp(current, UTC) - timedelta(seconds=self._retention)
-        rows = session.execute(text(
-            """SELECT id FROM evolution_artifacts
+        rows = (
+            session.execute(
+                text(
+                    """SELECT id FROM evolution_artifacts
                WHERE status='draft' AND created_at <= :cutoff
-               ORDER BY id"""), {"cutoff": cutoff}).scalars().all()
+               ORDER BY id"""
+                ),
+                {"cutoff": cutoff},
+            )
+            .scalars()
+            .all()
+        )
         ids = tuple(str(item) for item in rows if self._is_unreferenced(session, str(item)))
         expires = current + 3600
         payload = {"ids": list(ids), "expires_at": expires}
@@ -67,9 +75,13 @@ class OrphanArtifactGC:
         for artifact_id in plan.artifact_ids:
             if not self._is_unreferenced(session, artifact_id):
                 continue
-            result = session.execute(text(
-                """DELETE FROM evolution_artifacts
-                   WHERE id=:id AND status='draft'"""), {"id": artifact_id})
+            result = session.execute(
+                text(
+                    """DELETE FROM evolution_artifacts
+                   WHERE id=:id AND status='draft'"""
+                ),
+                {"id": artifact_id},
+            )
             deleted += int(cast(Any, result).rowcount or 0)
         return deleted
 

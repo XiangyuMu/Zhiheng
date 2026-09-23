@@ -134,9 +134,7 @@ def decide_context_prompt(
 ) -> dict[str, Any]:
     operation_key, if_match = mutation
     conflict = session.execute(
-        text(
-            "SELECT id FROM memory_conflicts WHERE id=:id AND status='pending'"
-        ),
+        text("SELECT id FROM memory_conflicts WHERE id=:id AND status='pending'"),
         {"id": prompt_id},
     ).first()
     if conflict is not None:
@@ -309,9 +307,7 @@ def decide_conflict(
             request_id=request_id,
             operation_key=f"api:personal-conflict:confirm:{operation_key}",
         )
-        service.resolve_conflict(
-            session, conflict_id, "confirmed", owner_user_id=_user_id
-        )
+        service.resolve_conflict(session, conflict_id, "confirmed", owner_user_id=_user_id)
         response = {
             "status": "completed",
             "result": {"status": "confirmed", "formal_memory_id": result.formal_memory_id},
@@ -323,9 +319,7 @@ def decide_conflict(
         request_id=request_id,
         operation_key=f"api:personal-conflict:reject:{operation_key}",
     )
-    service.resolve_conflict(
-        session, conflict_id, "rejected", owner_user_id=_user_id
-    )
+    service.resolve_conflict(session, conflict_id, "rejected", owner_user_id=_user_id)
     response = {
         "status": "completed",
         "result": {"status": "rejected", "decision_id": result.decision_id},
@@ -337,16 +331,20 @@ def decide_conflict(
 def _replay_decision(
     session: Session, operation_key: str, request_hash: str
 ) -> dict[str, Any] | None:
-    row = session.execute(
-        text(
-            """
+    row = (
+        session.execute(
+            text(
+                """
             SELECT request_hash, status, result_json
             FROM memory_operation_receipts
             WHERE operation_key = :operation_key
             """
-        ),
-        {"operation_key": f"api:personal-conflict:{operation_key}"},
-    ).mappings().first()
+            ),
+            {"operation_key": f"api:personal-conflict:{operation_key}"},
+        )
+        .mappings()
+        .first()
+    )
     if row is None:
         return None
     if row["request_hash"] != request_hash:

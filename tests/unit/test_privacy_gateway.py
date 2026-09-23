@@ -62,8 +62,7 @@ def test_privacy_pipeline_redacts_card_like_person_address_and_medical_text() ->
     pipeline = PrivacyPipeline(analyzer=DeterministicPatternAnalyzer())
 
     result = pipeline.prepare_for_model(
-        "姓名：张三，住址：北京市海淀区中关村1号，卡号 4111 1111 1111 1111，"
-        "诊断：高血压。"
+        "姓名：张三，住址：北京市海淀区中关村1号，卡号 4111 1111 1111 1111，诊断：高血压。"
     )
 
     assert result.status == "redacted"

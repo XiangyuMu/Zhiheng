@@ -7,6 +7,7 @@ from zhiheng.query.contracts import (
     AnswerEnvelope,
     BudgetUsage,
     GeneratedAnswer,
+    MemoryImpact,
     StopReason,
     StructuredLookupResult,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "BoundedAgenticRagService",
     "BudgetUsage",
     "GeneratedAnswer",
+    "MemoryImpact",
     "QueryAnswerService",
     "StopReason",
     "StructuredLookupResult",

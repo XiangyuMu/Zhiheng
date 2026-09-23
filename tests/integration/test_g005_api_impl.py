@@ -168,7 +168,8 @@ def test_g005_decision_api_requires_explicit_save_and_never_executes_external_ac
     assert saved.json()["external_action_count"] == 0
     assert _formal_count(session_factory) == before + 1
     replayed = client.post(
-        f"/v1/decisions/{body['run_id']}/save", json={},
+        f"/v1/decisions/{body['run_id']}/save",
+        json={},
         headers=_headers(csrf, "decision-save"),
     )
     assert replayed.status_code == 200
@@ -217,7 +218,8 @@ def test_g005_gap_api_refresh_lists_and_dismisses_without_auto_ingest(tmp_path: 
     assert dismissed.status_code == 200
     assert listed_after.json()["items"] == []
     replayed = client.post(
-        f"/v1/knowledge-gaps/{items[0]['id']}/dismiss", json={},
+        f"/v1/knowledge-gaps/{items[0]['id']}/dismiss",
+        json={},
         headers=_headers(csrf, "gap-dismiss"),
     )
     assert replayed.status_code == 200
@@ -254,9 +256,9 @@ def test_g005_answer_response_has_no_extra_schema_fields(tmp_path: Path) -> None
         "insufficiencies",
         "stop_reason",
         "budget_usage",
-            "rows",
-            "context_prompts",
-        }
+        "rows",
+        "context_prompts",
+    }
 
 
 def test_answer_api_closes_receipt_transaction_before_answer_service(

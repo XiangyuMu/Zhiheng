@@ -32,17 +32,21 @@ def _ingest(
     text_value: str,
     artifacts: StoredTextArtifacts,
 ) -> str:
-    return KnowledgeRepository().ingest_text(
-        session,
-        TextEvidenceInput(
-            title=title,
-            primary_domain_id="technology.ai",
-            text=text_value,
-            source_metadata={"fixture": "synthetic"},
-        ),
-        user_authority=KnowledgeUserAuthority("synthetic-test-user"),
-        stored_artifacts=artifacts,
-    ).chunk_id
+    return (
+        KnowledgeRepository()
+        .ingest_text(
+            session,
+            TextEvidenceInput(
+                title=title,
+                primary_domain_id="technology.ai",
+                text=text_value,
+                source_metadata={"fixture": "synthetic"},
+            ),
+            user_authority=KnowledgeUserAuthority("synthetic-test-user"),
+            stored_artifacts=artifacts,
+        )
+        .chunk_id
+    )
 
 
 def test_sqlite_vec_dependency_is_available_for_g005_vector_retrieval() -> None:
@@ -76,13 +80,16 @@ def test_sqlite_vec_generation_rebuild_activate_and_search_from_empty_database(
         )
 
         assert inserted == 2
-        assert repository.search_active(
-            session,
-            [1.0, 0.0, 0.0],
-            model_id="BAAI/bge-m3",
-            model_revision="synthetic-revision",
-            dimension=3,
-        ) == []
+        assert (
+            repository.search_active(
+                session,
+                [1.0, 0.0, 0.0],
+                model_id="BAAI/bge-m3",
+                model_revision="synthetic-revision",
+                dimension=3,
+            )
+            == []
+        )
 
         repository.activate_generation(session, generation_id)
         hits = repository.search_active(
@@ -93,16 +100,20 @@ def test_sqlite_vec_generation_rebuild_activate_and_search_from_empty_database(
             dimension=3,
             limit=2,
         )
-        generation = session.execute(
-            text(
-                """
+        generation = (
+            session.execute(
+                text(
+                    """
                 SELECT physical_index_ref, built_count, source_manifest_hash
                 FROM embedding_generations
                 WHERE id = :generation_id
                 """
-            ),
-            {"generation_id": generation_id},
-        ).mappings().one()
+                ),
+                {"generation_id": generation_id},
+            )
+            .mappings()
+            .one()
+        )
 
     assert [hit.chunk_id for hit in hits] == [chunk_a, chunk_b]
     assert all(hit.generation == generation_id for hit in hits)
@@ -143,20 +154,26 @@ def test_building_and_shadow_generations_are_not_served(tmp_path: Path) -> None:
             {"generation_id": shadow_generation},
         )
 
-        assert repository.search_active(
-            session,
-            [1.0, 0.0, 0.0],
-            model_id="BAAI/bge-m3",
-            model_revision="built",
-            dimension=3,
-        ) == []
-        assert repository.search_active(
-            session,
-            [1.0, 0.0, 0.0],
-            model_id="BAAI/bge-m3",
-            model_revision="shadow",
-            dimension=3,
-        ) == []
+        assert (
+            repository.search_active(
+                session,
+                [1.0, 0.0, 0.0],
+                model_id="BAAI/bge-m3",
+                model_revision="built",
+                dimension=3,
+            )
+            == []
+        )
+        assert (
+            repository.search_active(
+                session,
+                [1.0, 0.0, 0.0],
+                model_id="BAAI/bge-m3",
+                model_revision="shadow",
+                dimension=3,
+            )
+            == []
+        )
 
         with pytest.raises(ValueError, match="only built"):
             repository.activate_generation(session, shadow_generation)

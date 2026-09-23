@@ -85,9 +85,10 @@ class KnowledgeJobRepository:
         limit: int = 10,
         lease_seconds: int = 300,
     ) -> list[ClaimedKnowledgeJob]:
-        rows = session.execute(
-            text(
-                """
+        rows = (
+            session.execute(
+                text(
+                    """
                 SELECT id, job_type, idempotency_key, payload_json, attempts
                 FROM jobs
                 WHERE available_at <= CURRENT_TIMESTAMP
@@ -104,9 +105,12 @@ class KnowledgeJobRepository:
                 ORDER BY available_at, id
                 LIMIT :limit
                 """
-            ),
-            {"job_type": KNOWLEDGE_INDEX_JOB_TYPE, "limit": limit},
-        ).mappings().all()
+                ),
+                {"job_type": KNOWLEDGE_INDEX_JOB_TYPE, "limit": limit},
+            )
+            .mappings()
+            .all()
+        )
 
         claimed: list[ClaimedKnowledgeJob] = []
         self._dead_letter_exhausted_leases(session, limit=limit)
@@ -215,10 +219,14 @@ class KnowledgeJobRepository:
     def fail(self, session: Session, job: ClaimedKnowledgeJob, *, exc: Exception) -> bool:
         if job.lease_owner is None or job.attempt_id is None:
             return False
-        row = session.execute(
-            text("SELECT attempts, max_attempts, payload_json FROM jobs WHERE id = :job_id"),
-            {"job_id": job.id},
-        ).mappings().one()
+        row = (
+            session.execute(
+                text("SELECT attempts, max_attempts, payload_json FROM jobs WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+            .mappings()
+            .one()
+        )
         attempts = int(row["attempts"])
         max_attempts = int(row["max_attempts"])
         terminal = attempts >= max_attempts
@@ -281,9 +289,10 @@ class KnowledgeJobRepository:
         return True
 
     def _dead_letter_exhausted_leases(self, session: Session, *, limit: int) -> None:
-        rows = session.execute(
-            text(
-                """
+        rows = (
+            session.execute(
+                text(
+                    """
                 UPDATE jobs
                 SET status = 'dead',
                     lease_owner = NULL,
@@ -301,9 +310,12 @@ class KnowledgeJobRepository:
                 )
                 RETURNING id, payload_json
                 """
-            ),
-            {"job_type": KNOWLEDGE_INDEX_JOB_TYPE, "limit": limit},
-        ).mappings().all()
+                ),
+                {"job_type": KNOWLEDGE_INDEX_JOB_TYPE, "limit": limit},
+            )
+            .mappings()
+            .all()
+        )
         for row in rows:
             self._record_expired_attempt_finish(session, job_id=str(row["id"]))
             session.execute(

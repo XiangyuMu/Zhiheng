@@ -417,9 +417,7 @@ def test_manifest_validation_failure_is_evidence_only() -> None:
 
 
 def test_agentic_service_exposes_no_external_action_ports() -> None:
-    public = {
-        name for name in dir(BoundedAgenticRagService) if not name.startswith("_")
-    }
+    public = {name for name in dir(BoundedAgenticRagService) if not name.startswith("_")}
 
     assert {"browse", "http", "send_message", "trade", "purchase", "publish", "execute"}.isdisjoint(
         public

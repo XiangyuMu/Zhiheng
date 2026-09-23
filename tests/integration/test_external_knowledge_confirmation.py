@@ -208,16 +208,20 @@ def test_external_confirmation_binds_expected_content_before_formal_serving(
         )
         hits = repository.search_formal_fts(session, "用户 确认")
         event_types = set(session.execute(text("SELECT event_type FROM outbox_events")).scalars())
-        decision = session.execute(
-            text(
-                """
+        decision = (
+            session.execute(
+                text(
+                    """
                 SELECT decided_by_user_id, final_value_json
                 FROM knowledge_confirmation_decisions
                 WHERE request_id = :request_id
                 """
-            ),
-            {"request_id": result.confirmation_request_id},
-        ).mappings().one()
+                ),
+                {"request_id": result.confirmation_request_id},
+            )
+            .mappings()
+            .one()
+        )
 
     assert result.confirmation_generation == 1
     assert hits[0].source_id == candidate.knowledge_object_id
@@ -323,11 +327,14 @@ def test_knowledge_api_user_import_is_authenticated_and_idempotent(tmp_path: Pat
 
     assert client.post("/v1/knowledge/imports", json=payload).status_code == 401
     csrf = _login(client)
-    assert client.post(
-        "/v1/knowledge/imports",
-        json={**payload, "source_kind": "manual"},
-        headers=_headers(csrf, "import-extra-field"),
-    ).status_code == 422
+    assert (
+        client.post(
+            "/v1/knowledge/imports",
+            json={**payload, "source_kind": "manual"},
+            headers=_headers(csrf, "import-extra-field"),
+        ).status_code
+        == 422
+    )
 
     first = client.post(
         "/v1/knowledge/imports",
@@ -382,17 +389,21 @@ def test_knowledge_api_import_writes_and_verifies_objects_outside_db_transaction
     assert object_store.verify_transaction_depths
     assert all(depth == 0 for depth in object_store.verify_transaction_depths)
     with session_scope(session_factory) as session:
-        artifacts = session.execute(
-            text(
-                """
+        artifacts = (
+            session.execute(
+                text(
+                    """
                 SELECT eo.object_uri, cv.text_artifact_uri, kv.markdown_uri,
                        eo.sha256, eo.byte_size
                 FROM evidence_objects eo
                 JOIN content_versions cv ON cv.evidence_object_id = eo.id
                 JOIN knowledge_versions kv ON kv.content_version_id = cv.id
                 """
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
     object_store.verify_text_artifacts(
         StoredTextArtifacts(
             evidence_object_uri=str(artifacts["object_uri"]),
@@ -445,14 +456,18 @@ def test_knowledge_api_external_confirmation_records_user_decision_and_replays(
     assert replay.json() == first.json()
     assert conflict.status_code == 409
     with session_scope(session_factory) as session:
-        decision = session.execute(
-            text(
-                """
+        decision = (
+            session.execute(
+                text(
+                    """
                 SELECT decided_by_user_id, final_value_json
                 FROM knowledge_confirmation_decisions
                 """
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
     assert decision["decided_by_user_id"]
     assert text_value not in str(decision["final_value_json"])
 

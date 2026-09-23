@@ -4,12 +4,14 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from tests.integration.test_worker_knowledge_indexing import _FakeEmbedder, _ingest, _migrated
 from tests.knowledge_helpers import stored_text_artifacts
 from zhiheng.core.ids import json_text, new_id
+from zhiheng.jobs.knowledge_contract import job_etag
 from zhiheng.jobs.knowledge_indexing import (
     KNOWLEDGE_INDEX_JOB_TYPE,
     ClaimedKnowledgeJob,
@@ -40,9 +42,11 @@ def test_stale_knowledge_claim_cannot_finish_or_fail_reclaimed_attempt(
         ) == ("processing", "new-worker", 2)
         assert repository.complete(session, second, result=_result("fresh-complete")) is True
     with factory() as session:
-        statuses = session.execute(
-            text("SELECT status FROM job_attempts ORDER BY started_at, id")
-        ).scalars().all()
+        statuses = (
+            session.execute(text("SELECT status FROM job_attempts ORDER BY started_at, id"))
+            .scalars()
+            .all()
+        )
         assert statuses.count("failed") == 1
         assert statuses.count("completed") == 1
         assert session.execute(text("SELECT count(*) FROM dead_letters")).scalar_one() == 0
@@ -66,6 +70,84 @@ def test_knowledge_ack_requires_exact_open_attempt(tmp_path: Path) -> None:
             before_attempts
         )
         assert session.execute(text("SELECT count(*) FROM dead_letters")).scalar_one() == 0
+
+
+def test_failed_knowledge_job_retry_creates_fenced_job_and_replays_idempotently(
+    tmp_path: Path,
+) -> None:
+    _settings, factory = _migrated(tmp_path)
+    repository = KnowledgeJobRepository()
+    with factory.begin() as session:
+        job_id = _enqueue_knowledge_job(
+            session, "knowledge-retry-source", knowledge_object_id="synthetic-knowledge"
+        )
+        claimed = repository.claim_available(session, worker_id="worker")[0]
+        assert repository.fail(session, claimed, exc=ValueError("parse failed")) is True
+        session.execute(text("UPDATE jobs SET status = 'failed' WHERE id = :id"), {"id": job_id})
+
+    with factory.begin() as session:
+        row = dict(
+            session.execute(
+                text(
+                    "SELECT id, status, attempts, max_attempts, updated_at FROM jobs WHERE id = :id"
+                ),
+                {"id": job_id},
+            )
+            .mappings()
+            .one()
+        )
+        first = repository.retry_failed_job(
+            session,
+            knowledge_object_id="synthetic-knowledge",
+            expected_job_id=job_id,
+            expected_etag=job_etag(row),
+            operation_key="retry-operation",
+        )
+        second = repository.retry_failed_job(
+            session,
+            knowledge_object_id="synthetic-knowledge",
+            expected_job_id=job_id,
+            expected_etag=job_etag(row),
+            operation_key="retry-operation",
+        )
+        assert first == second
+        assert first.previous_job_id == job_id
+        assert first.status == "pending"
+        assert session.execute(text("SELECT count(*) FROM jobs")).scalar_one() == 2
+        assert (
+            session.execute(
+                text("SELECT status FROM jobs WHERE id = :id"), {"id": job_id}
+            ).scalar_one()
+            == "failed"
+        )
+
+
+def test_failed_knowledge_job_retry_rejects_processing_and_stale_etag(tmp_path: Path) -> None:
+    _settings, factory = _migrated(tmp_path)
+    repository = KnowledgeJobRepository()
+    with factory.begin() as session:
+        job_id = _enqueue_knowledge_job(
+            session, "knowledge-retry-guards", knowledge_object_id="synthetic-knowledge"
+        )
+        repository.claim_available(session, worker_id="worker")
+        current = dict(
+            session.execute(
+                text(
+                    "SELECT id, status, attempts, max_attempts, updated_at FROM jobs WHERE id = :id"
+                ),
+                {"id": job_id},
+            )
+            .mappings()
+            .one()
+        )
+        with pytest.raises(ValueError, match="only failed or dead"):
+            repository.retry_failed_job(
+                session,
+                knowledge_object_id="synthetic-knowledge",
+                expected_job_id=job_id,
+                expected_etag=job_etag(current),
+                operation_key="retry-processing",
+            )
 
 
 def test_exhausted_knowledge_lease_is_dead_lettered_once(tmp_path: Path) -> None:
@@ -134,12 +216,15 @@ def test_process_knowledge_jobs_counts_only_acknowledged_completion(tmp_path: Pa
             del session, job, result
             return False
 
-    assert process_knowledge_jobs_once(
-        factory,
-        FakeExecutor(_settings),
-        worker_id="worker",
-        repository=RejectingRepository(),
-    ) == 0
+    assert (
+        process_knowledge_jobs_once(
+            factory,
+            FakeExecutor(_settings),
+            worker_id="worker",
+            repository=RejectingRepository(),
+        )
+        == 0
+    )
 
 
 def test_stale_knowledge_claim_cannot_activate_vector_generation(tmp_path: Path) -> None:
@@ -168,21 +253,32 @@ def test_stale_knowledge_claim_cannot_activate_vector_generation(tmp_path: Path)
             raise AssertionError("stale claim activated index generation")
         assert repository.fail(session, first, exc=RuntimeError("late failure")) is False
     with factory() as session:
-        assert session.execute(
-            text("SELECT count(*) FROM embedding_generations WHERE index_status = 'active'")
-        ).scalar_one() == 0
+        assert (
+            session.execute(
+                text("SELECT count(*) FROM embedding_generations WHERE index_status = 'active'")
+            ).scalar_one()
+            == 0
+        )
 
     result = executor.execute(factory, second)
     with factory.begin() as session:
         assert repository.complete(session, second, result=result) is True
     with factory() as session:
-        assert session.execute(
-            text("SELECT count(*) FROM embedding_generations WHERE index_status = 'active'")
-        ).scalar_one() == 1
+        assert (
+            session.execute(
+                text("SELECT count(*) FROM embedding_generations WHERE index_status = 'active'")
+            ).scalar_one()
+            == 1
+        )
         assert session.execute(text("SELECT status FROM jobs")).scalar_one() == "completed"
 
 
-def _enqueue_knowledge_job(session: Session, idempotency_key: str) -> str:
+def _enqueue_knowledge_job(
+    session: Session,
+    idempotency_key: str,
+    *,
+    knowledge_object_id: str = "synthetic-knowledge",
+) -> str:
     job_id = new_id()
     session.execute(
         text(
@@ -195,7 +291,9 @@ def _enqueue_knowledge_job(session: Session, idempotency_key: str) -> str:
             "id": job_id,
             "job_type": KNOWLEDGE_INDEX_JOB_TYPE,
             "idempotency_key": idempotency_key,
-            "payload_json": json_text({"fixture": "synthetic"}),
+            "payload_json": json_text(
+                {"fixture": "synthetic", "knowledge_object_id": knowledge_object_id}
+            ),
         },
     )
     return job_id

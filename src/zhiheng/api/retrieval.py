@@ -669,7 +669,9 @@ def citation_context(
             conversation_id=str(row["conversation_id"]),
             excerpt=str(row["evidence_excerpt"]),
             quote_hash=str(row["evidence_quote_hash"]),
-        ) if payload.source_type == "event_memory" else None,
+        )
+        if payload.source_type == "event_memory"
+        else None,
     )
 
 

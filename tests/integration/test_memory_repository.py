@@ -181,16 +181,20 @@ def test_delete_restore_and_rollback_each_create_new_generation(tmp_path: Path) 
             target_version_id=str(initial.formal_version_id),
             operation_key="rollback-style",
         )
-        generations = session.execute(
-            text(
-                """
+        generations = (
+            session.execute(
+                text(
+                    """
                 SELECT generation
                 FROM memory_generation_events
                 WHERE state_key = 'style.answer'
                 ORDER BY generation
                 """
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     assert rollback_source.generation == 2
     assert deleted.generation == 3
@@ -239,27 +243,35 @@ def test_privacy_erase_clears_candidate_and_formal_memory_content(tmp_path: Path
             target_type="formal_memory",
             target_id=formal_id,
         )
-        candidate_payloads = session.execute(
-            text("SELECT value_json FROM memory_candidate_versions")
-        ).scalars().all()
-        formal_payloads = session.execute(
-            text("SELECT value_json FROM formal_memory_versions")
-        ).scalars().all()
-        decision_payloads = session.execute(
-            text("SELECT final_value_json FROM memory_confirmation_decisions")
-        ).scalars().all()
+        candidate_payloads = (
+            session.execute(text("SELECT value_json FROM memory_candidate_versions"))
+            .scalars()
+            .all()
+        )
+        formal_payloads = (
+            session.execute(text("SELECT value_json FROM formal_memory_versions")).scalars().all()
+        )
+        decision_payloads = (
+            session.execute(text("SELECT final_value_json FROM memory_confirmation_decisions"))
+            .scalars()
+            .all()
+        )
         current_count = session.execute(
             text("SELECT count(*) FROM memory_current_state")
         ).scalar_one()
-        statuses = session.execute(
-            text(
-                """
+        statuses = (
+            session.execute(
+                text(
+                    """
                 SELECT status FROM memory_candidates
                 UNION ALL
                 SELECT status FROM formal_memories
                 """
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     assert candidate_payloads == ["{}"]
     assert formal_payloads == ["{}"]
@@ -345,15 +357,19 @@ def test_current_view_uses_pointer_and_restore_conflict_fails_closed(tmp_path: P
             MemoryValue("profile", "goal.primary", {"text": "second"}),
             operation_key="current-second",
         )
-        rows = session.execute(
-            text(
-                """
+        rows = (
+            session.execute(
+                text(
+                    """
                 SELECT id, value_json
                 FROM current_formal_memory
                 WHERE state_key = 'goal.primary'
                 """
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
         with pytest.raises(ValueError, match="conflicts"):
             repository.restore(
                 session,
@@ -403,9 +419,7 @@ def test_confirmation_expiry_and_proposed_hash_are_checked(tmp_path: Path) -> No
 
     with session_scope(session_factory) as session:
         tampered_candidate = repository.propose_candidate(session, _candidate())
-        tampered_request = repository.request_confirmation(
-            session, candidate_id=tampered_candidate
-        )
+        tampered_request = repository.request_confirmation(session, candidate_id=tampered_candidate)
         session.execute(
             text(
                 """
@@ -487,9 +501,7 @@ def test_same_state_key_updates_one_formal_memory_slot(tmp_path: Path) -> None:
             text("SELECT count(*) FROM formal_memories WHERE status = 'formal_current'")
         ).scalar_one()
         version_count = session.execute(
-            text(
-                "SELECT count(*) FROM formal_memory_versions WHERE formal_memory_id = :id"
-            ),
+            text("SELECT count(*) FROM formal_memory_versions WHERE formal_memory_id = :id"),
             {"id": first.formal_memory_id},
         ).scalar_one()
 
@@ -515,33 +527,41 @@ def test_candidate_edit_and_confirmation_preserve_version_evidence_lineage(
             request_id=request_id,
             operation_key="confirm-edited-lineage",
         )
-        candidate_refs = session.execute(
-            text(
-                """
+        candidate_refs = (
+            session.execute(
+                text(
+                    """
                 SELECT trajectory_id FROM memory_evidence_refs
                 WHERE target_type = 'memory_candidate'
                   AND target_id = :candidate_id
                   AND target_version_id = :version_id
                 """
-            ),
-            {"candidate_id": candidate_id, "version_id": edited_version_id},
-        ).scalars().all()
+                ),
+                {"candidate_id": candidate_id, "version_id": edited_version_id},
+            )
+            .scalars()
+            .all()
+        )
         formal_refs = repository.authorize_l2_evidence(
             session,
             formal_memory_id=str(result.formal_memory_id),
             formal_version_id=str(result.formal_version_id),
             generation=int(result.generation or 0),
         )
-        lineage = session.execute(
-            text(
-                """
+        lineage = (
+            session.execute(
+                text(
+                    """
                 SELECT source_kind, source_candidate_id, source_decision_id
                 FROM formal_memory_versions
                 WHERE id = :version_id
                 """
-            ),
-            {"version_id": result.formal_version_id},
-        ).mappings().one()
+                ),
+                {"version_id": result.formal_version_id},
+            )
+            .mappings()
+            .one()
+        )
 
     assert candidate_refs == ["traj-synthetic"]
     assert formal_refs[0]["trajectory_id"] == "traj-synthetic"

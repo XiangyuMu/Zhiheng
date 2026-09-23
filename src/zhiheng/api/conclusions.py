@@ -38,10 +38,7 @@ def _formalize_conclusion(
 
     if relation_kind == "duplicate" and related_entry_id is not None:
         duplicate_knowledge_id = session.execute(
-            text(
-                "SELECT knowledge_id FROM conclusion_entries "
-                "WHERE id=:id AND owner_user_id=:o"
-            ),
+            text("SELECT knowledge_id FROM conclusion_entries WHERE id=:id AND owner_user_id=:o"),
             {"id": related_entry_id, "o": user},
         ).scalar_one_or_none()
         if duplicate_knowledge_id is not None:
@@ -51,9 +48,7 @@ def _formalize_conclusion(
             return str(duplicate_knowledge_id)
 
     premises = item.get("premises", [])
-    condition = "、".join(
-        str(p.get("text", "")) for p in premises if not p.get("confirmed", False)
-    )
+    condition = "、".join(str(p.get("text", "")) for p in premises if not p.get("confirmed", False))
     text_value = f"如果{condition}，则{item['claim']}" if condition else str(item["claim"])
     artifacts = knowledge_object_store_for_settings(
         request.app.state.knowledge_settings
@@ -72,9 +67,7 @@ def _formalize_conclusion(
                 "source_id": item["source"]["id"],
                 "excerpt": item.get("excerpt"),
                 "classification": item.get("classification", {}),
-                "related_domain_ids": item.get("classification", {}).get(
-                    "related_domain_ids", []
-                ),
+                "related_domain_ids": item.get("classification", {}).get("related_domain_ids", []),
                 "relation_kind": relation_kind,
                 "related_entry_id": related_entry_id,
             },
@@ -85,10 +78,7 @@ def _formalize_conclusion(
     repo.attach_knowledge(session, user, entry_id, stored.knowledge_object_id)
     if relation_kind == "revision" and related_entry_id is not None:
         old_knowledge_id = session.execute(
-            text(
-                "SELECT knowledge_id FROM conclusion_entries "
-                "WHERE id=:id AND owner_user_id=:o"
-            ),
+            text("SELECT knowledge_id FROM conclusion_entries WHERE id=:id AND owner_user_id=:o"),
             {"id": related_entry_id, "o": user},
         ).scalar_one_or_none()
         if old_knowledge_id is not None:
@@ -166,24 +156,6 @@ def drafts(session: SessionDep, user: AuthDep, limit: int = 100) -> dict[str, An
     return {"items": repo.list_drafts(session, user, limit=limit)}
 
 
-@router.patch("/{entry_id}")
-def update_draft(
-    entry_id: str,
-    payload: DraftUpdatePayload,
-    session: SessionDep,
-    user: AuthDep,
-    mutation: MutationDep,
-) -> dict[str, Any]:
-    key, etag = mutation
-    changes = {
-        name: value for name, value in payload.model_dump(mode="json").items() if value is not None
-    }
-    try:
-        return repo.update_draft(session, user, entry_id, etag, changes, key)
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
 @router.post("/{entry_id}/defer")
 def defer_draft(
     entry_id: str, session: SessionDep, user: AuthDep, mutation: MutationDep
@@ -202,6 +174,24 @@ def reject_draft(
     key, etag = mutation
     try:
         return repo.decide_draft(session, user, entry_id, etag, "rejected", key)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.patch("/{entry_id}")
+def update_draft(
+    entry_id: str,
+    payload: DraftUpdatePayload,
+    session: SessionDep,
+    user: AuthDep,
+    mutation: MutationDep,
+) -> dict[str, Any]:
+    key, etag = mutation
+    changes = {
+        name: value for name, value in payload.model_dump(mode="json").items() if value is not None
+    }
+    try:
+        return repo.update_draft(session, user, entry_id, etag, changes, key)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 

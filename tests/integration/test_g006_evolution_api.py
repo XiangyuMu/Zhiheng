@@ -53,9 +53,12 @@ def test_maintenance_http_outbox_worker_roundtrip(tmp_path: Path, mode: dict[str
             "SELECT status FROM jobs WHERE job_type = 'maintenance'"
         ).fetchall()
         assert rows == [("completed",)]
-        assert connection.execute(
-            "SELECT count(*) FROM release_transition_events WHERE next_state = 'stable'"
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM release_transition_events WHERE next_state = 'stable'"
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def _client(tmp_path: Path) -> tuple[TestClient, Path]:
@@ -124,10 +127,12 @@ def _seed_release_graph(db_path: Path) -> dict[str, str]:
         )
         proposal_id = connection.execute(
             "SELECT proposal_id FROM release_inputs WHERE id = ?",
-            (connection.execute(
-                "SELECT release_input_id FROM strategy_releases WHERE id = ?",
-                (prepared.release_id,),
-            ).fetchone()[0],),
+            (
+                connection.execute(
+                    "SELECT release_input_id FROM strategy_releases WHERE id = ?",
+                    (prepared.release_id,),
+                ).fetchone()[0],
+            ),
         ).fetchone()[0]
         connection.execute(
             """

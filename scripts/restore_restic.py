@@ -74,6 +74,7 @@ def _restore_from_env() -> None:
                 restore_root = temp_root / "restored"
                 _run_restic_restore(binary, snapshot_id, restore_root)
                 bundle = _single_restored_bundle(restore_root)
+                _refuse_sqlite_sidecars(bundle / "database.sqlite")
                 survivors = prepare_restored_bundle(bundle, journal, project_root=project_root)
                 _install_surviving_objects(bundle / "objects", object_root, survivors)
                 restored_database = bundle / "database.sqlite"
@@ -275,6 +276,16 @@ def _compact_and_verify_database(database: Path) -> None:
             raise RuntimeError("restored database integrity check failed")
     finally:
         connection.close()
+    _clear_sqlite_sidecars(database)
+
+
+def _clear_sqlite_sidecars(database: Path) -> None:
+    """Remove only transient sidecars created while compacting staged SQLite."""
+    for path in (Path(f"{database}{suffix}") for suffix in SIDECAR_SUFFIXES):
+        if path.is_symlink():
+            raise RuntimeError("refusing symlink SQLite sidecar")
+        if path.exists():
+            path.unlink()
 
 
 def _replace_database(source: Path, destination: Path) -> None:

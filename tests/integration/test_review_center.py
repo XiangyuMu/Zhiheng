@@ -12,10 +12,13 @@ def _draft(client, csrf: str, key: str) -> dict:
     response = client.post(
         "/v1/conclusions",
         json={
-            "source_id": source["id"], "title": "复习结论", "claim": "固定条件下复习有效",
+            "source_id": source["id"],
+            "title": "复习结论",
+            "claim": "固定条件下复习有效",
             "domain_id": "education_learning",
             "premises": [{"text": "固定条件", "confirmed": False}],
-            "excerpt": source["text"], "evidence": [{"text": source["text"]}],
+            "excerpt": source["text"],
+            "evidence": [{"text": source["text"]}],
         },
         headers=_headers(csrf, key + "-draft"),
     )
@@ -36,7 +39,8 @@ def test_review_center_summary_exposes_details_and_defer_is_reopenable(tmp_path:
     assert "relations" in item
     deferred = client.post(
         f"/v1/conclusions/{draft['id']}/defer",
-        json={}, headers=_headers(csrf, "review-center-defer", draft["etag"]),
+        json={},
+        headers=_headers(csrf, "review-center-defer", draft["etag"]),
     )
     assert deferred.status_code == 200, deferred.text
     reopened = client.get("/v1/review/summary").json()

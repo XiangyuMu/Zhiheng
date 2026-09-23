@@ -24,13 +24,14 @@ from zhiheng.privacy.erase import PrivacyEraseService
 from zhiheng.privacy.erase_journal import ExternalEraseJournal
 
 
-def execute_recovery_case(*, project_root: Path, work_dir: Path) -> tuple[
-    dict[str, Any], dict[str, bool]
-]:
+def execute_recovery_case(
+    *, project_root: Path, work_dir: Path
+) -> tuple[dict[str, Any], dict[str, bool]]:
     work_dir.mkdir(parents=True, exist_ok=True)
     database, objects = work_dir / "source.sqlite", work_dir / "objects"
     settings = Settings(
-        environment="test", database_url=f"sqlite:///{database}",
+        environment="test",
+        database_url=f"sqlite:///{database}",
         knowledge_object_store_path=str(objects),
     )
     config = Config(str(project_root / "alembic.ini"))
@@ -40,17 +41,23 @@ def execute_recovery_case(*, project_root: Path, work_dir: Path) -> tuple[
     engine = create_sqlite_engine(settings)
     factory = create_session_factory(engine)
     facts: dict[str, Any] = {}
-    outcomes = {key: False for key in (
-        "delete.pass_rate_100", "rollback.pass_rate_100", "privacy_erase.pass_rate_100",
-        "backup_restore.erased_object_not_revived",
-    )}
+    outcomes = {
+        key: False
+        for key in (
+            "delete.pass_rate_100",
+            "rollback.pass_rate_100",
+            "privacy_erase.pass_rate_100",
+            "backup_restore.erased_object_not_revived",
+        )
+    }
     secret = "protected-synthetic-recovery-journal-secret"
     journal = work_dir / "erase.jsonl"
     try:
         memory = MemoryRepository()
         with factory.begin() as session:
             initial = memory.commit_explicit_memory(
-                session, MemoryValue("goal", "goal.recovery", {"text": "original"}),
+                session,
+                MemoryValue("goal", "goal.recovery", {"text": "original"}),
                 operation_key="recovery-initial",
             )
             formal_id, version = str(initial.formal_memory_id), str(initial.formal_version_id)
@@ -59,29 +66,37 @@ def execute_recovery_case(*, project_root: Path, work_dir: Path) -> tuple[
             memory.restore(session, formal_memory_id=formal_id, operation_key="restore")
             restored = memory.l0_context(session) == {"goal.recovery": {"text": "original"}}
             memory.commit_explicit_memory(
-                session, MemoryValue("goal", "goal.recovery", {"text": "changed"}),
+                session,
+                MemoryValue("goal", "goal.recovery", {"text": "changed"}),
                 operation_key="recovery-change",
             )
             memory.rollback(
-                session, formal_memory_id=formal_id, target_version_id=version,
+                session,
+                formal_memory_id=formal_id,
+                target_version_id=version,
                 operation_key="rollback",
             )
             outcomes["delete.pass_rate_100"] = deleted and restored
-            outcomes["rollback.pass_rate_100"] = (
-                memory.l0_context(session) == {"goal.recovery": {"text": "original"}}
-            )
+            outcomes["rollback.pass_rate_100"] = memory.l0_context(session) == {
+                "goal.recovery": {"text": "original"}
+            }
         item = KnowledgeIngestionService(settings).ingest_user_text(
-            factory, TextEvidenceInput(
-                title="synthetic recovery", text="synthetic erasable evidence sentinel",
+            factory,
+            TextEvidenceInput(
+                title="synthetic recovery",
+                text="synthetic erasable evidence sentinel",
                 primary_domain_id="technology.ai",
-            ), user_authority=KnowledgeUserAuthority("protected-synthetic-user"),
+            ),
+            user_authority=KnowledgeUserAuthority("protected-synthetic-user"),
         )
         paths = [path for path in objects.rglob("*") if path.is_file()]
         engine.dispose()
         binary = os.environ.get("ZHIHENG_RESTIC_BINARY") or shutil.which("restic")
         env = {
-            "PATH": os.environ.get("PATH", ""), "PYTHONPATH": str(project_root / "src"),
-            "ZHIHENG_ENVIRONMENT": "test", "ZHIHENG_SECRET_KEY": secret,
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONPATH": str(project_root / "src"),
+            "ZHIHENG_ENVIRONMENT": "test",
+            "ZHIHENG_SECRET_KEY": secret,
             "RESTIC_REPOSITORY": str(work_dir / "repository"),
             "RESTIC_PASSWORD": "protected-synthetic-backup-password",
             "RESTIC_CACHE_DIR": str(work_dir / "restic-cache"),
@@ -92,30 +107,45 @@ def execute_recovery_case(*, project_root: Path, work_dir: Path) -> tuple[
         if binary:
             env["ZHIHENG_RESTIC_BINARY"] = binary
             _run([binary, "init"], project_root, env)
-            snapshot = json.loads(_run(
-                [sys.executable, "scripts/backup_restic.py"], project_root, env,
-            ))["snapshot_id"]
+            snapshot = json.loads(
+                _run(
+                    [sys.executable, "scripts/backup_restic.py"],
+                    project_root,
+                    env,
+                )
+            )["snapshot_id"]
         else:
             facts["backup_failure"] = "restic_not_configured"
         erase = PrivacyEraseService(
-            ExternalEraseJournal(journal, secret), object_store_root=objects,
+            ExternalEraseJournal(journal, secret),
+            object_store_root=objects,
         )
         with factory() as session:
             intent = erase.request_erase(
-                session, target_type="knowledge_object", target_id=item.knowledge_object_id,
-                requester="user", reason="synthetic recovery probe",
+                session,
+                target_type="knowledge_object",
+                target_id=item.knowledge_object_id,
+                requester="user",
+                reason="synthetic recovery probe",
             )
             erase.execute_knowledge_erase(
-                session, request_id=intent.request_id, knowledge_object_id=item.knowledge_object_id,
+                session,
+                request_id=intent.request_id,
+                knowledge_object_id=item.knowledge_object_id,
             )
             session.commit()
             intent = erase.request_erase(
-                session, target_type="formal_memory", target_id=formal_id,
-                requester="user", reason="synthetic recovery probe",
+                session,
+                target_type="formal_memory",
+                target_id=formal_id,
+                requester="user",
+                reason="synthetic recovery probe",
             )
             erase.execute_memory_erase(
-                session, request_id=intent.request_id,
-                target_type="formal_memory", target_id=formal_id,
+                session,
+                request_id=intent.request_id,
+                target_type="formal_memory",
+                target_id=formal_id,
             )
             session.commit()
             memory_hidden = not memory.l0_context(session)
@@ -126,12 +156,14 @@ def execute_recovery_case(*, project_root: Path, work_dir: Path) -> tuple[
         facts["erased_artifact_count"] = sum(not path.exists() for path in paths)
         if snapshot:
             target_db, target_objects = work_dir / "restored.sqlite", work_dir / "restored-objects"
-            env.update({
-                "ZHIHENG_DATABASE_PATH": str(target_db),
-                "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH": str(target_objects),
-                "ZHIHENG_ERASE_JOURNAL_PATH": str(journal),
-                "ZHIHENG_RESTIC_SNAPSHOT_ID": snapshot,
-            })
+            env.update(
+                {
+                    "ZHIHENG_DATABASE_PATH": str(target_db),
+                    "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH": str(target_objects),
+                    "ZHIHENG_ERASE_JOURNAL_PATH": str(journal),
+                    "ZHIHENG_RESTIC_SNAPSHOT_ID": snapshot,
+                }
+            )
             _run([sys.executable, "scripts/restore_restic.py"], project_root, env)
             with closing(sqlite3.connect(target_db)) as connection:
                 visible = connection.execute(
@@ -148,14 +180,19 @@ def execute_recovery_case(*, project_root: Path, work_dir: Path) -> tuple[
 
 def _run(args: list[str], root: Path, env: dict[str, str]) -> str:
     result = subprocess.run(
-        args, cwd=root, env=env, check=False, capture_output=True, text=True, timeout=60,
+        args,
+        cwd=root,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     if result.returncode:
         # These subprocesses operate only on code-owned synthetic fixtures.
         # Preserve their diagnostics: CalledProcessError's default text omits
         # captured stderr and otherwise makes intermittent restore failures opaque.
         raise RuntimeError(
-            f"synthetic recovery subprocess failed ({result.returncode}): "
-            f"{result.stderr[-8000:]}"
+            f"synthetic recovery subprocess failed ({result.returncode}): {result.stderr[-8000:]}"
         )
     return result.stdout

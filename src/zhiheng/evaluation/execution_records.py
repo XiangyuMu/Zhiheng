@@ -8,6 +8,7 @@ from dataclasses import asdict
 from typing import Any
 
 from zhiheng.core.ids import sha256_json
+from zhiheng.evaluation.contracts import validate_evaluation_contract
 from zhiheng.evaluation.g006_registry import REGISTERED_FIXED_CASES
 
 # v3 also requires the real formal-memory context consumer and recommendations.
@@ -28,16 +29,30 @@ def verify_execution_record(row: dict[str, Any], *, secret: str) -> dict[str, An
 
 
 def require_passing_execution(
-    record: dict[str, Any], *, proposal_id: str, binding_digest: str, artifact_digest: str,
+    record: dict[str, Any],
+    *,
+    proposal_id: str,
+    binding_digest: str,
+    artifact_digest: str,
     expected_stage: str = "validation",
 ) -> None:
-    if (record.get("proposal_id") != proposal_id
+    contract = record.get("evaluation_contract")
+    if not isinstance(contract, dict):
+        raise ValueError("execution evaluation contract is missing")
+    validate_evaluation_contract(contract)
+    if contract.get("status") != "passed":
+        raise ValueError("failed fixed assertions; evaluation contract is not promotion eligible")
+    if (
+        record.get("proposal_id") != proposal_id
         or record.get("binding_digest") != binding_digest
-        or record.get("artifact_digest") != artifact_digest):
+        or record.get("artifact_digest") != artifact_digest
+    ):
         raise ValueError("execution proposal or artifact binding mismatch")
-    if (record.get("runner_version") != RUNNER_VERSION
+    if (
+        record.get("runner_version") != RUNNER_VERSION
         or record.get("stage") != expected_stage
-        or record.get("profile") != "local_contract"):
+        or record.get("profile") != "local_contract"
+    ):
         raise ValueError("execution runner/stage/profile mismatch")
     expected_suite = sha256_json({"cases": [asdict(case) for case in REGISTERED_FIXED_CASES]})
     if record.get("suite_digest") != expected_suite:
@@ -49,9 +64,9 @@ def require_passing_execution(
         raise ValueError("execution must cover every registered case exactly once")
     for observed, registered in zip(cases, REGISTERED_FIXED_CASES, strict=True):
         assertions = observed.get("assertions", [])
-        if (observed.get("set_name") != registered.set_name
-            or sorted(item.get("name", "") for item in assertions)
-            != sorted(registered.required_assertions)):
+        if observed.get("set_name") != registered.set_name or sorted(
+            item.get("name", "") for item in assertions
+        ) != sorted(registered.required_assertions):
             raise ValueError("execution assertion coverage mismatch")
         if observed.get("failure_tags") or any(
             item.get("passed") is not True for item in assertions

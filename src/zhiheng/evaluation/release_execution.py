@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from zhiheng.core.ids import json_text, new_id, sha256_json, sha256_text
+from zhiheng.evaluation.contracts import build_fixed_suite_contract
 from zhiheng.evaluation.execution_records import RUNNER_VERSION, verify_execution_record
 from zhiheng.evaluation.g006_registry import REGISTERED_FIXED_CASES
 from zhiheng.evaluation.g006_runner import (
@@ -39,7 +40,10 @@ _EXPECTED_PREVIOUS_STATES = {
 
 class ReleaseExecutionService:
     def __init__(
-        self, *, session_factory: sessionmaker[Session], project_root: Path,
+        self,
+        *,
+        session_factory: sessionmaker[Session],
+        project_root: Path,
         deployment_secret: str,
     ) -> None:
         if not deployment_secret:
@@ -49,7 +53,11 @@ class ReleaseExecutionService:
         self._secret = deployment_secret
 
     def execute(
-        self, *, release_id: str, stage: G006ExecutionStage, idempotency_key: str,
+        self,
+        *,
+        release_id: str,
+        stage: G006ExecutionStage,
+        idempotency_key: str,
     ) -> dict[str, Any]:
         if stage not in _SUPPORTED_STAGES:
             raise ValueError("release execution supports only replay, shadow, and canary stages")
@@ -66,7 +74,9 @@ class ReleaseExecutionService:
             existing = self._load_key(session, key_digest)
             if existing is not None:
                 _validate_existing(
-                    existing, release_id=release_id, stage=stage,
+                    existing,
+                    release_id=release_id,
+                    stage=stage,
                     binding_digest=binding.canonical_digest(),
                 )
                 return existing
@@ -107,9 +117,9 @@ class ReleaseExecutionService:
             "binding_digest": binding.canonical_digest(),
             "artifact_digest": binding.approved_artifact_digest,
             "baseline_binding_digest": baseline.binding_digest,
-            "suite_digest": sha256_json({
-                "cases": [asdict(case) for case in REGISTERED_FIXED_CASES]
-            }),
+            "suite_digest": sha256_json(
+                {"cases": [asdict(case) for case in REGISTERED_FIXED_CASES]}
+            ),
             "source_validation": {
                 "validation_report_id": release_input["validation_report_id"],
                 "proposal_execution_run_id": release_input["proposal_execution_run_id"],
@@ -119,13 +129,35 @@ class ReleaseExecutionService:
             "cases": [asdict(case) for case in run.observed_cases],
             "report": run.evaluation_report.canonical_payload(),
         }
+        record["evaluation_contract"] = build_fixed_suite_contract(
+            fixture_set_digest="sha256:"
+            + sha256_json({"cases": [asdict(case) for case in REGISTERED_FIXED_CASES]}),
+            policy_threshold_digest="sha256:"
+            + sha256_json(
+                {
+                    "candidate_false_activation_max": 0,
+                    "privacy_leak_count_max": 0,
+                    "external_action_count_max": 0,
+                }
+            ),
+            runner_environment_digest="sha256:" + sha256_json({"runner_version": RUNNER_VERSION}),
+            cases=run.observed_cases,
+            aggregate_metrics={
+                **run.evaluation_report.scores,
+                "candidate_false_activation": 0,
+                "privacy_leak_count": 0,
+                "external_action_count": 0,
+            },
+        )
         with self._factory.begin() as session:
             # Serialize racing retries; keep the first complete immutable run.
             session.execute(text("BEGIN IMMEDIATE"))
             existing = self._load_key(session, key_digest)
             if existing is not None:
                 _validate_existing(
-                    existing, release_id=release_id, stage=stage,
+                    existing,
+                    release_id=release_id,
+                    stage=stage,
                     binding_digest=binding.canonical_digest(),
                 )
                 return existing
@@ -141,42 +173,54 @@ class ReleaseExecutionService:
                 or fresh.binding.canonical_digest() != binding.canonical_digest()
             ):
                 raise ValueError("release changed before stage execution could be recorded")
-            record["trajectory_ids"] = list(ProtectedFixedSuiteRunner(
-                project_root=self._project_root
-            ).persist_trajectories(
-                run,
-                repository=TrajectoryRepository(deployment_secret=self._secret),
-                idempotency_key_prefix=f"release-execution:{record['id']}",
-                session=session,
-            ))
+            record["trajectory_ids"] = list(
+                ProtectedFixedSuiteRunner(project_root=self._project_root).persist_trajectories(
+                    run,
+                    repository=TrajectoryRepository(deployment_secret=self._secret),
+                    idempotency_key_prefix=f"release-execution:{record['id']}",
+                    session=session,
+                )
+            )
             encoded = json_text(record)
-            session.execute(text(
-                "INSERT INTO release_execution_runs "
-                "(id, release_id, proposal_id, stage, idempotency_digest, "
-                "record_json, record_hmac) "
-                "VALUES (:id, :release, :proposal, :stage, :key, :record, :signature)"
-            ), {
-                "id": record["id"],
-                "release": release_id,
-                "proposal": proposal_id,
-                "stage": stage.value,
-                "key": key_digest,
-                "record": encoded,
-                "signature": self._signature(encoded),
-            })
+            session.execute(
+                text(
+                    "INSERT INTO release_execution_runs "
+                    "(id, release_id, proposal_id, stage, idempotency_digest, "
+                    "record_json, record_hmac) "
+                    "VALUES (:id, :release, :proposal, :stage, :key, :record, :signature)"
+                ),
+                {
+                    "id": record["id"],
+                    "release": release_id,
+                    "proposal": proposal_id,
+                    "stage": stage.value,
+                    "key": key_digest,
+                    "record": encoded,
+                    "signature": self._signature(encoded),
+                },
+            )
         return json.loads(encoded)  # type: ignore[no-any-return]
 
     def load(self, run_id: str) -> dict[str, Any]:
         with self._factory.begin() as session:
-            row = session.execute(text(
-                "SELECT * FROM release_execution_runs WHERE id = :id"
-            ), {"id": run_id}).mappings().one()
+            row = (
+                session.execute(
+                    text("SELECT * FROM release_execution_runs WHERE id = :id"), {"id": run_id}
+                )
+                .mappings()
+                .one()
+            )
             return self._verify(dict(row))
 
     def _load_key(self, session: Session, digest: str) -> dict[str, Any] | None:
-        row = session.execute(text(
-            "SELECT * FROM release_execution_runs WHERE idempotency_digest = :key"
-        ), {"key": digest}).mappings().first()
+        row = (
+            session.execute(
+                text("SELECT * FROM release_execution_runs WHERE idempotency_digest = :key"),
+                {"key": digest},
+            )
+            .mappings()
+            .first()
+        )
         return self._verify(dict(row)) if row is not None else None
 
     def _signature(self, encoded: str) -> str:
@@ -186,17 +230,16 @@ class ReleaseExecutionService:
 
     def _verify(self, row: dict[str, Any]) -> dict[str, Any]:
         record = verify_execution_record(row, secret=self._secret)
-        if (
-            record.get("release_id") != row["release_id"]
-            or record.get("stage") != row["stage"]
-        ):
+        if record.get("release_id") != row["release_id"] or record.get("stage") != row["stage"]:
             raise ValueError("release execution record row binding mismatch")
         return record
 
 
 def _load_release_input(session: Session, release_id: str) -> dict[str, Any]:
-    row = session.execute(text(
-        """
+    row = (
+        session.execute(
+            text(
+                """
         SELECT ri.proposal_id, ri.validation_report_id, ri.source_trajectory_ids_json,
                vr.fixed_set_result_json
         FROM strategy_releases sr
@@ -204,7 +247,12 @@ def _load_release_input(session: Session, release_id: str) -> dict[str, Any]:
         JOIN validation_reports vr ON vr.id = ri.validation_report_id
         WHERE sr.id = :release_id
         """
-    ), {"release_id": release_id}).mappings().one()
+            ),
+            {"release_id": release_id},
+        )
+        .mappings()
+        .one()
+    )
     source = json.loads(cast(str, row["source_trajectory_ids_json"]))
     fixed_report = json.loads(cast(str, row["fixed_set_result_json"]))
     if not isinstance(source, dict):
@@ -222,7 +270,10 @@ def _load_release_input(session: Session, release_id: str) -> dict[str, Any]:
 
 
 def _validate_existing(
-    record: dict[str, Any], *, release_id: str, stage: G006ExecutionStage,
+    record: dict[str, Any],
+    *,
+    release_id: str,
+    stage: G006ExecutionStage,
     binding_digest: str,
 ) -> None:
     if (

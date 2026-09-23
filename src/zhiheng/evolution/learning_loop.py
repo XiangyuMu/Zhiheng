@@ -70,23 +70,30 @@ class FailureAttributor:
         stop_reason = str(result.get("stop_reason", "")).lower()
         haystack = " ".join((*tags, stop_reason))
 
-        if "memory_context_changed" in haystack or "memory" in haystack and (
-            "misuse" in haystack or quality.get("memory_misused") is True
+        if (
+            "memory_context_changed" in haystack
+            or "memory" in haystack
+            and ("misuse" in haystack or quality.get("memory_misused") is True)
         ):
             kind = FailureAttributionKind.MEMORY_MISUSE
             explanation = "记忆上下文校验失败或被标记为误用。"
         elif any(
-            token in haystack
-            for token in ("model_failed", "invalid_model_output", "tool_failed")
+            token in haystack for token in ("model_failed", "invalid_model_output", "tool_failed")
         ):
             kind = FailureAttributionKind.TOOL_MODEL_FAILURE
             explanation = "模型或工具调用未能产出可验证结果。"
         elif any(token in haystack for token in ("ambiguous", "ambiguity", "input_ambiguous")):
             kind = FailureAttributionKind.INPUT_AMBIGUITY
             explanation = "输入信息不足或存在歧义，无法稳定确定任务。"
-        elif any(token in haystack for token in (
-            "no_new_authorized_evidence", "repeated_query", "retrieval", "no_authorized",
-        )):
+        elif any(
+            token in haystack
+            for token in (
+                "no_new_authorized_evidence",
+                "repeated_query",
+                "retrieval",
+                "no_authorized",
+            )
+        ):
             chunks = process.get("context_chunks", result.get("context_chunks", 0))
             if chunks in (None, 0):
                 kind = FailureAttributionKind.RETRIEVAL_INSUFFICIENT
@@ -143,16 +150,16 @@ class LearningLoopService:
         """Record one immutable observation; duplicate trajectory observations replay."""
         attribution = self._attributor.attribute(envelope)
         if evaluation_id is None:
-            evaluation_row = session.execute(
+            row = session.execute(
                 text(
                     "SELECT id FROM task_evaluations "
                     "WHERE trajectory_id=:trajectory_id ORDER BY created_at, id LIMIT 1"
                 ),
                 {"trajectory_id": envelope.trajectory_id},
             ).first()
-            if evaluation_row is None:
+            if row is None:
                 raise ValueError("trajectory evaluation is required before learning observation")
-            evaluation_id = str(evaluation_row[0])
+            evaluation_id = str(row[0])
         signal_key = sha256_text(f"{envelope.trajectory_id}:{evaluation_id}:learning.v1")
         evidence_refs = tuple(attribution.evidence_refs)
         eligible = (
@@ -192,23 +199,27 @@ class LearningLoopService:
                 "details_json": json_text(payload),
             },
         )
-        signal_row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT id, learning_eligible, evidence_refs_json
                 FROM trajectory_learning_signals WHERE signal_key=:signal_key
                 """
-            ),
-            {"signal_key": signal_key},
-        ).mappings().one()
+                ),
+                {"signal_key": signal_key},
+            )
+            .mappings()
+            .one()
+        )
         return LearningSignal(
-            signal_id=str(signal_row["id"]),
+            signal_id=str(row["id"]),
             trajectory_id=envelope.trajectory_id,
             evaluation_id=evaluation_id,
             attribution=attribution.kind,
             attribution_confidence=attribution.confidence,
-            learning_eligible=bool(signal_row["learning_eligible"]),
-            evidence_refs=tuple(_string_list(signal_row["evidence_refs_json"])),
+            learning_eligible=bool(row["learning_eligible"]),
+            evidence_refs=tuple(_string_list(row["evidence_refs_json"])),
         )
 
     def cluster_gaps(
@@ -224,9 +235,10 @@ class LearningLoopService:
         if task_family:
             family_filter = "AND tt.task_family=:task_family"
             params["task_family"] = task_family
-        rows = session.execute(
-            text(
-                f"""
+        rows = (
+            session.execute(
+                text(
+                    f"""
                 SELECT tls.attribution, count(*) AS occurrence_count
                 FROM trajectory_learning_signals tls
                 JOIN task_trajectories tt ON tt.id=tls.trajectory_id
@@ -236,28 +248,33 @@ class LearningLoopService:
                 HAVING count(*) >= :threshold
                 ORDER BY tls.attribution
                 """
-            ),
-            params,
-        ).mappings().all()
+                ),
+                params,
+            )
+            .mappings()
+            .all()
+        )
         clusters: list[KnowledgeGapCluster] = []
         for row in rows:
             attribution = FailureAttributionKind(str(row["attribution"]))
-            cluster_key = sha256_text(
-                f"learning.v1:{task_family or '*'}:{attribution.value}"
-            )
-            refs = session.execute(
-                text(
-                    """
+            cluster_key = sha256_text(f"learning.v1:{task_family or '*'}:{attribution.value}")
+            refs = (
+                session.execute(
+                    text(
+                        """
                     SELECT evidence_refs_json FROM trajectory_learning_signals
                     WHERE attribution=:attribution AND signal_kind='failure'
                     ORDER BY created_at DESC, id DESC LIMIT 32
                     """
-                ),
-                {"attribution": attribution.value},
-            ).scalars().all()
-            evidence_refs = tuple(dict.fromkeys(
-                ref for value in refs for ref in _string_list(value)
-            ))
+                    ),
+                    {"attribution": attribution.value},
+                )
+                .scalars()
+                .all()
+            )
+            evidence_refs = tuple(
+                dict.fromkeys(ref for value in refs for ref in _string_list(value))
+            )
             gap_id = new_id()
             session.execute(
                 text(
@@ -281,15 +298,19 @@ class LearningLoopService:
                     "evidence_refs_json": json_text(list(evidence_refs)),
                 },
             )
-            existing = session.execute(
-                text(
-                    """
+            existing = (
+                session.execute(
+                    text(
+                        """
                     SELECT id, occurrence_count, evidence_refs_json, status, proposal_id
                     FROM knowledge_gap_clusters WHERE cluster_key=:cluster_key
                     """
-                ),
-                {"cluster_key": cluster_key},
-            ).mappings().one()
+                    ),
+                    {"cluster_key": cluster_key},
+                )
+                .mappings()
+                .one()
+            )
             clusters.append(
                 KnowledgeGapCluster(
                     gap_id=str(existing["id"]),

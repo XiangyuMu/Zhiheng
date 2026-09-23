@@ -747,9 +747,7 @@ def test_model_gateway_revalidates_task_binding_during_claim(tmp_path: Path) -> 
 
     def mutate_task_after_prepare() -> None:
         with session_scope(session_factory) as session:
-            session.execute(
-                text("UPDATE outbound_payload_approvals SET task_id = 'other-task'")
-            )
+            session.execute(text("UPDATE outbound_payload_approvals SET task_id = 'other-task'"))
 
     gateway = ModelGateway._for_test(
         session_factory=session_factory,
@@ -829,9 +827,7 @@ def test_model_gateway_rejects_tampered_prepared_audit_before_network(tmp_path: 
 
     def tamper_prepared_audit() -> None:
         with session_scope(session_factory) as session:
-            session.execute(
-                text("UPDATE model_call_audits SET model_id = 'tampered-model'")
-            )
+            session.execute(text("UPDATE model_call_audits SET model_id = 'tampered-model'"))
 
     gateway = ModelGateway._for_test(
         session_factory=session_factory,
@@ -1067,9 +1063,12 @@ def test_privacy_gateway_snapshots_are_append_only_and_phase_bound(tmp_path: Pat
         _insert_provider(session)
         _insert_approval(session, approval_id="immutable-approval", final_payload_hash=payload_hash)
 
-    with sqlite3.connect(db_path) as connection, pytest.raises(
-        sqlite3.IntegrityError,
-        match="immutable",
+    with (
+        sqlite3.connect(db_path) as connection,
+        pytest.raises(
+            sqlite3.IntegrityError,
+            match="immutable",
+        ),
     ):
         connection.execute(
             """
@@ -1080,9 +1079,12 @@ def test_privacy_gateway_snapshots_are_append_only_and_phase_bound(tmp_path: Pat
             (sha256_text("tampered"),),
         )
 
-    with sqlite3.connect(db_path) as connection, pytest.raises(
-        sqlite3.IntegrityError,
-        match="immutable",
+    with (
+        sqlite3.connect(db_path) as connection,
+        pytest.raises(
+            sqlite3.IntegrityError,
+            match="immutable",
+        ),
     ):
         connection.execute(
             """

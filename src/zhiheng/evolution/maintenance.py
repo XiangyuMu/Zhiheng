@@ -243,28 +243,36 @@ class SleepLearningMaintenanceService:
             },
         )
         lock_inserted = int(session.execute(text("SELECT changes()")).scalar_one()) == 1
-        lock = session.execute(
-            text(
-                """
+        lock = (
+            session.execute(
+                text(
+                    """
                 SELECT payload_digest
                 FROM maintenance_job_locks
                 WHERE idempotency_digest = :idempotency_digest
                 """
-            ),
-            {"idempotency_digest": key_digest},
-        ).mappings().one()
+                ),
+                {"idempotency_digest": key_digest},
+            )
+            .mappings()
+            .one()
+        )
         if str(lock["payload_digest"]) != payload_digest:
             raise ValueError("maintenance idempotency key reused with different payload")
-        existing = session.execute(
-            text(
-                """
+        existing = (
+            session.execute(
+                text(
+                    """
                 SELECT output_refs_json
                 FROM maintenance_job_receipts
                 WHERE idempotency_digest = :idempotency_digest
                 """
-            ),
-            {"idempotency_digest": key_digest},
-        ).mappings().first()
+                ),
+                {"idempotency_digest": key_digest},
+            )
+            .mappings()
+            .first()
+        )
         if existing is not None:
             return self._load_receipt_outputs(
                 session,
@@ -315,16 +323,20 @@ class SleepLearningMaintenanceService:
         output_type: str,
     ) -> MaintenanceOutput:
         if output_type == "proposal_candidate":
-            row = session.execute(
-                text(
-                    """
+            row = (
+                session.execute(
+                    text(
+                        """
                     SELECT target_component, state, minimal_diff_json
                     FROM evolution_proposals
                     WHERE id = :output_id
                     """
-                ),
-                {"output_id": output_id},
-            ).mappings().one()
+                    ),
+                    {"output_id": output_id},
+                )
+                .mappings()
+                .one()
+            )
             payload = _json_mapping(row["minimal_diff_json"])
             return MaintenanceOutput(
                 output_id=output_id,
@@ -339,16 +351,20 @@ class SleepLearningMaintenanceService:
             "dynamic_eval_case_candidate",
             "retention_decision",
         }:
-            row = session.execute(
-                text(
-                    """
+            row = (
+                session.execute(
+                    text(
+                        """
                     SELECT status, artifact_json
                     FROM evolution_artifacts
                     WHERE id = :output_id AND artifact_kind = :output_type
                     """
-                ),
-                {"output_id": output_id, "output_type": output_type},
-            ).mappings().one()
+                    ),
+                    {"output_id": output_id, "output_type": output_type},
+                )
+                .mappings()
+                .one()
+            )
             payload = _json_mapping(row["artifact_json"])
             return MaintenanceOutput(
                 output_id=output_id,
@@ -377,10 +393,14 @@ class SleepLearningMaintenanceService:
             raise ValueError("retirement reason is required")
 
         if action == "deprecated":
-            row = session.execute(
-                text("SELECT state FROM evolution_proposals WHERE id = :target_id"),
-                {"target_id": target_id},
-            ).mappings().first()
+            row = (
+                session.execute(
+                    text("SELECT state FROM evolution_proposals WHERE id = :target_id"),
+                    {"target_id": target_id},
+                )
+                .mappings()
+                .first()
+            )
             if row is not None and str(row["state"]) != "deprecated":
                 session.execute(
                     text(

@@ -441,7 +441,8 @@ class TaxonomyRepository:
     ) -> dict[str, Any]:
         proposal = self.get_proposal(session, user_id=user_id, proposal_id=proposal_id)
         if proposal is None or proposal["proposal_type"] not in {
-            "domain_structure", "legacy_migration"
+            "domain_structure",
+            "legacy_migration",
         }:
             raise ValueError("taxonomy proposal not found")
         if proposal["status"] != "pending":
@@ -606,9 +607,7 @@ class TaxonomyRepository:
             item.setdefault("id", item.get("knowledge_object_id"))
             item.setdefault("primary_domain_id", before.get("primary_domain_id"))
             item.setdefault("record_type", before.get("record_type", "knowledge"))
-            item.setdefault(
-                "classification_revision", before.get("classification_revision", 0)
-            )
+            item.setdefault("classification_revision", before.get("classification_revision", 0))
         decisions = payload.get("decisions", {})
         conflicts: list[str] = []
         for item in affected:
@@ -619,9 +618,7 @@ class TaxonomyRepository:
             if target is None:
                 deferred.append(knowledge_id)
                 continue
-            current = self.knowledge_assignment(
-                session, user_id=user_id, knowledge_id=knowledge_id
-            )
+            current = self.knowledge_assignment(session, user_id=user_id, knowledge_id=knowledge_id)
             if (
                 current is None
                 or str(current["primary_domain_id"]) != str(item["primary_domain_id"])
@@ -768,9 +765,7 @@ class TaxonomyRepository:
         )
 
     @staticmethod
-    def _assignment_node_ids(
-        session: Session, *, user_id: str, knowledge_id: str
-    ) -> list[str]:
+    def _assignment_node_ids(session: Session, *, user_id: str, knowledge_id: str) -> list[str]:
         return [
             str(row["classification_node_id"])
             for row in session.execute(

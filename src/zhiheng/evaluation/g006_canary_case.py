@@ -101,9 +101,7 @@ def _run_attempt(
 
     with sqlite3.connect(db_path) as connection:
         connection.execute("PRAGMA foreign_keys=ON")
-        controller = ReleaseController.from_db(
-            connection, deployment_secret=_DEPLOYMENT_SECRET
-        )
+        controller = ReleaseController.from_db(connection, deployment_secret=_DEPLOYMENT_SECRET)
         stable_before = controller.load_default_head(_TARGET_COMPONENT)
         if stable_before is None:
             raise ValueError("migration baseline stable release missing")
@@ -135,7 +133,9 @@ def _run_attempt(
             count=sample_count,
         )
         actual_sample_count = _actual_matching_observation_count(
-            connection=connection, release_id=release_id, binding=binding,
+            connection=connection,
+            release_id=release_id,
+            binding=binding,
             assignment=assignment,
         )
 

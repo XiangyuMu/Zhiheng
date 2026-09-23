@@ -67,11 +67,14 @@ def test_relation_approval_rejects_stale_draft_version(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
     csrf = _login(client)
     old = _source_and_draft(client, csrf, "old-formal", "固定复习有效", "固定条件")
-    assert client.post(
-        f"/v1/conclusions/{old['id']}/approve",
-        json={},
-        headers=_headers(csrf, "approve-old", old["etag"]),
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/v1/conclusions/{old['id']}/approve",
+            json={},
+            headers=_headers(csrf, "approve-old", old["etag"]),
+        ).status_code
+        == 200
+    )
 
     new = _source_and_draft(client, csrf, "new-draft", "固定复习无效", "固定条件")
     relations = client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"]
@@ -100,11 +103,14 @@ def test_relation_decision_retry_is_idempotent_after_approval(tmp_path: Path) ->
     client, _ = _client(tmp_path)
     csrf = _login(client)
     old = _source_and_draft(client, csrf, "old-idempotent", "复习有效", "固定条件")
-    assert client.post(
-        f"/v1/conclusions/{old['id']}/approve",
-        json={},
-        headers=_headers(csrf, "approve-old-idempotent", old["etag"]),
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/v1/conclusions/{old['id']}/approve",
+            json={},
+            headers=_headers(csrf, "approve-old-idempotent", old["etag"]),
+        ).status_code
+        == 200
+    )
     new = _source_and_draft(client, csrf, "new-idempotent", "复习无效", "固定条件")
     relation = client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"][0]
     headers = _headers(csrf, "approve-relation-idempotent")
@@ -127,10 +133,14 @@ def test_concurrent_relation_approvals_have_one_decision(tmp_path: Path) -> None
     client, sessions = _client(tmp_path)
     csrf = _login(client)
     old = _source_and_draft(client, csrf, "race-old", "复习有效", "固定条件")
-    assert client.post(
-        f"/v1/conclusions/{old['id']}/approve", json={},
-        headers=_headers(csrf, "race-old-approve", old["etag"]),
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/v1/conclusions/{old['id']}/approve",
+            json={},
+            headers=_headers(csrf, "race-old-approve", old["etag"]),
+        ).status_code
+        == 200
+    )
     new = _source_and_draft(client, csrf, "race-new", "复习有效", "变化条件")
     relation = client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"][0]
     barrier = Barrier(2)
@@ -138,7 +148,8 @@ def test_concurrent_relation_approvals_have_one_decision(tmp_path: Path) -> None
     def approve(index):
         barrier.wait(timeout=10)
         return client.post(
-            f"/v1/conclusions/relations/{relation['id']}/approve", json={},
+            f"/v1/conclusions/relations/{relation['id']}/approve",
+            json={},
             headers=_headers(csrf, f"race-approve-{index}"),
         )
 
@@ -146,16 +157,21 @@ def test_concurrent_relation_approvals_have_one_decision(tmp_path: Path) -> None
         responses = list(pool.map(approve, range(2)))
     assert sorted(r.status_code for r in responses) == [200, 409]
     with sessions() as session:
-        assert session.execute(text(
-            "SELECT count(*) FROM conclusion_relation_events "
-            "WHERE relation_id=:id AND to_status='approved'"
-        ), {"id": relation["id"]}).scalar_one() == 1
+        assert (
+            session.execute(
+                text(
+                    "SELECT count(*) FROM conclusion_relation_events "
+                    "WHERE relation_id=:id AND to_status='approved'"
+                ),
+                {"id": relation["id"]},
+            ).scalar_one()
+            == 1
+        )
     current = client.get(f"/v1/conclusions/{new['id']}").json()
     assert current["approved_version"] == relation["left_version"]
     assert new["id"] in {
-        item["id"] for item in client.get(
-            "/v1/conclusions/context", params={"query": "复习"}
-        ).json()["items"]
+        item["id"]
+        for item in client.get("/v1/conclusions/context", params={"query": "复习"}).json()["items"]
     }
 
 
@@ -166,53 +182,75 @@ def test_changed_right_version_cannot_be_superseded(tmp_path: Path) -> None:
     client, sessions = _client(tmp_path)
     csrf = _login(client)
     old = _source_and_draft(client, csrf, "right-old", "复习有效", "固定条件")
-    assert client.post(
-        f"/v1/conclusions/{old['id']}/approve", json={},
-        headers=_headers(csrf, "right-old-approve", old["etag"]),
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/v1/conclusions/{old['id']}/approve",
+            json={},
+            headers=_headers(csrf, "right-old-approve", old["etag"]),
+        ).status_code
+        == 200
+    )
     new = _source_and_draft(client, csrf, "right-new", "复习无效", "固定条件")
     relation = client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"][0]
     with sessions.begin() as session:
-        session.execute(text(
-            "INSERT INTO conclusion_versions(entry_id,version,payload_json,approved_at) "
-            "SELECT entry_id,2,payload_json,approved_at FROM conclusion_versions "
-            "WHERE entry_id=:id AND version=1"
-        ), {"id": old["id"]})
-        session.execute(text(
-            "UPDATE conclusion_entries SET current_version=2,approved_version=2 WHERE id=:id"
-        ), {"id": old["id"]})
-        session.execute(text(
-            "UPDATE conclusion_relations SET kind='revision' WHERE id=:id"
-        ), {"id": relation["id"]})
+        session.execute(
+            text(
+                "INSERT INTO conclusion_versions(entry_id,version,payload_json,approved_at) "
+                "SELECT entry_id,2,payload_json,approved_at FROM conclusion_versions "
+                "WHERE entry_id=:id AND version=1"
+            ),
+            {"id": old["id"]},
+        )
+        session.execute(
+            text("UPDATE conclusion_entries SET current_version=2,approved_version=2 WHERE id=:id"),
+            {"id": old["id"]},
+        )
+        session.execute(
+            text("UPDATE conclusion_relations SET kind='revision' WHERE id=:id"),
+            {"id": relation["id"]},
+        )
     response = client.post(
-        f"/v1/conclusions/relations/{relation['id']}/approve", json={},
+        f"/v1/conclusions/relations/{relation['id']}/approve",
+        json={},
         headers=_headers(csrf, "stale-right-approve"),
     )
     assert response.status_code == 409
     assert "stale" in response.text
     with sessions() as session:
-        row = session.execute(text(
-            "SELECT status,approved_version FROM conclusion_entries WHERE id=:id"
-        ), {"id": old["id"]}).one()
+        row = session.execute(
+            text("SELECT status,approved_version FROM conclusion_entries WHERE id=:id"),
+            {"id": old["id"]},
+        ).one()
         assert tuple(row) == ("formal", 2)
-        assert session.execute(text(
-            "SELECT approved_at FROM conclusion_versions WHERE entry_id=:id AND version=1"
-        ), {"id": new["id"]}).scalar_one() is None
+        assert (
+            session.execute(
+                text(
+                    "SELECT approved_at FROM conclusion_versions WHERE entry_id=:id AND version=1"
+                ),
+                {"id": new["id"]},
+            ).scalar_one()
+            is None
+        )
 
 
 def test_relation_approval_materializes_formal_knowledge_and_is_searchable(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
     csrf = _login(client)
     old = _source_and_draft(client, csrf, "formal-source", "复习有效", "固定条件")
-    assert client.post(
-        f"/v1/conclusions/{old['id']}/approve", json={},
-        headers=_headers(csrf, "formal-source-approve", old["etag"]),
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/v1/conclusions/{old['id']}/approve",
+            json={},
+            headers=_headers(csrf, "formal-source-approve", old["etag"]),
+        ).status_code
+        == 200
+    )
     new = _source_and_draft(client, csrf, "formal-relation", "复习无效", "变化条件")
     relation = client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"][0]
 
     approved = client.post(
-        f"/v1/conclusions/relations/{relation['id']}/approve", json={},
+        f"/v1/conclusions/relations/{relation['id']}/approve",
+        json={},
         headers=_headers(csrf, "formal-relation-approve"),
     )
     assert approved.status_code == 200, approved.text
@@ -221,7 +259,8 @@ def test_relation_approval_materializes_formal_knowledge_and_is_searchable(tmp_p
     assert client.get("/v1/conclusions/context", params={"query": "复习无效"}).json()["items"]
 
     replay = client.post(
-        f"/v1/conclusions/relations/{relation['id']}/approve", json={},
+        f"/v1/conclusions/relations/{relation['id']}/approve",
+        json={},
         headers=_headers(csrf, "formal-relation-approve"),
     )
     assert replay.status_code == 200
@@ -233,17 +272,20 @@ def test_duplicate_relation_reuses_existing_knowledge_object(tmp_path: Path) -> 
     csrf = _login(client)
     old = _source_and_draft(client, csrf, "duplicate-old", "每天复习有效", "固定条件")
     first = client.post(
-        f"/v1/conclusions/{old['id']}/approve", json={},
+        f"/v1/conclusions/{old['id']}/approve",
+        json={},
         headers=_headers(csrf, "duplicate-old-approve", old["etag"]),
     )
     assert first.status_code == 200
     new = _source_and_draft(client, csrf, "duplicate-new", "每天复习有效", "固定条件")
     relation = next(
-        item for item in client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"]
+        item
+        for item in client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"]
         if item["kind"] == "duplicate"
     )
     approved = client.post(
-        f"/v1/conclusions/relations/{relation['id']}/approve", json={},
+        f"/v1/conclusions/relations/{relation['id']}/approve",
+        json={},
         headers=_headers(csrf, "duplicate-new-approve"),
     )
     assert approved.status_code == 200, approved.text
@@ -258,8 +300,14 @@ def test_formalization_failure_rolls_back_and_retry_recovers(tmp_path, monkeypat
     client, sessions = _client(tmp_path)
     csrf = _login(client)
     old = _source_and_draft(client, csrf, "rollback-old", "复习有效", "固定条件")
-    assert client.post(f"/v1/conclusions/{old['id']}/approve", json={},
-                       headers=_headers(csrf, "rollback-old", old["etag"])).status_code == 200
+    assert (
+        client.post(
+            f"/v1/conclusions/{old['id']}/approve",
+            json={},
+            headers=_headers(csrf, "rollback-old", old["etag"]),
+        ).status_code
+        == 200
+    )
     new = _source_and_draft(client, csrf, "rollback-new", "复习有效", "新条件")
     relation = client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"][0]
     original = KnowledgeRepository.ingest_text
@@ -273,8 +321,12 @@ def test_formalization_failure_rolls_back_and_retry_recovers(tmp_path, monkeypat
     headers = _headers(csrf, "rollback-approve")
     assert client.post(url, json={}, headers=headers).status_code == 409
     with sessions() as session:
-        assert session.execute(text("SELECT status FROM conclusion_entries WHERE id=:id"),
-                               {"id": new["id"]}).scalar_one() == "draft"
+        assert (
+            session.execute(
+                text("SELECT status FROM conclusion_entries WHERE id=:id"), {"id": new["id"]}
+            ).scalar_one()
+            == "draft"
+        )
         assert session.execute(text("SELECT count(*) FROM knowledge_objects")).scalar_one() == 1
     monkeypatch.setattr(KnowledgeRepository, "ingest_text", original)
     assert client.post(url, json={}, headers=headers).status_code == 200
@@ -284,12 +336,18 @@ def test_confirmed_conflict_is_not_unconditional_retrieval(tmp_path):
     client, _ = _client(tmp_path)
     csrf = _login(client)
     old = _source_and_draft(client, csrf, "conflict-old", "复习有效", "固定条件")
-    old_result = client.post(f"/v1/conclusions/{old['id']}/approve", json={},
-                            headers=_headers(csrf, "conflict-old", old["etag"])).json()
+    old_result = client.post(
+        f"/v1/conclusions/{old['id']}/approve",
+        json={},
+        headers=_headers(csrf, "conflict-old", old["etag"]),
+    ).json()
     new = _source_and_draft(client, csrf, "conflict-new", "复习无效", "固定条件")
     relation = client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"][0]
-    approved = client.post(f"/v1/conclusions/relations/{relation['id']}/approve", json={},
-                           headers=_headers(csrf, "conflict-approve"))
+    approved = client.post(
+        f"/v1/conclusions/relations/{relation['id']}/approve",
+        json={},
+        headers=_headers(csrf, "conflict-approve"),
+    )
     assert approved.status_code == 200
     assert client.get("/v1/conclusions/context", params={"query": "复习"}).json()["items"] == []
     for knowledge_id in [old_result["knowledge_id"], approved.json()["knowledge_id"]]:

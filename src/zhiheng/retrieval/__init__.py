@@ -8,11 +8,13 @@ from zhiheng.retrieval.contracts import (
     Citation,
     HybridRetrievalResult,
     QueryRoute,
+    RerankerPort,
     RetrievalCandidate,
+    RetrievalFilters,
     RetrievalSource,
     RouteDecision,
 )
-from zhiheng.retrieval.hybrid import HybridRetriever
+from zhiheng.retrieval.hybrid import DeterministicReranker, HybridRetriever
 from zhiheng.retrieval.repository import LexicalRetriever, StructuredLookupService, VectorRetriever
 from zhiheng.retrieval.router import QueryRouter
 from zhiheng.retrieval.vector_index import VectorIndexRepository, pack_embedding
@@ -24,12 +26,15 @@ __all__ = [
     "CitationBuilder",
     "HybridRetrievalResult",
     "HybridRetriever",
+    "DeterministicReranker",
     "LexicalRetriever",
     "QueryRoute",
     "QueryRouter",
     "RetrievalAuthorizer",
     "RetrievalCandidate",
+    "RetrievalFilters",
     "RetrievalSource",
+    "RerankerPort",
     "RouteDecision",
     "StructuredLookupService",
     "VectorIndexRepository",

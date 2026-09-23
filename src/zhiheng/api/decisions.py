@@ -75,6 +75,7 @@ class DecisionAnalyzeRequest(BaseModel):
             ),
         ]
     ] = Field(default_factory=list, max_length=12)
+    constraints: list[str] = Field(default_factory=list, max_length=12)
     decision_type: str = Field(default="compare", max_length=64)
     template_id: str = Field(default="g005.default", max_length=128)
     evidence_query: str | None = Field(default=None, max_length=4000)
@@ -88,6 +89,16 @@ class DecisionAnalyzeRequest(BaseModel):
         if len(value) != len(set(value)):
             raise ValueError("formal_goal_refs must be unique")
         return value
+
+    @field_validator("constraints")
+    @classmethod
+    def clean_constraints(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value if item.strip()]
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("constraints must be unique")
+        if any(len(item) > 500 for item in cleaned):
+            raise ValueError("constraints are too long")
+        return cleaned
 
 
 class DecisionSaveRequest(BaseModel):
@@ -198,6 +209,7 @@ def analyze_decision(
             for option in payload.options
         ),
         formal_goal_refs=tuple(payload.formal_goal_refs),
+        constraints=tuple(payload.constraints),
         decision_type=payload.decision_type,
         template_id=payload.template_id,
     )
@@ -207,6 +219,7 @@ def analyze_decision(
             problem=payload.problem,
             options=decision_request.options,
             formal_goal_refs=(),
+            constraints=decision_request.constraints,
             decision_type=payload.decision_type,
             template_id=payload.template_id,
         ),
@@ -411,13 +424,8 @@ def _analysis_response(
         release_id=analysis.release_id,
         recommended_next_step=analysis.recommendation,
         option_reviews=[
-            {"label": label, "benefit": benefit, "cost": cost}
-            for label, benefit, cost in zip(
-                analysis.option_labels,
-                analysis.benefits,
-                analysis.costs,
-                strict=False,
-            )
+            {str(key): str(value) for key, value in item.items()}
+            for item in analysis.option_reviews
         ],
         stop_reason=(
             "insufficient_evidence"
@@ -463,6 +471,7 @@ class FormalDecisionMemorySavePort(DecisionMemorySavePort):
                 value={
                     "recommendation": analysis.recommendation,
                     "risks": list(analysis.risks),
+                    "option_reviews": list(analysis.option_reviews),
                     "change_conditions": list(analysis.change_conditions),
                     "external_action_count": analysis.external_action_count,
                     "note": note,
@@ -514,6 +523,7 @@ def _validate_decision_payload(payload: DecisionAnalyzeRequest) -> None:
                 for option in payload.options
             ),
             formal_goal_refs=tuple(payload.formal_goal_refs),
+            constraints=tuple(payload.constraints),
             decision_type=payload.decision_type,
             template_id=payload.template_id,
         )

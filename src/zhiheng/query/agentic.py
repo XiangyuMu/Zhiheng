@@ -4,7 +4,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from inspect import Parameter, signature
-from typing import Any, Protocol, TypedDict, cast
+from typing import Protocol, TypedDict
 
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,7 @@ from zhiheng.query.contracts import (
     EvidenceVerifierPort,
     GeneratedAnswer,
     HybridRetrievalPort,
+    MemoryImpact,
     PersonalizationRef,
     ReleaseBehaviorConfig,
     StopReason,
@@ -359,7 +360,8 @@ class BoundedAgenticRagService:
             # Conservative UTF-8 byte budget also counts provenance and framing.
             input_tokens += len(str(memory_context.canonical_payload()).encode("utf-8"))
         usage = replace(
-            _with_elapsed(usage, started), input_tokens=usage.input_tokens + input_tokens,
+            _with_elapsed(usage, started),
+            input_tokens=usage.input_tokens + input_tokens,
         )
         if (
             usage.model_calls >= self._budget.max_model_calls
@@ -376,20 +378,30 @@ class BoundedAgenticRagService:
                 retrieval_run_ids=retrieval_run_ids,
             )
         if memory_context is not None and not self._memory_context_service.validate(
-            session, memory_context, query_hash=sha256_text(query),
+            session,
+            memory_context,
+            query_hash=sha256_text(query),
         ):
             return self._final_evidence_only(
-                session, manifest=manifest, route=route, usage=usage,
+                session,
+                manifest=manifest,
+                route=route,
+                usage=usage,
                 stop_reason=StopReason.MEMORY_CONTEXT_CHANGED,
-                release_context=release_context, retrieval_run_ids=retrieval_run_ids,
+                release_context=release_context,
+                retrieval_run_ids=retrieval_run_ids,
             )
         session.commit()
         usage = _with_elapsed(usage, started)
         if usage.wall_clock_ms >= self._budget.max_wall_clock_ms:
             return self._final_evidence_only(
-                session, manifest=manifest, route=route, usage=usage,
+                session,
+                manifest=manifest,
+                route=route,
+                usage=usage,
                 stop_reason=StopReason.BUDGET_EXHAUSTED,
-                release_context=release_context, retrieval_run_ids=retrieval_run_ids,
+                release_context=release_context,
+                retrieval_run_ids=retrieval_run_ids,
             )
         # Count a logical gateway invocation even when its outcome is failure.
         # This is not a count of confirmed external network transmissions.
@@ -429,17 +441,28 @@ class BoundedAgenticRagService:
             _with_elapsed(usage, started),
             output_tokens=usage.output_tokens + _generated_output_token_count(generated),
         )
-        allowed_memory_refs = {
-            PersonalizationRef(
-                entry.formal_memory_id, entry.formal_version_id,
-                entry.confirmation_generation, entry.state_key,
-            ) for entry in memory_context.entries
-        } if memory_context is not None else set()
+        allowed_memory_refs = (
+            {
+                PersonalizationRef(
+                    entry.formal_memory_id,
+                    entry.formal_version_id,
+                    entry.confirmation_generation,
+                    entry.state_key,
+                )
+                for entry in memory_context.entries
+            }
+            if memory_context is not None
+            else set()
+        )
         if not set(generated.personalization_refs).issubset(allowed_memory_refs):
             return self._final_evidence_only(
-                session, manifest=manifest, route=route, usage=usage,
+                session,
+                manifest=manifest,
+                route=route,
+                usage=usage,
                 stop_reason=StopReason.INVALID_MODEL_OUTPUT,
-                release_context=release_context, retrieval_run_ids=retrieval_run_ids,
+                release_context=release_context,
+                retrieval_run_ids=retrieval_run_ids,
             )
         if (
             usage.model_calls > self._budget.max_model_calls
@@ -480,19 +503,29 @@ class BoundedAgenticRagService:
                 retrieval_run_ids=retrieval_run_ids,
             )
         if memory_context is not None and not self._memory_context_service.validate(
-            session, memory_context, query_hash=sha256_text(query),
+            session,
+            memory_context,
+            query_hash=sha256_text(query),
         ):
             return self._final_evidence_only(
-                session, manifest=manifest, route=route, usage=usage,
+                session,
+                manifest=manifest,
+                route=route,
+                usage=usage,
                 stop_reason=StopReason.MEMORY_CONTEXT_CHANGED,
-                release_context=release_context, retrieval_run_ids=retrieval_run_ids,
+                release_context=release_context,
+                retrieval_run_ids=retrieval_run_ids,
             )
         usage = _with_elapsed(usage, started)
         if usage.wall_clock_ms >= self._budget.max_wall_clock_ms:
             return self._final_evidence_only(
-                session, manifest=manifest, route=route, usage=usage,
+                session,
+                manifest=manifest,
+                route=route,
+                usage=usage,
                 stop_reason=StopReason.BUDGET_EXHAUSTED,
-                release_context=release_context, retrieval_run_ids=retrieval_run_ids,
+                release_context=release_context,
+                retrieval_run_ids=retrieval_run_ids,
             )
         return AnswerEnvelope(
             answer=generated.answer,
@@ -508,6 +541,7 @@ class BoundedAgenticRagService:
             retrieval_run_ids=retrieval_run_ids,
             personalization_refs=generated.personalization_refs,
             memory_context_digest=memory_context.digest if memory_context is not None else None,
+            memory_impacts=_memory_impacts(memory_context, generated.personalization_refs),
         )
 
 
@@ -538,6 +572,43 @@ def _citations_for_manifest(manifest: AuthorizedContextManifest) -> tuple[Citati
     )
 
 
+def _memory_impacts(
+    memory_context: MemoryContextSnapshot | None,
+    refs: Sequence[PersonalizationRef],
+) -> tuple[MemoryImpact, ...]:
+    if memory_context is None:
+        return ()
+    by_id = {
+        (entry.formal_memory_id, entry.formal_version_id): entry for entry in memory_context.entries
+    }
+    impacts: list[MemoryImpact] = []
+    for ref in refs:
+        entry = by_id.get((ref.formal_memory_id, ref.formal_version_id))
+        if entry is None:
+            continue
+        effect_type, explanation = _memory_effect(entry.state_key, entry.memory_type)
+        impacts.append(
+            MemoryImpact(
+                formal_memory_id=ref.formal_memory_id,
+                formal_version_id=ref.formal_version_id,
+                state_key=ref.state_key,
+                effect_type=effect_type,
+                explanation=explanation,
+            )
+        )
+    return tuple(impacts)
+
+
+def _memory_effect(state_key: str, memory_type: str) -> tuple[str, str]:
+    if state_key.startswith(("style.", "preference.")) or memory_type == "preference":
+        return "style_adjustment", f"根据已确认偏好 {state_key} 调整回答表达方式。"
+    if state_key.startswith(("constraint.", "safety.")):
+        return "constraint", f"根据已确认约束 {state_key} 限制回答范围和处理方式。"
+    if state_key.startswith("goal.") or memory_type == "goal":
+        return "result_ranking", f"根据已确认目标 {state_key} 调整结果排序和取舍。"
+    return "direct_reference", f"回答直接使用了已确认背景 {state_key}。"
+
+
 class _GenerationOptions(TypedDict, total=False):
     max_output_tokens: int
     memory_context: MemoryContextSnapshot | None
@@ -559,26 +630,27 @@ def _generate_answer(
         parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters.values()
     )
     supports_memory_context = "memory_context" in parameters or accepts_kwargs
-    supports_conversation_context = "conversation_context" in parameters or accepts_kwargs
     if memory_context is not None and memory_context.entries and not supports_memory_context:
         raise ValueError("answer model does not support confirmed memory context")
     options: _GenerationOptions = {}
     if supports_memory_context:
         options["memory_context"] = memory_context
-    if supports_conversation_context:
+    # Conversation context is optional for legacy answer models.  Do not infer
+    # support from ``**kwargs``: compatibility adapters may forward unknown
+    # kwargs to an implementation with a narrower signature.
+    if "conversation_context" in parameters:
         options["conversation_context"] = conversation_context
-    supports_output_limit = (
-        "max_output_tokens" in parameters
-        or any(parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters.values())
+    supports_output_limit = "max_output_tokens" in parameters or any(
+        parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters.values()
     )
     if supports_output_limit:
         options["max_output_tokens"] = max_output_tokens
-    return cast(GeneratedAnswer, cast(Any, model_gateway).generate_answer(
+    return model_gateway.generate_answer(
         query=query,
         manifest=manifest,
         citations=citations,
         **options,
-    ))
+    )
 
 
 def _search_hybrid(

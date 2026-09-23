@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hmac
-import os
+import json
 from collections.abc import Generator
 from datetime import timedelta
 from pathlib import Path
@@ -10,8 +10,9 @@ from urllib.parse import quote
 
 import uvicorn
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -21,7 +22,9 @@ from zhiheng.api.conclusions import install_conclusion_routes
 from zhiheng.api.decisions import install_decision_routes
 from zhiheng.api.evolution import install_evolution_routes
 from zhiheng.api.gaps import install_gap_routes
+from zhiheng.api.import_tasks import install_import_task_routes
 from zhiheng.api.knowledge import install_knowledge_routes
+from zhiheng.api.knowledge_workspace import install_knowledge_workspace_routes
 from zhiheng.api.memory import install_memory_routes
 from zhiheng.api.personal_updates import install_personal_update_routes
 from zhiheng.api.retrieval import install_retrieval_routes
@@ -31,7 +34,18 @@ from zhiheng.auth import SessionService
 from zhiheng.core.config import Settings, get_settings
 from zhiheng.core.ids import sha256_text
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
-from zhiheng.privacy.erase_journal import ExternalEraseJournal
+from zhiheng.models.configuration import (
+    ALLOWED_PROVIDER_KINDS,
+    ProviderInput,
+    connectivity_test,
+    create_provider,
+    defaults,
+    list_providers,
+    recent_audits,
+    set_defaults,
+    update_provider,
+)
+from zhiheng.recovery import startup_recovery_barrier
 
 SESSION_COOKIE = "zhiheng_session"
 CSRF_COOKIE = "zhiheng_csrf"
@@ -41,14 +55,14 @@ class BootstrapRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     username: str
-    password: str
+    password: str = Field(min_length=12, max_length=256)
 
 
 class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     username: str
-    password: str
+    password: str = Field(min_length=1, max_length=256)
 
 
 class AuthResponse(BaseModel):
@@ -58,6 +72,57 @@ class AuthResponse(BaseModel):
 
 class MeResponse(BaseModel):
     user_id: str
+
+
+class ModelConfigUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: str
+    provider_kind: str | None = None
+    display_name: str | None = None
+    enabled: bool | None = None
+    model_id: str | None = None
+    endpoint_url: str | None = None
+
+
+class ModelProviderCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_kind: str
+    display_name: str = Field(min_length=1, max_length=128)
+    base_url: str
+    secret_ref: str | None = None
+    text_models: list[str] = Field(default_factory=list)
+    multimodal_models: list[str] = Field(default_factory=list)
+    enabled: bool = False
+
+
+class ModelProviderPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_kind: str | None = None
+    display_name: str | None = Field(default=None, max_length=128)
+    base_url: str | None = None
+    endpoint_url: str | None = None
+    secret_ref: str | None = None
+    text_models: list[str] | None = None
+    multimodal_models: list[str] | None = None
+    enabled: bool | None = None
+    archived: bool | None = None
+
+
+class ModelRoute(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: str
+    model_id: str
+
+
+class ModelDefaultsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: ModelRoute | None = None
+    multimodal: ModelRoute | None = None
 
 
 def get_db_session(request: Request) -> Generator[Session, None, None]:
@@ -71,19 +136,24 @@ SessionDep = Annotated[Session, Depends(get_db_session)]
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or get_settings()
-    if os.environ.get("ZHIHENG_ERASE_JOURNAL_PATH"):
-        journal = ExternalEraseJournal.from_env()
-        journal.recover_pending()
-        journal.load()
     app = FastAPI(title="Zhiheng API", version=__version__)
     engine = create_sqlite_engine(app_settings)
     session_factory = create_session_factory(engine)
+    startup_recovery_barrier(app_settings, session_factory)
     session_service = SessionService()
     app.state.session_factory = session_factory
     app.state.settings = app_settings
-    install_knowledge_routes(app, app_settings)
-    install_conclusion_routes(app)
+    # Idempotency records are intentionally response-only and contain no secret
+    # material. A durable audit table can replace this process-local cache later.
+    app.state.model_config_idempotency = {}
+    install_import_task_routes(app)
+    from zhiheng.api.events import install_event_routes
+
+    install_event_routes(app)
     install_classification_routes(app)
+    install_knowledge_routes(app, app_settings)
+    install_knowledge_workspace_routes(app)
+    install_conclusion_routes(app)
     install_personal_update_routes(app)
     install_taxonomy_routes(app)
     install_memory_routes(app, app_settings)
@@ -102,14 +172,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(HTTPException)
     async def redirect_unauthenticated_pages(request: Request, exc: HTTPException) -> Response:
-        if exc.status_code == status.HTTP_401_UNAUTHORIZED and request.url.path in {
-            "/knowledge-agent", "/memory-center", "/evolution-center",
-        }:
+        if (
+            exc.status_code == status.HTTP_401_UNAUTHORIZED
+            and request.url.path
+            in {
+                "/knowledge-agent",
+                "/memory-center",
+                "/evolution-center",
+                "/review-center",
+            }
+            and "text/html" in request.headers.get("accept", "")
+        ):
             target = quote(str(request.url), safe="")
             return RedirectResponse(
-                url=f"/login?next={target}", status_code=status.HTTP_303_SEE_OTHER
+                url=f"/login?next={target}",
+                status_code=status.HTTP_303_SEE_OTHER,
             )
-        return Response(content=str(exc.detail), status_code=exc.status_code)
+        return await http_exception_handler(request, exc)
 
     @app.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str | bool]:
@@ -128,10 +207,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ).scalar_one()
         )
         return Response(
-            content=(
-                "# TYPE zhiheng_jobs_pending gauge\n"
-                f"zhiheng_jobs_pending {jobs_pending}\n"
-            ),
+            content=(f"# TYPE zhiheng_jobs_pending gauge\nzhiheng_jobs_pending {jobs_pending}\n"),
             media_type="text/plain; version=0.0.4",
         )
 
@@ -172,6 +248,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return AuthResponse(
             user_id=user_id,
             csrf_token=_csrf_token(app_settings, authenticated.token),
+        )
+
+    @app.get("/auth/status", tags=["auth"])
+    def auth_status(
+        session: SessionDep,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    ) -> dict[str, object]:
+        configured = session.execute(text("SELECT count(*) FROM auth_users")).scalar_one()
+        authenticated = False
+        expires_at = None
+        if session_token:
+            try:
+                session_service.resolve_session(session, session_token)
+                authenticated = True
+                expires_at = session.execute(
+                    text("SELECT expires_at FROM auth_sessions WHERE token_hash = :h"),
+                    {"h": sha256_text(session_token)},
+                ).scalar()
+            except PermissionError:
+                pass
+        return {
+            "initialized": int(configured) > 0,
+            "authenticated": authenticated,
+            "expires_at": expires_at,
+        }
+
+    @app.post("/auth/refresh", response_model=AuthResponse, tags=["auth"])
+    def refresh(
+        response: Response,
+        session: SessionDep,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    ) -> AuthResponse:
+        if not session_token:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing session")
+        try:
+            authenticated = session_service.refresh(session, session_token)
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid or expired session"
+            ) from exc
+        _set_auth_cookies(response, app_settings, authenticated.token)
+        return AuthResponse(
+            user_id=authenticated.user_id, csrf_token=_csrf_token(app_settings, authenticated.token)
         )
 
     @app.post("/auth/login", response_model=AuthResponse, tags=["auth"])
@@ -242,6 +361,360 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.delete_cookie(CSRF_COOKIE)
         return {"status": "ok"}
 
+    @app.get("/v1/model-config", tags=["models"])
+    def model_config_list(
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    ) -> list[dict[str, object]]:
+        _require_session(session, session_service, session_token)
+        response.headers["Cache-Control"] = "no-store"
+        providers = list_providers(session)
+        response.headers["ETag"] = sha256_text(
+            json.dumps(providers, sort_keys=True, default=str, separators=(",", ":"))
+        )[:32]
+        return providers
+
+    @app.get("/v1/model-config/providers", tags=["models"])
+    def model_providers(
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        include_archived: bool = False,
+    ) -> list[dict[str, object]]:
+        _require_session(session, session_service, session_token)
+        response.headers["Cache-Control"] = "no-store"
+        providers = list_providers(session, include_archived=include_archived)
+        response.headers["ETag"] = sha256_text(
+            json.dumps(providers, sort_keys=True, default=str, separators=(",", ":"))
+        )[:32]
+        return providers
+
+    @app.post("/v1/model-config/providers", tags=["models"])
+    def model_provider_create(
+        payload: ModelProviderCreate,
+        request: Request,
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        csrf_header: str | None = Header(default=None, alias="X-CSRF-Token"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ) -> dict[str, object]:
+        operation_key = _require_model_mutation(
+            request, session, session_service, session_token, csrf_header, idempotency_key
+        )
+        fingerprint = _model_config_fingerprint("provider:create", payload.model_dump(mode="json"))
+        cached = _model_config_idempotent_result(app, operation_key, fingerprint)
+        if cached is not None:
+            response.headers["ETag"] = str(cached.get("etag", ""))
+            response.headers["Cache-Control"] = "no-store"
+            return dict(cached)
+        if payload.provider_kind not in ALLOWED_PROVIDER_KINDS:
+            raise HTTPException(status_code=422, detail="provider kind is not allowlisted")
+        try:
+            result = create_provider(
+                session,
+                ProviderInput(
+                    provider_kind=payload.provider_kind,
+                    display_name=payload.display_name,
+                    endpoint_url=payload.base_url,
+                    secret_ref=payload.secret_ref,
+                    text_models=tuple(payload.text_models),
+                    multimodal_models=tuple(payload.multimodal_models),
+                    enabled=payload.enabled,
+                ),
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        response.headers["ETag"] = str(result["etag"])
+        response.headers["Cache-Control"] = "no-store"
+        _remember_model_config_result(app, operation_key, fingerprint, result)
+        return result
+
+    @app.patch("/v1/model-config/providers/{provider_id}", tags=["models"])
+    def model_provider_patch(
+        provider_id: str,
+        payload: ModelProviderPatch,
+        request: Request,
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        csrf_header: str | None = Header(default=None, alias="X-CSRF-Token"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        if_match: str | None = Header(default=None, alias="If-Match"),
+    ) -> dict[str, object]:
+        operation_key = _require_model_mutation(
+            request, session, session_service, session_token, csrf_header, idempotency_key
+        )
+        if not if_match:
+            raise HTTPException(status_code=412, detail="missing If-Match")
+        fingerprint = _model_config_fingerprint(
+            f"provider:patch:{provider_id}:{if_match}", payload.model_dump(mode="json")
+        )
+        cached = _model_config_idempotent_result(app, operation_key, fingerprint)
+        if cached is not None:
+            response.headers["ETag"] = str(cached.get("etag", ""))
+            response.headers["Cache-Control"] = "no-store"
+            return dict(cached)
+        try:
+            result = update_provider(
+                session, provider_id, payload.model_dump(exclude_unset=True), if_match
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=412, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        response.headers["ETag"] = str(result["etag"])
+        response.headers["Cache-Control"] = "no-store"
+        _remember_model_config_result(app, operation_key, fingerprint, result)
+        return result
+
+    @app.delete("/v1/model-config/providers/{provider_id}", tags=["models"])
+    def model_provider_archive(
+        provider_id: str,
+        request: Request,
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        csrf_header: str | None = Header(default=None, alias="X-CSRF-Token"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        if_match: str | None = Header(default=None, alias="If-Match"),
+    ) -> dict[str, object]:
+        """Archive a provider while retaining its historical audit records."""
+        operation_key = _require_model_mutation(
+            request, session, session_service, session_token, csrf_header, idempotency_key
+        )
+        if not if_match:
+            raise HTTPException(status_code=412, detail="missing If-Match")
+        fingerprint = _model_config_fingerprint(
+            f"provider:archive:{provider_id}:{if_match}", {"archived": True, "enabled": False}
+        )
+        cached = _model_config_idempotent_result(app, operation_key, fingerprint)
+        if cached is not None:
+            response.headers["ETag"] = str(cached.get("etag", ""))
+            response.headers["Cache-Control"] = "no-store"
+            return dict(cached)
+        try:
+            result = update_provider(
+                session,
+                provider_id,
+                {"archived": True, "enabled": False},
+                if_match,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=412, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        response.headers["ETag"] = str(result["etag"])
+        response.headers["Cache-Control"] = "no-store"
+        _remember_model_config_result(app, operation_key, fingerprint, result)
+        return result
+
+    @app.post("/v1/model-config/providers/{provider_id}/connectivity-test", tags=["models"])
+    def model_provider_connectivity_test(
+        provider_id: str,
+        request: Request,
+        session: SessionDep,
+        response: Response,
+        model_id: str | None = None,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        csrf_header: str | None = Header(default=None, alias="X-CSRF-Token"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ) -> dict[str, object]:
+        operation_key = _require_model_mutation(
+            request, session, session_service, session_token, csrf_header, idempotency_key
+        )
+        fingerprint = _model_config_fingerprint(
+            f"provider:connectivity:{provider_id}", {"model_id": model_id}
+        )
+        cached = _model_config_idempotent_result(app, operation_key, fingerprint)
+        if cached is not None:
+            response.headers["Cache-Control"] = "no-store"
+            return dict(cached)
+        try:
+            result = connectivity_test(session, provider_id, model_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        response.headers["Cache-Control"] = "no-store"
+        _remember_model_config_result(app, operation_key, fingerprint, result)
+        return result
+
+    @app.get("/v1/model-config/status", tags=["models"])
+    def model_config_status(
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    ) -> dict[str, object]:
+        _require_session(session, session_service, session_token)
+        response.headers["Cache-Control"] = "no-store"
+        providers = list_providers(session)
+        return {
+            "defaults": defaults(session),
+            "providers": providers,
+            "healthy_providers": sum(1 for item in providers if item["health_status"] == "healthy"),
+            "unhealthy_providers": sum(
+                1 for item in providers if item["health_status"] == "unhealthy"
+            ),
+            "recent_failures": recent_audits(session, limit=10, status="failed"),
+        }
+
+    @app.put("/v1/model-config/defaults", tags=["models"])
+    def model_config_defaults(
+        payload: ModelDefaultsPayload,
+        request: Request,
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        csrf_header: str | None = Header(default=None, alias="X-CSRF-Token"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        if_match: str | None = Header(default=None, alias="If-Match"),
+    ) -> dict[str, object]:
+        operation_key = _require_model_mutation(
+            request, session, session_service, session_token, csrf_header, idempotency_key
+        )
+        if not if_match:
+            raise HTTPException(status_code=412, detail="missing If-Match")
+        current_defaults = defaults(session)
+        # A modality omitted from the request keeps its current route.  An
+        # explicit null still clears that route, matching PUT semantics.
+        text_route = (
+            payload.text.model_dump()
+            if "text" in payload.model_fields_set
+            else current_defaults.get("text")
+        )
+        multimodal_route = (
+            payload.multimodal.model_dump()
+            if "multimodal" in payload.model_fields_set
+            else current_defaults.get("multimodal")
+        )
+        fingerprint = _model_config_fingerprint(
+            "defaults:update",
+            {"text": text_route, "multimodal": multimodal_route, "if_match": if_match},
+        )
+        cached = _model_config_idempotent_result(app, operation_key, fingerprint)
+        if cached is not None:
+            response.headers["ETag"] = str(cached.get("etag", ""))
+            response.headers["Cache-Control"] = "no-store"
+            return dict(cached)
+        try:
+            result = set_defaults(
+                session,
+                text_route,
+                multimodal_route,
+                if_match or "",
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=412, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        response.headers["ETag"] = str(result["etag"])
+        response.headers["Cache-Control"] = "no-store"
+        _remember_model_config_result(app, operation_key, fingerprint, result)
+        return result
+
+    @app.get("/v1/model-config/audits", tags=["models"])
+    def model_config_audits(
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        limit: int = 50,
+        offset: int = 0,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        audit_status: str | None = None,
+        status: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> list[dict[str, object]]:
+        _require_session(session, session_service, session_token)
+        response.headers["Cache-Control"] = "no-store"
+        return recent_audits(
+            session,
+            limit=limit,
+            offset=offset,
+            provider_id=provider_id,
+            model_id=model_id,
+            status=audit_status or status,
+            since=since,
+            until=until,
+        )
+
+    @app.put("/v1/model-config", tags=["models"])
+    def model_config_update(
+        payload: ModelConfigUpdate,
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        csrf_header: str | None = Header(default=None, alias="X-CSRF-Token"),
+        if_match: str | None = Header(default=None, alias="If-Match"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ) -> dict[str, object]:
+        _require_session(session, session_service, session_token)
+        if (
+            csrf_header is None
+            or session_token is None
+            or not hmac.compare_digest(csrf_header, _csrf_token(app_settings, session_token))
+        ):
+            raise HTTPException(status_code=403, detail="invalid csrf token")
+        if not idempotency_key:
+            raise HTTPException(status_code=400, detail="missing idempotency key")
+        response.headers["Cache-Control"] = "no-store"
+        fingerprint = sha256_text(
+            json.dumps(
+                payload.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + f"|{if_match or ''}",
+        )
+        previous = app.state.model_config_idempotency.get(idempotency_key)
+        if previous is not None:
+            previous_fingerprint, previous_response = previous
+            if previous_fingerprint != fingerprint:
+                raise HTTPException(status_code=409, detail="idempotency key reused")
+            response.headers["ETag"] = str(previous_response["etag"])
+            return dict(previous_response)
+        try:
+            compatibility_changes = {
+                key: value
+                for key, value in {
+                    "provider_kind": payload.provider_kind,
+                    "display_name": payload.display_name,
+                    "enabled": payload.enabled,
+                    "model_id": payload.model_id,
+                    "endpoint_url": payload.endpoint_url,
+                }.items()
+                if value is not None
+            }
+            # The legacy PUT endpoint historically allowed switching the kind
+            # alone. Keep that contract while assigning the safe official URL.
+            if payload.provider_kind == "openai" and payload.endpoint_url is None:
+                compatibility_changes["endpoint_url"] = "https://api.openai.com/v1"
+            updated = update_provider(
+                session,
+                payload.provider_id,
+                compatibility_changes,
+                if_match or "",
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=412, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        result = {"provider_id": payload.provider_id, "etag": updated["etag"]}
+        app.state.model_config_idempotency[idempotency_key] = (fingerprint, result)
+        response.headers["ETag"] = str(result["etag"])
+        return result
+
     return app
 
 
@@ -251,6 +724,68 @@ app = create_app()
 def _csrf_token(settings: Settings, session_token: str) -> str:
     secret = settings.secret_key.get_secret_value()
     return sha256_text(f"{secret}:{session_token}")
+
+
+def _require_session(
+    session: Session,
+    session_service: SessionService,
+    session_token: str | None,
+) -> str:
+    if session_token is None:
+        raise HTTPException(status_code=401, detail="missing session")
+    try:
+        return session_service.resolve_session(session, session_token)
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail="invalid session") from exc
+
+
+def _require_model_mutation(
+    request: Request,
+    session: Session,
+    session_service: SessionService,
+    session_token: str | None,
+    csrf_header: str | None,
+    idempotency_key: str | None,
+) -> str:
+    _require_session(session, session_service, session_token)
+    if (
+        session_token is None
+        or csrf_header is None
+        or not hmac.compare_digest(
+            csrf_header, _csrf_token(request.app.state.settings, session_token)
+        )
+    ):
+        raise HTTPException(status_code=403, detail="invalid csrf token")
+    if idempotency_key is None or not idempotency_key.strip():
+        raise HTTPException(status_code=400, detail="missing idempotency key")
+    return idempotency_key.strip()
+
+
+def _model_config_fingerprint(operation: str, payload: object) -> str:
+    """Build a stable, secret-free idempotency fingerprint for model config APIs."""
+    return sha256_text(
+        operation + "|" + json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    )
+
+
+def _model_config_idempotent_result(
+    app: FastAPI, key: str, fingerprint: str
+) -> dict[str, object] | None:
+    cached = app.state.model_config_idempotency.get(key)
+    if cached is None:
+        return None
+    previous_fingerprint, previous_response = cached
+    if previous_fingerprint != fingerprint:
+        raise HTTPException(status_code=409, detail="idempotency key reused")
+    return dict(previous_response)
+
+
+def _remember_model_config_result(
+    app: FastAPI, key: str, fingerprint: str, result: dict[str, object]
+) -> None:
+    # Responses are intentionally limited to already-redacted API objects; no
+    # secret values are ever placed in this process-local replay cache.
+    app.state.model_config_idempotency[key] = (fingerprint, dict(result))
 
 
 def _set_auth_cookies(response: Response, settings: Settings, session_token: str) -> None:

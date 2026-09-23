@@ -58,9 +58,10 @@ def process_classification_jobs_once(
     limit: int = 10,
 ) -> int:
     with session_scope(session_factory) as session:
-        rows = session.execute(
-            text(
-                """
+        rows = (
+            session.execute(
+                text(
+                    """
                 SELECT id, payload_json, attempts
                 FROM jobs
                 WHERE job_type = :job_type
@@ -70,9 +71,12 @@ def process_classification_jobs_once(
                 ORDER BY available_at, id
                 LIMIT :limit
                 """
-            ),
-            {"job_type": CLASSIFICATION_SUGGESTION_JOB_TYPE, "limit": limit},
-        ).mappings().all()
+                ),
+                {"job_type": CLASSIFICATION_SUGGESTION_JOB_TYPE, "limit": limit},
+            )
+            .mappings()
+            .all()
+        )
         claimed: list[ClaimedClassificationJob] = []
         for row in rows:
             session.execute(

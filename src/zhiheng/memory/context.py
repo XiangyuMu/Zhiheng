@@ -98,6 +98,8 @@ class MemoryContextService:
         if not _is_sha256_hex(query_hash):
             raise ValueError("query_hash must be a sha256 hex digest")
         normalized_prefix = _normalize_topic_prefix(topic_prefix)
+        if normalized_prefix is None and query:
+            normalized_prefix = select_l1_topic(query, intent=intent)
         candidates = _candidate_entries(
             session,
             topic_prefix=normalized_prefix,
@@ -133,10 +135,19 @@ class MemoryContextService:
                 omitted_count += 1
                 continue
             prospective_entries = (*entries, entry)
-            if entry.layer == "L0" and _payload_size({
-                "entries": [item.canonical_payload() for item in prospective_entries
-                            if item.layer == "L0"],
-            }) > L0_MAX_SERIALIZED_BYTES:
+            if (
+                entry.layer == "L0"
+                and _payload_size(
+                    {
+                        "entries": [
+                            item.canonical_payload()
+                            for item in prospective_entries
+                            if item.layer == "L0"
+                        ],
+                    }
+                )
+                > L0_MAX_SERIALIZED_BYTES
+            ):
                 omitted_count += 1
                 continue
             next_total = _payload_size(
@@ -185,19 +196,28 @@ class MemoryContextService:
         *,
         query_hash: str,
     ) -> bool:
-        if snapshot.query_hash != query_hash:
-            return False
-        if snapshot.limit_policy_version != LIMIT_POLICY_VERSION:
+        if (
+            snapshot.query_hash != query_hash
+            or snapshot.limit_policy_version != LIMIT_POLICY_VERSION
+        ):
             return False
         try:
-            current = self.load(
-                session,
-                query_hash=query_hash,
-                topic_prefix=snapshot.topic_prefix,
-            )
+            current = self.load(session, query_hash=query_hash, topic_prefix=snapshot.topic_prefix)
         except ValueError:
             return False
         return current.canonical_payload() == snapshot.canonical_payload()
+
+
+def select_l1_topic(query: str, *, intent: str | None = None) -> str | None:
+    """Select a bounded formal namespace using deterministic topic cues."""
+    text = query.lower()
+    if any(x in text for x in ("面试", "interview", "求职", "简历")):
+        return "project.career."
+    if any(x in text for x in ("agent", "rag", "检索", "向量", "hybrid")):
+        return "project.agent."
+    if intent in {"decision", "complex_synthesis"}:
+        return "project."
+    return None
 
 
 def _candidate_entries(

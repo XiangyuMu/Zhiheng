@@ -3,95 +3,162 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>知衡记忆中心</title>
-    <link rel="stylesheet" href="./memory-center.css" />
+    <title>知衡个人上下文</title>
+    <link rel="stylesheet" href="/memory-center.css" />
   </head>
   <body>
-    <a class="skip-link" href="#memory-list">跳到记忆列表</a>
-    <div class="app-shell">
-      <header class="hero" aria-labelledby="page-title">
-        <div>
-          <p class="eyebrow">单用户 · 确认后生效</p>
-          <h1 id="page-title">记忆中心</h1>
-          <p class="hero-copy">
-            审核 Agent 提取或推断出的记忆，管理已经生效的用户画像、版本历史和回收站。候选内容不会进入正式上下文。
-          </p>
+    <a class="skip-link" href="#memory-list">跳到上下文列表</a>
+    <div class="workspace">
+      <aside class="sidebar" aria-label="工作空间导航">
+        <a class="brand" href="/knowledge-agent#research">
+          <span class="brand-mark" aria-hidden="true">知</span>
+          <span>知衡<small>研究与知识</small></span>
+        </a>
+        <nav class="nav-group" aria-label="研究">
+          <p class="nav-label">工作空间</p>
+          <a class="nav-link" href="/knowledge-agent#research"><span class="nav-icon" aria-hidden="true">◌</span>研究问答</a>
+          <a class="nav-link" href="/knowledge-agent#library"><span class="nav-icon" aria-hidden="true">▤</span>资料库</a>
+        </nav>
+        <nav class="nav-group" aria-label="工具">
+          <p class="nav-label">更多工具</p>
+          <a class="nav-link" href="/knowledge-agent#decisions"><span class="nav-icon" aria-hidden="true">⇄</span>方案比较</a>
+          <a class="nav-link" href="/memory-center" aria-current="page"><span class="nav-icon" aria-hidden="true">◎</span>个人上下文</a>
+          <a class="nav-link" href="/review-center"><span class="nav-icon" aria-hidden="true">✓</span>集中审核</a>
+        </nav>
+        <div class="sidebar-footer">
+          <p class="sidebar-note">回到原文，<br />让知识有据可循。</p>
+          <a class="nav-link" href="/knowledge-agent#settings"><span class="nav-icon" aria-hidden="true">⚙</span>设置</a>
+          <a class="nav-link" href="/evolution-center"><span class="nav-icon" aria-hidden="true">↗</span>系统改进</a>
         </div>
-        <aside class="status-panel" aria-label="系统状态">
-          <span class="status-dot" id="connection-dot" aria-hidden="true"></span>
-          <div>
-            <p id="connection-title">正在连接记忆 API</p>
-            <span id="connection-detail">读取候选、正式、历史和回收站视图。</span>
-          </div>
-        </aside>
-      </header>
+      </aside>
 
-      <main>
-        <section class="toolbar" aria-label="记忆视图">
-          <div class="tablist" role="tablist" aria-label="记忆分类">
-            <button class="tab is-active" id="tab-candidates" role="tab" aria-selected="true" aria-controls="panel-candidates" data-view="candidates">
-              候选
-              <span class="count" data-count="candidates">0</span>
-            </button>
-            <button class="tab" id="tab-formal" role="tab" aria-selected="false" aria-controls="panel-formal" data-view="formal">
-              正式
-              <span class="count" data-count="formal">0</span>
-            </button>
-            <button class="tab" id="tab-history" role="tab" aria-selected="false" aria-controls="panel-history" data-view="history">
-              历史
-              <span class="count" data-count="history">0</span>
-            </button>
-            <button class="tab" id="tab-trash" role="tab" aria-selected="false" aria-controls="panel-trash" data-view="trash">
-              回收站
-              <span class="count" data-count="trash">0</span>
-            </button>
-          </div>
+      <div class="workspace-body">
+        <header class="topbar">
+          <p class="topbar-path">工具 <span aria-hidden="true">/</span> <strong>个人上下文</strong></p>
+          <aside class="status-panel" aria-label="连接状态">
+            <span class="status-dot" id="connection-dot" aria-hidden="true"></span>
+            <span id="connection-title">正在连接记忆 API</span>
+          </aside>
+        </header>
 
-          <div class="toolbar-actions">
-            <label class="search-box">
-              <span class="sr-only">搜索记忆</span>
-              <input id="search-input" type="search" placeholder="搜索类型、理由、证据或内容" autocomplete="off" />
-            </label>
-            <button class="icon-button" id="refresh-button" type="button" aria-label="刷新记忆">
-              <span aria-hidden="true">↻</span>
-            </button>
-          </div>
-        </section>
+        <main class="page-content">
+          <section class="page-heading" aria-labelledby="page-title">
+            <p class="eyebrow">确认后才进入回答上下文</p>
+            <h1 id="page-title">个人上下文</h1>
+            <p>
+              审核 Agent 提取或推断出的记忆，管理已经生效的用户画像、版本历史和回收站。候选内容不会进入正式上下文。
+            </p>
+            <p class="muted" id="connection-detail">读取候选、正式、历史和回收站视图。</p>
+          </section>
 
-        <section class="bulk-bar" id="bulk-bar" aria-label="批量操作" hidden>
-          <span id="bulk-count">已选择 0 条</span>
-          <button type="button" data-bulk-action="confirm">批量确认</button>
-          <button type="button" data-bulk-action="reject">批量拒绝</button>
-          <button type="button" data-bulk-action="delete">批量删除</button>
-          <button type="button" data-bulk-action="restore">批量恢复</button>
-          <button class="ghost" type="button" id="clear-selection">清除选择</button>
-        </section>
+          <section class="profile-preview panel" aria-labelledby="profile-preview-title">
+            <div>
+              <p class="eyebrow">正式画像预览</p>
+              <h2 id="profile-preview-title">当前可用的个人上下文</h2>
+              <p id="profile-preview-copy">只展示已经确认、当前可服务的画像；候选记忆不会出现在这里。</p>
+            </div>
+            <div class="profile-preview-content" id="profile-preview-content">
+              <span class="profile-preview-status" id="profile-preview-status">正在读取正式画像...</span>
+              <details class="preview-timeline-details" id="preview-timeline-details">
+                <summary>查看画像时间线</summary>
+                <ol class="memory-timeline" id="profile-timeline"></ol>
+              </details>
+            </div>
+          </section>
 
-        <section class="content-grid">
-          <div class="list-panel" id="memory-list" tabindex="-1">
-            <div class="panel-heading">
-              <div>
-                <h2 id="view-title">候选记忆</h2>
-                <p id="view-description">等待确认的用户记忆，推断内容必须确认后才会生效。</p>
-              </div>
-              <span id="view-badge" class="view-badge">candidate</span>
+          <section class="toolbar" aria-label="记忆视图">
+            <div class="tablist" role="tablist" aria-label="记忆分类">
+              <button class="tab is-active" id="tab-candidates" role="tab" aria-selected="true" aria-controls="panel-candidates" data-view="candidates">
+                候选
+                <span class="count" data-count="candidates">0</span>
+              </button>
+              <button class="tab" id="tab-formal" role="tab" aria-selected="false" aria-controls="panel-formal" data-view="formal">
+                正式
+                <span class="count" data-count="formal">0</span>
+              </button>
+              <button class="tab" id="tab-history" role="tab" aria-selected="false" aria-controls="panel-history" data-view="history">
+                历史
+                <span class="count" data-count="history">0</span>
+              </button>
+              <button class="tab" id="tab-trash" role="tab" aria-selected="false" aria-controls="panel-trash" data-view="trash">
+                回收站
+                <span class="count" data-count="trash">0</span>
+              </button>
             </div>
 
-            <div class="view-panel is-active" id="panel-candidates" role="tabpanel" aria-labelledby="tab-candidates" data-panel="candidates"></div>
-            <div class="view-panel" id="panel-formal" role="tabpanel" aria-labelledby="tab-formal" data-panel="formal" hidden></div>
-            <div class="view-panel" id="panel-history" role="tabpanel" aria-labelledby="tab-history" data-panel="history" hidden></div>
-            <div class="view-panel" id="panel-trash" role="tabpanel" aria-labelledby="tab-trash" data-panel="trash" hidden></div>
-          </div>
+            <div class="toolbar-actions">
+              <label class="type-filter">
+                <span class="sr-only">按记忆类型筛选</span>
+                <select id="type-filter" aria-label="按记忆类型筛选">
+                  <option value="">全部类型</option>
+                  <option value="fact">事实</option>
+                  <option value="preference">偏好</option>
+                  <option value="goal">目标</option>
+                  <option value="inference">推断</option>
+                </select>
+              </label>
+              <label class="search-box">
+                <span class="sr-only">搜索记忆</span>
+                <input id="search-input" type="search" placeholder="搜索类型、理由、证据或内容" autocomplete="off" />
+              </label>
+              <button class="icon-button" id="refresh-button" type="button" aria-label="刷新记忆" title="刷新">
+                <span aria-hidden="true">↻</span>
+              </button>
+            </div>
+          </section>
 
-          <aside class="detail-panel" id="detail-panel" aria-labelledby="detail-title">
-            <p class="eyebrow">当前详情</p>
-            <h2 id="detail-title">未选择记忆</h2>
-            <p id="detail-copy">从左侧选择一条记录，查看版本、来源、生成批次、时间和证据。</p>
-            <dl id="detail-meta" class="detail-meta"></dl>
-            <div id="detail-actions" class="detail-actions"></div>
-          </aside>
-        </section>
-      </main>
+          <section class="bulk-bar" id="bulk-bar" aria-label="批量操作" hidden>
+            <span id="bulk-count">已选择 0 条</span>
+            <button type="button" data-bulk-action="confirm">批量确认</button>
+            <button type="button" data-bulk-action="reject">批量拒绝</button>
+            <button type="button" data-bulk-action="delete">批量删除</button>
+            <button type="button" data-bulk-action="restore">批量恢复</button>
+            <button class="secondary" type="button" id="clear-selection">清除选择</button>
+          </section>
+
+          <section class="content-grid">
+            <div class="list-panel panel" id="memory-list" tabindex="-1">
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">记忆列表</p>
+                  <h2 id="view-title">候选记忆</h2>
+                  <p id="view-description">等待确认的用户记忆，推断内容必须确认后才会生效。</p>
+                </div>
+                <span id="view-badge" class="view-badge">candidate</span>
+              </div>
+
+              <div class="view-panel is-active" id="panel-candidates" role="tabpanel" aria-labelledby="tab-candidates" data-panel="candidates"></div>
+              <div class="view-panel" id="panel-formal" role="tabpanel" aria-labelledby="tab-formal" data-panel="formal" hidden></div>
+              <div class="view-panel" id="panel-history" role="tabpanel" aria-labelledby="tab-history" data-panel="history" hidden></div>
+              <div class="view-panel" id="panel-trash" role="tabpanel" aria-labelledby="tab-trash" data-panel="trash" hidden></div>
+            </div>
+
+            <aside class="detail-panel panel" id="detail-panel" aria-labelledby="detail-title">
+              <p class="eyebrow">当前详情</p>
+              <h2 id="detail-title">未选择记忆</h2>
+              <p id="detail-copy">从列表选择一条记录，查看版本、来源、生成批次、时间和证据。</p>
+              <dl id="detail-meta" class="detail-meta"></dl>
+              <div id="detail-actions" class="detail-actions"></div>
+              <section class="detail-section" id="detail-evidence-section" hidden aria-labelledby="detail-evidence-title">
+                <h3 id="detail-evidence-title">来源证据</h3>
+                <div id="detail-evidence"></div>
+              </section>
+              <section class="detail-section" id="detail-confidence-section" hidden aria-labelledby="detail-confidence-title">
+                <h3 id="detail-confidence-title">置信度解释</h3>
+                <div id="detail-confidence"></div>
+              </section>
+              <section class="detail-section" id="detail-conflict-section" hidden aria-labelledby="detail-conflict-title">
+                <h3 id="detail-conflict-title">冲突记忆</h3>
+                <div id="detail-conflict"></div>
+              </section>
+              <section class="detail-section" id="detail-expiry-section" hidden aria-labelledby="detail-expiry-title">
+                <h3 id="detail-expiry-title">有效期</h3>
+                <div id="detail-expiry"></div>
+              </section>
+            </aside>
+          </section>
+        </main>
+      </div>
     </div>
 
     <dialog id="edit-dialog" aria-labelledby="edit-title">
@@ -112,13 +179,13 @@
           <textarea id="edit-reason" name="reason" rows="3" placeholder="说明为什么这样修改，便于之后回看。"></textarea>
         </label>
         <div class="dialog-actions">
-          <button class="ghost" value="cancel" type="button" id="cancel-edit">取消</button>
+          <button class="secondary" value="cancel" type="button" id="cancel-edit">取消</button>
           <button value="default" type="submit" id="edit-submit">保存为新版本</button>
         </div>
       </form>
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
-    <script src="./memory-center.js" defer></script>
+    <script src="/memory-center.js" defer></script>
   </body>
 </html>

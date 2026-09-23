@@ -71,8 +71,7 @@ def _binding(candidate_id: str, rollback_target_id: str) -> ReleaseBindingV1:
 
 def _serving_release_ids(connection: sqlite3.Connection) -> list[str]:
     return [
-        row[0]
-        for row in connection.execute("SELECT id FROM serving_strategy_releases ORDER BY id")
+        row[0] for row in connection.execute("SELECT id FROM serving_strategy_releases ORDER BY id")
     ]
 
 
@@ -82,7 +81,6 @@ def _publisher_context(actor_id: str = "publisher-a") -> EvolutionCommandContext
 
 def _user_approval_context(actor_id: str = "user-approver-a") -> EvolutionCommandContext:
     return command_context_for_role(actor_id, EvolutionRole.USER_APPROVER)
-
 
 
 def _advance_to_canary(controller: ReleaseController, release_id: str) -> None:

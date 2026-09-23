@@ -14,10 +14,18 @@ from sqlalchemy.orm import Session
 from zhiheng.core.config import Settings
 
 __all__ = [
+    "StoredBinaryArtifact",
     "StoredTextArtifacts",
     "LocalKnowledgeObjectStore",
     "knowledge_object_store_for_settings",
 ]
+
+
+@dataclass(frozen=True)
+class StoredBinaryArtifact:
+    uri: str
+    sha256: str
+    byte_size: int
 
 
 @dataclass(frozen=True)
@@ -58,6 +66,38 @@ class LocalKnowledgeObjectStore:
         self.verify_text_artifacts(artifacts)
         return artifacts
 
+    def write_binary_artifact(
+        self, body: bytes, *, namespace: str = "source"
+    ) -> StoredBinaryArtifact:
+        body_hash = hashlib.sha256(body).hexdigest()
+        path = self.root / namespace / f"{body_hash}.bin"
+        if path.exists():
+            existing = path.read_bytes()
+            if existing != body:
+                raise ValueError(f"immutable object hash collision: {path}")
+        else:
+            self._write_immutable(path, body)
+        artifact = StoredBinaryArtifact(
+            uri=path.as_uri(),
+            sha256=body_hash,
+            byte_size=len(body),
+        )
+        self.verify_binary_artifact(artifact)
+        return artifact
+
+    def verify_binary_artifact(self, artifact: StoredBinaryArtifact) -> None:
+        path = self._path_from_uri(artifact.uri)
+        actual = path.read_bytes()
+        if len(actual) != artifact.byte_size:
+            raise ValueError(f"stored binary byte size mismatch: {artifact.uri}")
+        if hashlib.sha256(actual).hexdigest() != artifact.sha256:
+            raise ValueError(f"stored binary hash mismatch: {artifact.uri}")
+
+    def read_bytes(self, uri: str) -> bytes:
+        """Read an immutable object after enforcing the configured store root."""
+
+        return self._path_from_uri(uri).read_bytes()
+
     def verify_text_artifacts(self, artifacts: StoredTextArtifacts) -> None:
         for uri in (
             artifacts.evidence_object_uri,
@@ -91,9 +131,7 @@ class LocalKnowledgeObjectStore:
         return sorted(
             path.as_uri()
             for path in self.root.rglob("*")
-            if path.is_file()
-            and ".tmp-" not in path.name
-            and path.as_uri() not in referenced
+            if path.is_file() and ".tmp-" not in path.name and path.as_uri() not in referenced
         )
 
     def _path_from_uri(self, uri: str) -> Path:
@@ -131,15 +169,14 @@ def knowledge_object_store_for_settings(settings: Settings) -> LocalKnowledgeObj
     root = settings.knowledge_object_store_path
     if root is not None:
         return LocalKnowledgeObjectStore(Path(root))
-    return LocalKnowledgeObjectStore(
-        _sqlite_database_path(settings).parent / "knowledge-object-store"
-    )
+    database_path = _sqlite_database_path(settings)
+    return LocalKnowledgeObjectStore(database_path.parent / "knowledge-object-store")
 
 
 def _sqlite_database_path(settings: Settings) -> Path:
     parsed = make_url(settings.database_url)
     if parsed.get_backend_name() != "sqlite":
         raise ValueError("knowledge object store derivation requires sqlite database_url")
-    if not parsed.database or parsed.database == ":memory:":
+    if not parsed.database or parsed.database in {":memory:", "/:memory:"}:
         raise ValueError("in-memory databases require an explicit knowledge object store path")
     return Path(parsed.database).expanduser().resolve()

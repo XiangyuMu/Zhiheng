@@ -103,16 +103,20 @@ def test_same_failure_threshold_generates_only_drafts(tmp_path: Path) -> None:
         proposal_count = session.execute(
             text("SELECT count(*) FROM evolution_proposals WHERE state = 'candidate'")
         ).scalar_one()
-        artifacts = session.execute(
-            text(
-                """
+        artifacts = (
+            session.execute(
+                text(
+                    """
                 SELECT artifact_kind, status, artifact_json
                 FROM evolution_artifacts
                 WHERE status = 'draft'
                 ORDER BY artifact_kind
                 """
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
 
     assert [output.output_type for output in outputs] == [
         "strategy_proposal_draft",

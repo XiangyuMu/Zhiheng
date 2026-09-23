@@ -64,9 +64,7 @@ def test_conclusion_classification_is_suggested_edited_and_approved(
     assert approved.status_code == 200, approved.text
     with session_scope(factory) as session:
         row = session.execute(
-            text(
-                "SELECT primary_domain_id,record_type FROM knowledge_objects WHERE id=:id"
-            ),
+            text("SELECT primary_domain_id,record_type FROM knowledge_objects WHERE id=:id"),
             {"id": approved.json()["knowledge_id"]},
         ).one()
     assert row == ("career_work_practice", "personal_archive_experience")

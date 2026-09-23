@@ -129,9 +129,11 @@ def test_vector_generation_rebuilds_from_serving_chunks_only(tmp_path: Path) -> 
         kept_id = _ingest_demo_knowledge(session, kept_artifacts, "保留知识")
         deleted_id = _ingest_demo_knowledge(session, deleted_artifacts, "删除知识")
         knowledge_repository.soft_delete_knowledge(session, deleted_id)
-        chunk_ids = session.execute(
-            text("SELECT id, source_id FROM chunks ORDER BY source_id")
-        ).mappings().all()
+        chunk_ids = (
+            session.execute(text("SELECT id, source_id FROM chunks ORDER BY source_id"))
+            .mappings()
+            .all()
+        )
         generation_id = vector_repository.create_generation(
             session,
             model_id="BAAI/bge-m3",
@@ -144,15 +146,19 @@ def test_vector_generation_rebuilds_from_serving_chunks_only(tmp_path: Path) -> 
             {str(row["id"]): [1.0, 0.0, 0.0] for row in chunk_ids},
         )
         vector_repository.activate_generation(session, generation_id)
-        indexed_sources = session.execute(
-            text(
-                """
+        indexed_sources = (
+            session.execute(
+                text(
+                    """
                 SELECT c.source_id
                 FROM chunk_embeddings ce
                 JOIN chunks c ON c.id = ce.chunk_id
                 """
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     assert inserted == 1
     assert indexed_sources == [kept_id]
@@ -237,17 +243,21 @@ def test_privacy_erase_requires_write_ahead_ledger_and_removes_serving_rows(
                 """
             )
         ).one()
-        ledger_phases = session.execute(
-            text(
-                """
+        ledger_phases = (
+            session.execute(
+                text(
+                    """
                 SELECT phase
                 FROM privacy_erase_ledger
                 WHERE erase_request_id = :request_id
                 ORDER BY completed_at NULLS FIRST, phase
                 """
-            ),
-            {"request_id": intent.request_id},
-        ).scalars().all()
+                ),
+                {"request_id": intent.request_id},
+            )
+            .scalars()
+            .all()
+        )
 
     assert statuses == ("privacy_erased", "privacy_erased")
     assert ledger_phases == ["authoritative_rows_erased", "intent", "physical_objects_erased"]

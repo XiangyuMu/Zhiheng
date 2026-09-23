@@ -11,6 +11,10 @@ const API = {
   restore: (id) => `/v1/memory/items/${encodeURIComponent(id)}/restore`,
   rollback: (id) => `/v1/memory/items/${encodeURIComponent(id)}/rollback`,
   bulk: "/v1/memory/bulk",
+  profilePreview: "/v1/memory/profile-preview",
+  timeline: "/v1/memory/timeline",
+  renew: (id) => `/v1/memory/items/${encodeURIComponent(id)}/renew`,
+  end: (id) => `/v1/memory/items/${encodeURIComponent(id)}/end`,
 };
 
 const VIEW_COPY = {
@@ -76,6 +80,8 @@ const state = {
   focusedItem: null,
   editingItem: null,
   query: "",
+  typeFilter: "",
+  timeline: [],
 };
 
 const els = {
@@ -86,6 +92,7 @@ const els = {
   viewDescription: document.querySelector("#view-description"),
   viewBadge: document.querySelector("#view-badge"),
   search: document.querySelector("#search-input"),
+  typeFilter: document.querySelector("#type-filter"),
   refresh: document.querySelector("#refresh-button"),
   bulkBar: document.querySelector("#bulk-bar"),
   bulkCount: document.querySelector("#bulk-count"),
@@ -107,6 +114,17 @@ const els = {
   closeDialog: document.querySelector("#close-dialog"),
   cancelEdit: document.querySelector("#cancel-edit"),
   toast: document.querySelector("#toast"),
+  profilePreviewContent: document.querySelector("#profile-preview-content"),
+  profilePreviewStatus: document.querySelector("#profile-preview-status"),
+  profileTimeline: document.querySelector("#profile-timeline"),
+  detailEvidenceSection: document.querySelector("#detail-evidence-section"),
+  detailEvidence: document.querySelector("#detail-evidence"),
+  detailConfidenceSection: document.querySelector("#detail-confidence-section"),
+  detailConfidence: document.querySelector("#detail-confidence"),
+  detailConflictSection: document.querySelector("#detail-conflict-section"),
+  detailConflict: document.querySelector("#detail-conflict"),
+  detailExpirySection: document.querySelector("#detail-expiry-section"),
+  detailExpiry: document.querySelector("#detail-expiry"),
 };
 
 init();
@@ -125,6 +143,10 @@ function bindEvents() {
 
   els.search.addEventListener("input", (event) => {
     state.query = event.target.value.trim().toLocaleLowerCase("zh-CN");
+    renderActiveView();
+  });
+  els.typeFilter.addEventListener("change", (event) => {
+    state.typeFilter = event.target.value;
     renderActiveView();
   });
 
@@ -181,6 +203,18 @@ async function loadAllViews() {
       }
     }),
   );
+  try {
+    const preview = await fetchJson(API.profilePreview, { method: "GET" });
+    renderProfilePreview(preview);
+  } catch (error) {
+    renderProfilePreviewError(readableError(error));
+  }
+  try {
+    const timeline = await fetchJson(`${API.timeline}?limit=100`, { method: "GET" });
+    state.timeline = normalizeTimeline(timeline);
+  } catch {
+    state.timeline = state.items.history.map(historyTimelineItem);
+  }
 
   const failed = results.filter((result) => !result.ok).length;
   if (failed === 0) {
@@ -193,6 +227,78 @@ async function loadAllViews() {
 
   state.selected.clear();
   renderAll();
+}
+
+function renderProfilePreview(preview) {
+  els.profilePreviewContent.replaceChildren();
+  els.profilePreviewStatus.textContent =
+    `正式 ${preview.formal_count} 条 · 待确认候选 ${preview.candidate_count} 条 · ${preview.status}`;
+  els.profilePreviewContent.append(els.profilePreviewStatus);
+
+  const groups = new Map();
+  Object.entries(preview.l0 || {}).forEach(([stateKey, value]) => {
+    groups.set(stateKey, stringifyValue(value));
+  });
+  (preview.items || []).forEach((item) => {
+    if (!groups.has(item.state_key)) groups.set(item.state_key, stringifyValue(item.value));
+  });
+  renderTimeline(preview.timeline || state.timeline, els.profileTimeline);
+
+  if (groups.size === 0) {
+    els.profilePreviewContent.append(el("span", "profile-preview-empty", "暂无已确认画像"));
+    return;
+  }
+
+  const list = el("dl", "profile-preview-list");
+  groups.forEach((value, stateKey) => appendMeta(list, stateKey, value));
+  els.profilePreviewContent.append(list);
+}
+
+function renderProfilePreviewError(message) {
+  els.profilePreviewContent.replaceChildren();
+  els.profilePreviewStatus.textContent = `正式画像预览暂不可用：${message}`;
+  els.profilePreviewContent.append(els.profilePreviewStatus);
+  renderTimeline(state.timeline, els.profileTimeline);
+}
+
+function normalizeTimeline(payload) {
+  const rows = Array.isArray(payload) ? payload : payload.items || payload.events || payload.timeline || [];
+  return rows.filter((item) => item && typeof item === "object").map((item) => ({
+    ...item,
+    id: String(item.id || item.event_id || `${item.formal_memory_id || "memory"}-${item.created_at || Date.now()}`),
+  }));
+}
+
+function historyTimelineItem(item) {
+  return {
+    id: item.id,
+    event_type: item.event_type || item.change_reason || item.version_status || "version",
+    state_key: item.state_key,
+    value: item.value,
+    created_at: item.version_created_at || item.created_at || item.updated_at,
+    actor: item.created_by_role,
+  };
+}
+
+function renderTimeline(events, container) {
+  if (!container) return;
+  container.replaceChildren();
+  const rows = (events || []).slice(0, 20);
+  if (!rows.length) {
+    container.append(el("li", "muted", "暂无时间线事件"));
+    return;
+  }
+  rows.forEach((event) => {
+    const item = el("li", "timeline-event");
+    const title = event.event_type || event.type || event.action || "记忆变更";
+    item.append(
+      el("strong", "", timelineEventLabel(title)),
+      el("time", "", formatTime(event.created_at || event.occurred_at || event.timestamp)),
+    );
+    if (event.state_key) item.append(el("span", "", event.state_key));
+    if (event.value !== undefined) item.append(el("span", "timeline-value", stringifyValue(event.value)));
+    container.append(item);
+  });
 }
 
 async function fetchJson(url, options = {}) {
@@ -334,8 +440,11 @@ function renderActiveView() {
 
 function filteredItems(view) {
   const items = state.items[view];
-  if (!state.query) return items;
-  return items.filter((item) => searchableText(item).includes(state.query));
+  return items.filter((item) => {
+    const typeMatches = !state.typeFilter || normalizedMemoryType(item) === state.typeFilter;
+    const queryMatches = !state.query || searchableText(item).includes(state.query);
+    return typeMatches && queryMatches;
+  });
 }
 
 function searchableText(item) {
@@ -356,6 +465,12 @@ function searchableText(item) {
     item.impact_summary,
     item.sensitivity_level,
     item.source_kind,
+    item.confidence_explanation,
+    item.valid_from,
+    item.valid_to,
+    item.time_sensitivity,
+    item.expiry_status,
+    item.conflicts,
     ...(item.evidence_refs || []),
   ]
     .join(" ")
@@ -384,6 +499,8 @@ function memoryCard(item) {
     pill(confidenceLabel(item), "confidence"),
     pill(SENSITIVITY_LABELS[item.sensitivity_level] || item.sensitivity_level || "未标敏感度", "sensitivity"),
   );
+  if (expiryStatus(item)) topline.append(pill(expiryLabel(item), expiryClass(item)));
+  if (hasConflict(item)) topline.append(pill("存在冲突", "conflict"));
 
   const value = el("p", "memory-value", stringifyValue(item.object_json ?? item.value_json ?? item.value ?? item.proposed_value_json));
   const meta = el("dl", "card-meta");
@@ -395,6 +512,8 @@ function memoryCard(item) {
     appendMeta(meta, "版本绑定证据", evidenceSummary(item));
     appendMeta(meta, "潜在影响", impactSummary(item));
     appendMeta(meta, "状态", item.status || "pending");
+    appendMeta(meta, "有效期", validitySummary(item));
+    appendMeta(meta, "置信度依据", confidenceExplanation(item));
   } else {
     appendMeta(meta, "当前版本", item.current_version_id || item.version_no || item.version_id || "未返回");
     appendMeta(meta, "确认批次", item.confirmation_generation || "未返回");
@@ -402,6 +521,8 @@ function memoryCard(item) {
     appendMeta(meta, "版本绑定证据", evidenceSummary(item));
     appendMeta(meta, "影响", impactSummary(item));
     appendMeta(meta, "时间", formatTime(item.updated_at || item.created_at || item.decided_at));
+    appendMeta(meta, "有效期", validitySummary(item));
+    appendMeta(meta, "置信度依据", confidenceExplanation(item));
   }
 
   const actions = el("div", "card-actions");
@@ -441,6 +562,8 @@ function addCardActions(actions, item) {
       actionButton("编辑", () => openEditDialog(item), "ghost"),
       actionButton("删除", () => deleteItem(item), "danger"),
     );
+    if (expiryStatus(item) === "expiring") actions.append(actionButton("续期", () => renewItem(item), "warning"));
+    if (expiryStatus(item) === "active") actions.append(actionButton("结束有效期", () => endItem(item), "ghost"));
     return;
   }
 
@@ -465,6 +588,8 @@ function renderDetail() {
   const item = state.focusedItem;
   els.detailMeta.replaceChildren();
   els.detailActions.replaceChildren();
+  [els.detailEvidenceSection, els.detailConfidenceSection, els.detailConflictSection, els.detailExpirySection]
+    .forEach((section) => { if (section) section.hidden = true; });
 
   if (!item) {
     els.detailTitle.textContent = "未选择记忆";
@@ -498,6 +623,84 @@ function renderDetail() {
 
   fields.forEach(([label, value]) => appendDetail(label, value));
   addCardActions(els.detailActions, item);
+  renderEvidence(item);
+  renderConfidence(item);
+  renderConflict(item);
+  renderExpiry(item);
+}
+
+function renderEvidence(item) {
+  const refs = evidenceRefs(item);
+  if (!refs.length || !els.detailEvidenceSection) return;
+  els.detailEvidenceSection.hidden = false;
+  els.detailEvidence.replaceChildren();
+  const list = el("ul", "evidence-list");
+  refs.forEach((ref) => {
+    const row = el("li", "evidence-item");
+    const support = ref.support_type || ref.relation || ref.kind || "supporting";
+    row.append(
+      pill(support === "refuting" || support === "contradicting" ? "反驳" : "支持", support === "refuting" || support === "contradicting" ? "danger-pill" : "support-pill"),
+      el("strong", "", ref.conversation_id ? `对话 ${ref.conversation_id}` : ref.title || ref.id || "来源证据"),
+    );
+    const locator = [
+      ref.message_id ? `消息 ${ref.message_id}` : null,
+      ref.message_start != null || ref.message_end != null ? `消息范围 ${ref.message_start ?? "?"}-${ref.message_end ?? "?"}` : null,
+      ref.extracted_at ? `提取于 ${formatTime(ref.extracted_at)}` : null,
+    ].filter(Boolean).join(" · ");
+    if (locator) row.append(el("small", "muted", locator));
+    if (ref.quote || ref.text || ref.snippet || ref.content) row.append(el("q", "evidence-quote", ref.quote || ref.text || ref.snippet || ref.content));
+    list.append(row);
+  });
+  els.detailEvidence.append(list);
+}
+
+function renderConfidence(item) {
+  const explanation = item.confidence_explanation || item.confidenceExplanation;
+  if (!explanation || !els.detailConfidenceSection) return;
+  els.detailConfidenceSection.hidden = false;
+  els.detailConfidence.replaceChildren();
+  const text = typeof explanation === "string" ? explanation : explanation.summary || explanation.explanation;
+  if (text) els.detailConfidence.append(el("p", "", text));
+  if (typeof explanation === "object") {
+    const list = el("dl", "confidence-breakdown");
+    [["显式程度", explanation.explicitness ?? explanation.explicit_degree],
+      ["证据数量", explanation.evidence_count ?? explanation.evidenceCount],
+      ["一致性", explanation.consistency],
+      ["时效性", explanation.timeliness ?? explanation.freshness],
+      ["影响因素", explanation.factors || explanation.influences]].forEach(([label, value]) => {
+      if (value !== undefined && value !== null) appendMeta(list, label, stringifyValue(value));
+    });
+    els.detailConfidence.append(list);
+  }
+}
+
+function renderConflict(item) {
+  const conflicts = item.conflicts || item.conflict_records || item.conflict_items;
+  if (!hasConflict(item) && !Array.isArray(conflicts)) return;
+  if (!els.detailConflictSection) return;
+  els.detailConflictSection.hidden = false;
+  els.detailConflict.replaceChildren();
+  const list = el("ul", "conflict-list");
+  (Array.isArray(conflicts) ? conflicts : [{ status: item.status, message: "存在待审核的互斥记忆" }]).forEach((conflict) => {
+    const row = el("li", "conflict-item");
+    row.append(el("strong", "", conflict.message || conflict.reason || "互斥值待审核"));
+    const sides = [conflict.left_value || conflict.existing_value, conflict.right_value || conflict.candidate_value]
+      .filter((value) => value !== undefined).map(stringifyValue);
+    if (sides.length) row.append(el("p", "", sides.join(" ↔ ")));
+    if (conflict.recommendation || conflict.suggestion) row.append(el("small", "muted", `建议：${conflict.recommendation || conflict.suggestion}`));
+    list.append(row);
+  });
+  els.detailConflict.append(list);
+}
+
+function renderExpiry(item) {
+  const status = expiryStatus(item);
+  if (!status || !els.detailExpirySection) return;
+  els.detailExpirySection.hidden = false;
+  els.detailExpiry.replaceChildren(
+    el("p", expiryClass(item), expiryLabel(item)),
+    el("p", "muted", validitySummary(item)),
+  );
 }
 
 function renderBulkBar() {
@@ -525,7 +728,7 @@ async function handleBulkAction(action) {
   if (items.length === 0) return;
 
   try {
-    await mutate(API.bulk, {
+    const result = await mutate(API.bulk, {
       body: {
         action,
         view: state.activeView,
@@ -533,7 +736,14 @@ async function handleBulkAction(action) {
         items: items.map((item) => ({ id: item.id, etag: etagFor(item) })),
       },
     });
-    showToast("批量操作已提交。");
+    const rows = Array.isArray(result.result) ? result.result : [];
+    const conflicts = rows.filter((row) => row.status === "conflict_pending" || row.conflict);
+    const failed = rows.filter((row) => row.status === "failed" || row.error);
+    showToast(
+      conflicts.length ? `${conflicts.length} 条进入冲突待审，请查看详情。`
+        : failed.length ? `批量操作部分失败：成功 ${rows.length - failed.length} 条，失败 ${failed.length} 条。`
+          : `批量操作已完成：${rows.length || items.length} 条。`,
+    );
     await loadAllViews();
   } catch (error) {
     handleMutationError(error);
@@ -554,6 +764,20 @@ async function deleteItem(item) {
 
 async function restoreItem(item) {
   await runMutation(() => mutate(API.restore(item.id), { item, body: { reason: "user_restore" } }), "已提交恢复。");
+}
+
+async function renewItem(item) {
+  await runMutation(
+    () => mutate(API.renew(item.formal_memory_id || item.id), { item, body: { reason: "user_renew" } }),
+    "已提交续期请求。",
+  );
+}
+
+async function endItem(item) {
+  await runMutation(
+    () => mutate(API.end(item.formal_memory_id || item.id), { item, body: { reason: "user_end_validity" } }),
+    "已结束该记忆的有效期。",
+  );
 }
 
 async function rollbackItem(item) {
@@ -697,7 +921,14 @@ function confidenceLabel(item) {
 }
 
 function memoryTypeLabel(item) {
-  return item.memory_type || item.type || item.record_type || "用户记忆";
+  const type = normalizedMemoryType(item);
+  return { fact: "事实", preference: "偏好", goal: "目标", inference: "推断" }[type]
+    || item.memory_type || item.type || item.record_type || "用户记忆";
+}
+
+function normalizedMemoryType(item) {
+  const value = item.memory_type || item.type || item.record_type;
+  return value === "profile" ? "fact" : value;
 }
 
 function stringifyValue(value) {
@@ -712,13 +943,7 @@ function stringifyValue(value) {
 }
 
 function evidenceSummary(item) {
-  const refs =
-    item.version_evidence_refs ||
-    item.evidence_refs ||
-    item.evidenceRefs ||
-    item.bound_evidence_refs ||
-    item.support_refs ||
-    [];
+  const refs = evidenceRefs(item);
   if (!refs.length) return "后端未返回版本绑定证据";
   return refs
     .map((ref) => {
@@ -726,6 +951,64 @@ function evidenceSummary(item) {
       return ref.title || ref.id || ref.uri || JSON.stringify(ref);
     })
     .join("；");
+}
+
+function evidenceRefs(item) {
+  return item.version_evidence_refs || item.evidence_refs || item.evidenceRefs
+    || item.bound_evidence_refs || item.support_refs || item.evidence || [];
+}
+
+function confidenceExplanation(item) {
+  const value = item.confidence_explanation || item.confidenceExplanation;
+  if (!value) return "后端未返回置信度解释";
+  if (typeof value === "string") return value;
+  return value.summary || value.explanation || "已返回分项解释";
+}
+
+function validitySummary(item) {
+  const from = item.valid_from || item.validFrom;
+  const to = item.valid_to || item.validTo;
+  if (!from && !to) return "长期有效";
+  return `${from ? formatTime(from) : "立即生效"} 至 ${to ? formatTime(to) : "未设截止"}`;
+}
+
+function expiryStatus(item) {
+  const explicit = item.expiry_status || item.expiryStatus;
+  if (explicit) return explicit;
+  const to = item.valid_to || item.validTo;
+  if (!to) return item.view === "formal" ? "active" : "";
+  const date = new Date(to);
+  if (Number.isNaN(date.valueOf())) return "";
+  const days = (date.valueOf() - Date.now()) / 86400000;
+  return days < 0 ? "expired" : days <= 7 ? "expiring" : "active";
+}
+
+function expiryLabel(item) {
+  return { active: "有效", expiring: "即将过期", expired: "已过期", ended: "已结束" }[expiryStatus(item)]
+    || "有效期";
+}
+
+function expiryClass(item) {
+  return { active: "expiry-active", expiring: "expiry-warning", expired: "expiry-danger", ended: "expiry-danger" }[expiryStatus(item)] || "expiry-warning";
+}
+
+function hasConflict(item) {
+  return Boolean(item.conflict_count || item.conflict_status === "conflict_pending"
+    || item.status === "conflict_pending" || (Array.isArray(item.conflicts) && item.conflicts.length));
+}
+
+function timelineEventLabel(value) {
+  const key = String(value).toLowerCase();
+  return {
+    formal_committed: "确认进入正式画像",
+    formal_version_appended: "追加正式版本",
+    confirmed: "确认",
+    rejected: "拒绝",
+    edited: "编辑",
+    conflict_resolved: "解决冲突",
+    expired: "记忆过期",
+    renewed: "记忆续期",
+  }[key] || value;
 }
 
 function basisSummary(item) {

@@ -98,18 +98,22 @@ def _headers(csrf: str, key: str) -> dict[str, str]:
 
 
 def _ingest(session: Session, text_value: str, artifacts: StoredTextArtifacts) -> str:
-    return KnowledgeRepository().ingest_text(
-        session,
-        TextEvidenceInput(
-            title="中文 hybrid 证据",
-            primary_domain_id="technology.ai",
-            text=text_value,
-            source_metadata={"fixture": "g005-production-hybrid"},
-            summary="hybrid evidence",
-        ),
-        user_authority=KnowledgeUserAuthority("synthetic-test-user"),
-        stored_artifacts=artifacts,
-    ).chunk_id
+    return (
+        KnowledgeRepository()
+        .ingest_text(
+            session,
+            TextEvidenceInput(
+                title="中文 hybrid 证据",
+                primary_domain_id="technology.ai",
+                text=text_value,
+                source_metadata={"fixture": "g005-production-hybrid"},
+                summary="hybrid evidence",
+            ),
+            user_authority=KnowledgeUserAuthority("synthetic-test-user"),
+            stored_artifacts=artifacts,
+        )
+        .chunk_id
+    )
 
 
 def _activate_generation(session_factory: sessionmaker[Session], chunk_id: str) -> str:
@@ -200,9 +204,11 @@ def test_api_answer_uses_active_sqlite_vec_generation_with_injected_query_embedd
     assert embedder.calls == 1
     assert any({"retriever": "vector", "rank": 1} in row for row in ranks)
     with session_scope(session_factory) as session:
-        stored_generation_ids = session.execute(
-            text("SELECT retrieval_generation_id FROM retrieval_results")
-        ).scalars().all()
+        stored_generation_ids = (
+            session.execute(text("SELECT retrieval_generation_id FROM retrieval_results"))
+            .scalars()
+            .all()
+        )
     assert generation_id in stored_generation_ids
 
 

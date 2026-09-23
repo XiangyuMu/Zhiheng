@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, NewType, Protocol
 
@@ -12,6 +13,29 @@ class RetrievalSource(StrEnum):
     STRUCTURED = "structured"
     LEXICAL = "lexical"
     VECTOR = "vector"
+
+
+@dataclass(frozen=True)
+class RetrievalFilters:
+    """Structured constraints applied to both lexical and vector candidates."""
+
+    domain_id: str | None = None
+    created_from: datetime | None = None
+    created_to: datetime | None = None
+    updated_from: datetime | None = None
+    updated_to: datetime | None = None
+
+    def is_empty(self) -> bool:
+        return all(
+            value is None
+            for value in (
+                self.domain_id,
+                self.created_from,
+                self.created_to,
+                self.updated_from,
+                self.updated_to,
+            )
+        )
 
 
 class QueryRoute(StrEnum):
@@ -110,6 +134,17 @@ class HybridRetrievalResult:
     manifest: AuthorizedContextManifest
     degraded_reasons: tuple[str, ...]
     run_id: str
+
+
+class RerankerPort(Protocol):
+    def rerank(
+        self,
+        session: Any,
+        query: str,
+        candidates: Sequence[RetrievalCandidate],
+        *,
+        limit: int,
+    ) -> Sequence[RetrievalCandidate]: ...
 
 
 class RetrievalRunRepositoryPort(Protocol):

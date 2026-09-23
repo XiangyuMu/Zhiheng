@@ -39,7 +39,8 @@ def _snapshot(tmp_path: Path) -> tuple[Path, Path, Path]:
             KnowledgeIngestionService(settings).ingest_prepared_user_text(
                 session,
                 TextEvidenceInput(
-                    title="synthetic title", text="synthetic backup evidence",
+                    title="synthetic title",
+                    text="synthetic backup evidence",
                     primary_domain_id="technology.ai",
                 ),
                 user_authority=KnowledgeUserAuthority("synthetic-user"),
@@ -116,15 +117,20 @@ def test_real_restic_encrypts_and_restores_bundle(tmp_path: Path) -> None:
     }
     subprocess.run([binary, "init"], env=env, capture_output=True, check=True)
     result = subprocess.run(
-        [sys.executable, "scripts/backup_restic.py"], env=env,
-        capture_output=True, text=True, check=True,
+        [sys.executable, "scripts/backup_restic.py"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     snapshot_id = json.loads(result.stdout)["snapshot_id"]
     assert len(snapshot_id) == 64
     restored = tmp_path / "restored"
     subprocess.run(
         [binary, "restore", snapshot_id, "--target", str(restored), "--verify"],
-        env=env, capture_output=True, check=True,
+        env=env,
+        capture_output=True,
+        check=True,
     )
     manifests = list(restored.rglob("manifest.json"))
     assert len(manifests) == 1

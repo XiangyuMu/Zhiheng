@@ -61,8 +61,9 @@ def test_fixed_suite_runner_dispatches_exact_registry_and_reports_actual_depende
     assert run.evaluation_report.promotion_eligible is bool(configured)
     migration = _case(run.observed_cases, "migration-answer-strategy-transfer-001")
     assert migration.passed
-    assert migration.observed_facts["baseline"]["input_digest"] == (
-        migration.observed_facts["candidate"]["input_digest"]
+    assert (
+        migration.observed_facts["baseline"]["input_digest"]
+        == (migration.observed_facts["candidate"]["input_digest"])
     )
 
     canary = _case(run.observed_cases, "safety-canary-insufficient-samples-001")
@@ -151,13 +152,9 @@ def test_runner_persists_hmac_verified_case_trajectories(tmp_path: Path) -> None
         retention = repository.get(
             next(item for item in trajectory_ids if "retention-structured" in item)
         )
-        canary = repository.get(
-            next(item for item in trajectory_ids if "safety-canary" in item)
-        )
+        canary = repository.get(next(item for item in trajectory_ids if "safety-canary" in item))
         assert retention.learning_eligible is True
-        assert retention.envelope.process["case_id"] == (
-            "retention-structured-direct-lookup-001"
-        )
+        assert retention.envelope.process["case_id"] == ("retention-structured-direct-lookup-001")
         assert canary.learning_eligible is True
         assert not canary.envelope.failure_tags
     finally:

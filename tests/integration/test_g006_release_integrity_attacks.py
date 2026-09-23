@@ -38,24 +38,37 @@ _REQUIRES_RESTIC = pytest.mark.skipif(
 @_REQUIRES_RESTIC
 @pytest.mark.parametrize(
     "field",
-    ["request_digest", "deployment_hmac_digest", "event_chain_digest", "event_hashes",
-     "events", "canary_observation"],
+    [
+        "request_digest",
+        "deployment_hmac_digest",
+        "event_chain_digest",
+        "event_hashes",
+        "events",
+        "canary_observation",
+    ],
 )
 def test_canary_rejects_tampered_last_observation_without_changing_head(
-    tmp_path: Path, field: str,
+    tmp_path: Path,
+    field: str,
 ) -> None:
     with _upgrade(tmp_path / "release.db") as connection:
         controller = ReleaseController.from_db(connection)
         baseline_id = _bootstrap_stable(controller)
         candidate = _prepare_release(
-            controller, binding=_binding("tamper", baseline_id),
-            proposer_id="proposer-a", reviewer_id="reviewer-b",
-            canary_assignment=_assignment("attack"), canary_samples=5,
+            controller,
+            binding=_binding("tamper", baseline_id),
+            proposer_id="proposer-a",
+            reviewer_id="reviewer-b",
+            canary_assignment=_assignment("attack"),
+            canary_samples=5,
             request_id="prepare-attack",
         )
         _advance_to_canary(controller, candidate.release_id)
         _insert_canary_observations(
-            connection, candidate.release_id, candidate.binding, cohort="attack",
+            connection,
+            candidate.release_id,
+            candidate.binding,
+            cohort="attack",
         )
         row = connection.execute(
             "SELECT id, evidence_refs_json FROM task_trajectories "
@@ -82,8 +95,10 @@ def test_canary_rejects_tampered_last_observation_without_changing_head(
         connection.commit()
         with pytest.raises(ValueError):
             controller.promote_release(
-                candidate.release_id, publisher_context=_publisher_context(),
-                user_approval_context=_user_approval_context(), request_id="promote-attack",
+                candidate.release_id,
+                publisher_context=_publisher_context(),
+                user_approval_context=_user_approval_context(),
+                request_id="promote-attack",
             )
         head = controller.load_default_head(TARGET_COMPONENT)
         assert head is not None and head.release_id == baseline_id
@@ -97,18 +112,26 @@ def test_rollback_rejects_corrupted_target_head(tmp_path: Path, field: str) -> N
         controller = ReleaseController.from_db(connection)
         baseline_id = _bootstrap_stable(controller)
         candidate = _prepare_release(
-            controller, binding=_binding("rollback-attack", baseline_id),
-            proposer_id="proposer-a", reviewer_id="reviewer-b",
-            canary_assignment=_assignment("attack"), canary_samples=5,
+            controller,
+            binding=_binding("rollback-attack", baseline_id),
+            proposer_id="proposer-a",
+            reviewer_id="reviewer-b",
+            canary_assignment=_assignment("attack"),
+            canary_samples=5,
             request_id="prepare-attack",
         )
         _advance_to_canary(controller, candidate.release_id)
         _insert_canary_observations(
-            connection, candidate.release_id, candidate.binding, cohort="attack",
+            connection,
+            candidate.release_id,
+            candidate.binding,
+            cohort="attack",
         )
         controller.promote_release(
-            candidate.release_id, publisher_context=_publisher_context(),
-            user_approval_context=_user_approval_context(), request_id="promote-attack",
+            candidate.release_id,
+            publisher_context=_publisher_context(),
+            user_approval_context=_user_approval_context(),
+            request_id="promote-attack",
         )
         replacement = "archived" if field == "release_state" else "tampered"
         # The column is selected exclusively from the fixed parametrization.
@@ -119,8 +142,10 @@ def test_rollback_rejects_corrupted_target_head(tmp_path: Path, field: str) -> N
         connection.commit()
         with pytest.raises(ValueError):
             controller.rollback_release(
-                candidate.release_id, publisher_context=_publisher_context(),
-                user_approval_context=_user_approval_context(), request_id="rollback-attack",
+                candidate.release_id,
+                publisher_context=_publisher_context(),
+                user_approval_context=_user_approval_context(),
+                request_id="rollback-attack",
             )
         head = controller.load_default_head(TARGET_COMPONENT)
         assert head is not None and head.release_id == candidate.release_id
@@ -153,9 +178,7 @@ def test_validation_rejects_caller_supplied_low_score_without_protected_executio
                 validation_report_ref=binding.validation_report_ref,
                 canary_samples=5,
                 trajectory_ids=trajectory_ids,
-                validator_context=command_context_for_role(
-                    "validator-a", EvolutionRole.VALIDATOR
-                ),
+                validator_context=command_context_for_role("validator-a", EvolutionRole.VALIDATOR),
             )
 
 
@@ -211,9 +234,7 @@ def test_validation_rejects_caller_supplied_unregistered_case_without_protected_
                 validation_report_ref=binding.validation_report_ref,
                 canary_samples=5,
                 trajectory_ids=trajectory_ids,
-                validator_context=command_context_for_role(
-                    "validator-a", EvolutionRole.VALIDATOR
-                ),
+                validator_context=command_context_for_role("validator-a", EvolutionRole.VALIDATOR),
             )
 
 
@@ -243,7 +264,5 @@ def test_validation_rejects_caller_supplied_failure_tags_without_protected_execu
                 validation_report_ref=binding.validation_report_ref,
                 canary_samples=5,
                 trajectory_ids=trajectory_ids,
-                validator_context=command_context_for_role(
-                    "validator-a", EvolutionRole.VALIDATOR
-                ),
+                validator_context=command_context_for_role("validator-a", EvolutionRole.VALIDATOR),
             )

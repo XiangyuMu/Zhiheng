@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import time
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from inspect import Parameter, signature
 from typing import Protocol
 
 from sqlalchemy.orm import Session
@@ -12,8 +14,11 @@ from zhiheng.core.ids import sha256_text
 from zhiheng.evolution.releases import ReleaseContext
 from zhiheng.retrieval.authorization import RetrievalAuthorizer
 from zhiheng.retrieval.contracts import (
+    AuthorizedChunk,
     HybridRetrievalResult,
+    RerankerPort,
     RetrievalCandidate,
+    RetrievalFilters,
     RetrievalRunRepositoryPort,
     RetrievalSource,
 )
@@ -21,7 +26,14 @@ from zhiheng.retrieval.repository import LexicalRetriever, RetrievalRunRepositor
 
 
 class LexicalSearchPort(Protocol):
-    def search(self, session: Session, query: str, *, limit: int) -> list[RetrievalCandidate]: ...
+    def search(
+        self,
+        session: Session,
+        query: str,
+        *,
+        limit: int,
+        filters: RetrievalFilters | None = None,
+    ) -> list[RetrievalCandidate]: ...
 
 
 class VectorSearchPort(Protocol):
@@ -32,7 +44,38 @@ class VectorSearchPort(Protocol):
         *,
         generation_id: str,
         limit: int,
+        filters: RetrievalFilters | None = None,
     ) -> list[RetrievalCandidate]: ...
+
+
+class DeterministicReranker:
+    """Stable final pass that rewards multi-retriever agreement.
+
+    A model reranker can be injected later without changing the retrieval
+    contract. The default remains local, deterministic, and explainable.
+    """
+
+    def rerank(
+        self,
+        session: Session,
+        query: str,
+        candidates: Sequence[RetrievalCandidate],
+        *,
+        limit: int,
+    ) -> Sequence[RetrievalCandidate]:
+        del session, query
+        ranked = sorted(
+            candidates,
+            key=lambda candidate: (
+                -candidate.score,
+                -len(candidate.component_ranks),
+                candidate.chunk_id,
+            ),
+        )
+        return [
+            replace(candidate, rank=index)
+            for index, candidate in enumerate(ranked[:limit], start=1)
+        ]
 
 
 class HybridRetriever:
@@ -43,12 +86,14 @@ class HybridRetriever:
         vector: VectorSearchPort | None = None,
         authorizer: RetrievalAuthorizer | None = None,
         run_repository: RetrievalRunRepositoryPort | None = None,
+        reranker: RerankerPort | None = None,
         rrf_k: int = 60,
     ) -> None:
         self._lexical = lexical or LexicalRetriever()
         self._vector = vector or VectorRetriever()
         self._authorizer = authorizer or RetrievalAuthorizer()
         self._run_repository = run_repository or RetrievalRunRepository()
+        self._reranker = reranker or DeterministicReranker()
         self._rrf_k = rrf_k
 
     def search(
@@ -62,6 +107,7 @@ class HybridRetriever:
         overfetch_factor: int = 4,
         release_context: ReleaseContext,
         rrf_k: int | None = None,
+        filters: RetrievalFilters | None = None,
     ) -> HybridRetrievalResult:
         return self._search(
             session,
@@ -72,6 +118,7 @@ class HybridRetriever:
             overfetch_factor=overfetch_factor,
             strategy_release_id=release_context.release_id,
             rrf_k=rrf_k,
+            filters=filters,
         )
 
     def search_offline(
@@ -84,6 +131,7 @@ class HybridRetriever:
         limit: int = 10,
         overfetch_factor: int = 4,
         rrf_k: int | None = None,
+        filters: RetrievalFilters | None = None,
     ) -> HybridRetrievalResult:
         """Explicit non-serving entry point for fixed-set evaluation and tests."""
         return self._search(
@@ -95,6 +143,7 @@ class HybridRetriever:
             overfetch_factor=overfetch_factor,
             strategy_release_id="offline-evaluation",
             rrf_k=rrf_k,
+            filters=filters,
         )
 
     def _search(
@@ -108,6 +157,7 @@ class HybridRetriever:
         overfetch_factor: int,
         strategy_release_id: str,
         rrf_k: int | None,
+        filters: RetrievalFilters | None,
     ) -> HybridRetrievalResult:
         started_at = time.monotonic()
         overfetch_limit = max(limit, limit * overfetch_factor)
@@ -115,7 +165,15 @@ class HybridRetriever:
         candidates: list[RetrievalCandidate] = []
 
         try:
-            candidates.extend(self._lexical.search(session, query, limit=overfetch_limit))
+            candidates.extend(
+                _search_with_optional_filters(
+                    self._lexical,
+                    session,
+                    query,
+                    limit=overfetch_limit,
+                    filters=filters,
+                )
+            )
         except ValueError:
             degraded.append("lexical_no_indexable_tokens")
 
@@ -123,11 +181,13 @@ class HybridRetriever:
             degraded.append("vector_unavailable")
         else:
             try:
-                vector_hits = self._vector.search(
+                vector_hits = _vector_search_with_optional_filters(
+                    self._vector,
                     session,
                     query_embedding,
                     generation_id=vector_generation_id,
                     limit=overfetch_limit,
+                    filters=filters,
                 )
             except ValueError:
                 vector_hits = []
@@ -142,6 +202,16 @@ class HybridRetriever:
             candidates.extend(vector_hits)
 
         fused = self._rrf(candidates, rrf_k=rrf_k)[:overfetch_limit]
+        try:
+            reranked = self._reranker.rerank(
+                session,
+                query,
+                fused,
+                limit=overfetch_limit,
+            )
+            fused = list(reranked)[:overfetch_limit]
+        except (RuntimeError, ValueError, TypeError):
+            degraded.append("reranker_unavailable")
         retrievers_by_tuple = {
             candidate.authorization_tuple: tuple(
                 retriever for retriever, _rank in candidate.component_ranks
@@ -159,6 +229,7 @@ class HybridRetriever:
             )
             for chunk in self._authorizer.authorize_batch(session, fused)
         ]
+        authorized = _filter_authorized_chunks(session, authorized, filters)
         authorized = sorted(authorized, key=lambda chunk: (-chunk.score, chunk.chunk_id))[:limit]
         resealed_chunks = self._authorizer.authorize_batch(
             session,
@@ -264,3 +335,75 @@ class HybridRetriever:
             )
             for index, key in enumerate(ranked_keys, start=1)
         ]
+
+
+def _supports_keyword(parameters: Mapping[str, Parameter], name: str) -> bool:
+    return name in parameters or any(
+        parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+
+
+def _search_with_optional_filters(
+    retriever: LexicalSearchPort,
+    session: Session,
+    query: str,
+    *,
+    limit: int,
+    filters: RetrievalFilters | None,
+) -> list[RetrievalCandidate]:
+    parameters = signature(retriever.search).parameters
+    kwargs: dict[str, object] = {"limit": limit}
+    if _supports_keyword(parameters, "filters"):
+        kwargs["filters"] = filters
+    return retriever.search(session, query, **kwargs)  # type: ignore[arg-type]
+
+
+def _vector_search_with_optional_filters(
+    retriever: VectorSearchPort,
+    session: Session,
+    query_embedding: Sequence[float],
+    *,
+    generation_id: str,
+    limit: int,
+    filters: RetrievalFilters | None,
+) -> list[RetrievalCandidate]:
+    parameters = signature(retriever.search).parameters
+    kwargs: dict[str, object] = {"generation_id": generation_id, "limit": limit}
+    if _supports_keyword(parameters, "filters"):
+        kwargs["filters"] = filters
+    return retriever.search(session, query_embedding, **kwargs)  # type: ignore[arg-type]
+
+
+def _filter_authorized_chunks(
+    session: Session,
+    chunks: Sequence[AuthorizedChunk],
+    filters: RetrievalFilters | None,
+) -> list[AuthorizedChunk]:
+    if not chunks or filters is None or filters.is_empty():
+        return list(chunks)
+    ids = sorted({str(chunk.source_id) for chunk in chunks})
+    conditions = ["ko.id IN (SELECT value FROM json_each(:retrieval_ids))"]
+    params: dict[str, object] = {"retrieval_ids": json.dumps(ids, ensure_ascii=False)}
+    if filters.domain_id is not None:
+        conditions.append("ko.primary_domain_id = :retrieval_domain_id")
+        params["retrieval_domain_id"] = filters.domain_id
+    for name, operator, value in (
+        ("created_at", ">=", filters.created_from),
+        ("created_at", "<=", filters.created_to),
+        ("updated_at", ">=", filters.updated_from),
+        ("updated_at", "<=", filters.updated_to),
+    ):
+        if value is not None:
+            key = f"retrieval_{name}_{operator[0]}"
+            conditions.append(f"ko.{name} {operator} :{key}")
+            params[key] = value.isoformat()
+    from sqlalchemy import text
+
+    allowed = {
+        str(row[0])
+        for row in session.execute(
+            text("SELECT ko.id FROM knowledge_objects ko WHERE " + " AND ".join(conditions)),
+            params,
+        )
+    }
+    return [chunk for chunk in chunks if chunk.source_id in allowed]

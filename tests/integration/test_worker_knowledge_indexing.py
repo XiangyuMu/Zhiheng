@@ -125,15 +125,19 @@ def test_knowledge_index_job_rebuilds_fts_and_active_vector_generation(
 
     with session_scope(session_factory) as session:
         job_status = session.execute(text("SELECT status FROM jobs")).scalar_one()
-        active_generation = session.execute(
-            text(
-                """
+        active_generation = (
+            session.execute(
+                text(
+                    """
                 SELECT id, built_count, index_status
                 FROM embedding_generations
                 WHERE index_status = 'active'
                 """
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         embedding_count = session.execute(
             text("SELECT count(*) FROM chunk_embeddings")
         ).scalar_one()

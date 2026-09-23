@@ -212,16 +212,21 @@ class KnowledgeGapService:
               )
             ORDER BY r.created_at DESC, r.id DESC
             """
-        rows = session.execute(
-            text(query),
-            {"goal_id": goal_id},
-        ).mappings().all()
+        rows = (
+            session.execute(
+                text(query),
+                {"goal_id": goal_id},
+            )
+            .mappings()
+            .all()
+        )
         return tuple(_recommendation_from_row(row) for row in rows)
 
     def dismiss(self, session: Session, gap_id: str, *, reason: str) -> bool:
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT
                   r.run_id, r.goal_state_key, r.domain_id, r.why, r.benefit,
                   r.missing_coverage_json
@@ -245,9 +250,12 @@ class KnowledgeGapService:
                       ) = r.id
                   )
                 """
-            ),
-            {"id": gap_id},
-        ).mappings().first()
+                ),
+                {"id": gap_id},
+            )
+            .mappings()
+            .first()
+        )
         if row is None:
             return False
 

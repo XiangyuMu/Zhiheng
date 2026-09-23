@@ -86,7 +86,9 @@ def test_load_proposal_source_graph_rejects_source_less_legacy_candidate(
     with _connection(tmp_path) as connection:
         controller = ReleaseController.from_db(connection)
         binding = _binding(
-            "legacy-source-less", graph.baseline_release_id, graph.canonical_digest(),
+            "legacy-source-less",
+            graph.baseline_release_id,
+            graph.canonical_digest(),
         )
         proposal = controller.create_release_proposal(
             binding=binding,
@@ -172,10 +174,13 @@ def test_create_proposal_inside_caller_transaction_is_rollbackable(
 
         assert connection.in_transaction
         connection.rollback()
-        assert connection.execute(
-            "SELECT count(*) FROM evolution_proposals WHERE id = ?",
-            (proposal.proposal_id,),
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM evolution_proposals WHERE id = ?",
+                (proposal.proposal_id,),
+            ).fetchone()[0]
+            == 0
+        )
     finally:
         connection.close()
 

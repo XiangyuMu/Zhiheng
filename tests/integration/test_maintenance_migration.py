@@ -19,9 +19,10 @@ def test_maintenance_migration_roundtrip_preserves_existing_job(tmp_path: Path) 
     for _ in range(2):
         command.upgrade(config, "head")
         with closing(sqlite3.connect(database)) as connection:
-            tables = {row[0] for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )}
+            tables = {
+                row[0]
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
             assert {"maintenance_job_locks", "maintenance_job_receipts"} <= tables
             assert connection.execute("SELECT id FROM jobs").fetchall() == [
                 ("synthetic-existing",),
@@ -29,9 +30,10 @@ def test_maintenance_migration_roundtrip_preserves_existing_job(tmp_path: Path) 
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         command.downgrade(config, "0009_release_execution_runs")
         with closing(sqlite3.connect(database)) as connection:
-            tables = {row[0] for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )}
+            tables = {
+                row[0]
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
             assert not {"maintenance_job_locks", "maintenance_job_receipts"} & tables
             assert connection.execute("SELECT id FROM jobs").fetchall() == [
                 ("synthetic-existing",),

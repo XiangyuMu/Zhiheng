@@ -66,10 +66,13 @@ class GatewayAnswerModel:
             memory_context=memory_context,
             max_output_tokens=max_output_tokens,
         )
-        return replace(result, claims=tuple(
-            replace(claim, citation_ids=tuple(original_ids[key] for key in claim.citation_ids))
-            for claim in result.claims
-        ))
+        return replace(
+            result,
+            claims=tuple(
+                replace(claim, citation_ids=tuple(original_ids[key] for key in claim.citation_ids))
+                for claim in result.claims
+            ),
+        )
 
 
 def _wire_citation_id(citation: Citation) -> str:
@@ -90,13 +93,16 @@ def _wire_memory_ref(ref: PersonalizationRef) -> str:
 
 
 def _validate_citations(
-    manifest: AuthorizedContextManifest, citations: Sequence[Citation],
+    manifest: AuthorizedContextManifest,
+    citations: Sequence[Citation],
 ) -> None:
     builder = CitationBuilder()
     for citation in citations:
         expected = builder.build(
-            manifest, chunk_id=citation.chunk_id,
-            start_offset=citation.offset[0], end_offset=citation.offset[1],
+            manifest,
+            chunk_id=citation.chunk_id,
+            start_offset=citation.offset[0],
+            end_offset=citation.offset[1],
         )
         if replace(expected, citation_id=citation.citation_id) != citation:
             raise ValueError("citation does not match authorized manifest")
@@ -146,8 +152,11 @@ def _canonical_prompt(
         },
         "USER_CONFIRMED_CONTEXT": _memory_payload(memory_context),
         "CONVERSATION_CONTEXT": [
-            {"query": str(turn.get("query", "")), "answer": str(turn.get("answer", ""))}
-            for turn in (conversation_context or ())
+            {
+                "query": str(item.get("query", ""))[:4000],
+                "answer": str(item.get("answer", ""))[:4000],
+            }
+            for item in (conversation_context or ())
         ],
         "max_output_tokens": max_output_tokens,
         "manifest": {
@@ -177,10 +186,14 @@ def _memory_payload(memory_context: MemoryContextSnapshot | None) -> dict[str, A
                 "memory_type": entry.memory_type,
                 "provenance": {
                     "confidence": entry.confidence,
-                    "memory_ref_id": _wire_memory_ref(PersonalizationRef(
-                        entry.formal_memory_id, entry.formal_version_id,
-                        entry.confirmation_generation, entry.state_key,
-                    )),
+                    "memory_ref_id": _wire_memory_ref(
+                        PersonalizationRef(
+                            entry.formal_memory_id,
+                            entry.formal_version_id,
+                            entry.confirmation_generation,
+                            entry.state_key,
+                        )
+                    ),
                     "origin_kind": entry.origin_kind,
                     "source_kind": entry.source_kind,
                     "valid_from": entry.valid_from,

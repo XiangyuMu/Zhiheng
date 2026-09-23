@@ -68,9 +68,7 @@ def test_taxonomy_exposes_fourteen_domains_and_independent_record_type(tmp_path:
 def test_reclassification_requires_preview_etag_and_preserves_history(tmp_path: Path) -> None:
     client = _client(tmp_path)
     csrf = _login(client)
-    knowledge_id = _import_knowledge(
-        client, csrf, "taxonomy-import", "personal_archive_experience"
-    )
+    knowledge_id = _import_knowledge(client, csrf, "taxonomy-import", "personal_archive_experience")
 
     created = client.post(
         "/v1/taxonomy/proposals/reclassification",
@@ -110,9 +108,7 @@ def test_reclassification_requires_preview_etag_and_preserves_history(tmp_path: 
 def test_legacy_migration_is_previewed_item_by_item(tmp_path: Path) -> None:
     client = _client(tmp_path)
     csrf = _login(client)
-    knowledge_id = _import_knowledge(
-        client, csrf, "legacy-import", "personal_archive_experience"
-    )
+    knowledge_id = _import_knowledge(client, csrf, "legacy-import", "personal_archive_experience")
 
     created = client.post(
         "/v1/taxonomy/proposals/legacy-migration",

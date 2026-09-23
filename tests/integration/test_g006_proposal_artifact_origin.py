@@ -26,7 +26,8 @@ def test_proposal_freezes_artifact_before_validation(tmp_path: Path) -> None:
         binding = _binding("frozen-artifact", baseline)
         artifact = default_release_artifact()
         proposal = controller.create_release_proposal(
-            binding=binding, artifact_payload=artifact,
+            binding=binding,
+            artifact_payload=artifact,
             proposer_context=command_context_for_role("proposer", EvolutionRole.PROPOSER),
         )
         artifact["retrieval"]["overfetch_factor"] = 8
@@ -47,11 +48,14 @@ def test_only_reviewer_approves_already_validated_frozen_content(tmp_path: Path)
         baseline = _bootstrap_stable(controller)
         binding = _binding("review-boundary", baseline)
         proposal = controller.create_release_proposal(
-            binding=binding, artifact_payload=default_release_artifact(),
+            binding=binding,
+            artifact_payload=default_release_artifact(),
             proposer_context=command_context_for_role("proposer", EvolutionRole.PROPOSER),
         )
         review_kwargs: dict[str, Any] = dict(
-            binding=binding, proposal_id=proposal.proposal_id, proposer_id="proposer",
+            binding=binding,
+            proposal_id=proposal.proposal_id,
+            proposer_id="proposer",
             reviewer_decision_ref=binding.reviewer_decision_ref,
             reviewer_context=command_context_for_role("reviewer", EvolutionRole.REVIEWER),
         )
@@ -61,8 +65,10 @@ def test_only_reviewer_approves_already_validated_frozen_content(tmp_path: Path)
             controller, proposal_id=proposal.proposal_id, request_id="validate-review-boundary"
         )
         validation = controller.record_release_validation_evidence(
-            binding=binding, proposal_id=proposal.proposal_id,
-            validation_report_ref=binding.validation_report_ref, canary_samples=5,
+            binding=binding,
+            proposal_id=proposal.proposal_id,
+            validation_report_ref=binding.validation_report_ref,
+            canary_samples=5,
             trajectory_ids=tuple(run["trajectory_ids"]),
             validator_context=command_context_for_role("validator", EvolutionRole.VALIDATOR),
             evaluation_run_id=str(run["id"]),
@@ -75,15 +81,26 @@ def test_only_reviewer_approves_already_validated_frozen_content(tmp_path: Path)
         )
         assert fixed_report["execution_run_id"] == run["id"]
         assert fixed_report["execution_record_digest"].startswith("sha256:")
-        assert connection.execute(
-            "SELECT state FROM evolution_proposals WHERE id = ?", (proposal.proposal_id,)
-        ).fetchone()[0] == "validating"
-        assert connection.execute(
-            "SELECT count(*) FROM proposal_state_events WHERE proposal_id = ? "
-            "AND next_state = 'approved'", (proposal.proposal_id,)
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT state FROM evolution_proposals WHERE id = ?", (proposal.proposal_id,)
+            ).fetchone()[0]
+            == "validating"
+        )
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM proposal_state_events WHERE proposal_id = ? "
+                "AND next_state = 'approved'",
+                (proposal.proposal_id,),
+            ).fetchone()[0]
+            == 0
+        )
         controller.record_release_review_evidence(**review_kwargs)
-        assert connection.execute(
-            "SELECT actor_role FROM proposal_state_events WHERE proposal_id = ? "
-            "AND next_state = 'approved'", (proposal.proposal_id,)
-        ).fetchone()[0] == "reviewer"
+        assert (
+            connection.execute(
+                "SELECT actor_role FROM proposal_state_events WHERE proposal_id = ? "
+                "AND next_state = 'approved'",
+                (proposal.proposal_id,),
+            ).fetchone()[0]
+            == "reviewer"
+        )

@@ -16,6 +16,7 @@ from zhiheng.retrieval.vector_index import VectorIndexRepository
 
 class CitationContextRepository:
     """Read an authorized serving chunk for citation replay."""
+
     def get_chunk(
         self,
         session: Session,
@@ -25,9 +26,10 @@ class CitationContextRepository:
         source_version_id: str,
         chunk_id: str,
     ) -> dict[str, object] | None:
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT s.title, s.text, s.span_start, s.span_end,
                        ko.object_kind, eo.media_type
                 FROM serving_chunks s
@@ -41,14 +43,17 @@ class CitationContextRepository:
                 WHERE s.source_type=:source_type AND s.source_id=:source_id
                   AND s.source_version_id=:source_version_id AND s.id=:chunk_id
                 """
-            ),
-            {
-                "source_type": source_type,
-                "source_id": source_id,
-                "source_version_id": source_version_id,
-                "chunk_id": chunk_id,
-            },
-        ).mappings().first()
+                ),
+                {
+                    "source_type": source_type,
+                    "source_id": source_id,
+                    "source_version_id": source_version_id,
+                    "chunk_id": chunk_id,
+                },
+            )
+            .mappings()
+            .first()
+        )
         return dict(row) if row is not None else None
 
 
@@ -193,16 +198,20 @@ class VectorRetriever:
         *,
         generation_id: str,
     ) -> VectorGenerationMetadata | None:
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT model_id, model_revision, dimension, purpose, index_status
                 FROM embedding_generations
                 WHERE id = :generation_id
                 """
-            ),
-            {"generation_id": generation_id},
-        ).mappings().first()
+                ),
+                {"generation_id": generation_id},
+            )
+            .mappings()
+            .first()
+        )
         if row is None:
             return None
         return VectorGenerationMetadata(

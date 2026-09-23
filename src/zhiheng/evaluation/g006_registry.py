@@ -101,9 +101,7 @@ REGISTERED_FIXED_SET_NAMES: tuple[str, ...] = (
     "retention",
     "safety",
 )
-REGISTERED_FIXED_CASE_IDS: tuple[str, ...] = tuple(
-    case.case_id for case in REGISTERED_FIXED_CASES
-)
+REGISTERED_FIXED_CASE_IDS: tuple[str, ...] = tuple(case.case_id for case in REGISTERED_FIXED_CASES)
 
 _CASE_BY_ID: Mapping[str, RegisteredG006Case] = {
     case.case_id: case for case in REGISTERED_FIXED_CASES

@@ -35,6 +35,7 @@ class DecisionRequest:
     problem: str
     options: tuple[DecisionOption, ...]
     formal_goal_refs: tuple[str, ...]
+    constraints: tuple[str, ...] = ()
     decision_type: str = "compare"
     template_id: str = "g005.default"
 
@@ -52,6 +53,7 @@ class DecisionAnalysis:
     change_conditions: tuple[str, ...]
     recommendation: str | None
     claims: tuple[AnswerClaim, ...] = ()
+    option_reviews: tuple[dict[str, str], ...] = ()
     conflicts: tuple[str, ...] = ()
     insufficiencies: tuple[str, ...] = ()
     external_action_count: int = 0
@@ -149,6 +151,7 @@ class DecisionSupportService:
         conflicts: tuple[str, ...] = ()
         answer_assumptions: tuple[str, ...] = ()
         insufficiencies: tuple[str, ...] = ()
+        decision_output_text: str | None = None
         personalization_refs: tuple[PersonalizationRef, ...] = ()
         stop_reason = "completed" if citations else "insufficient_evidence"
         model_call_count = 0
@@ -179,8 +182,19 @@ class DecisionSupportService:
             if envelope.stop_reason is StopReason.COMPLETED:
                 claims = envelope.claims
                 if envelope.answer.strip() and self._claims_are_cited(claims, analysis_citations):
-                    recommendation = envelope.answer
-                    personalization_refs = envelope.personalization_refs
+                    decision_output_text = envelope.answer
+                    structured = _structured_decision_output(envelope.answer)
+                    if structured is False:
+                        recommendation = None
+                        claims = ()
+                        stop_reason = StopReason.INVALID_MODEL_OUTPUT.value
+                    else:
+                        recommendation = (
+                            structured["recommendation"]
+                            if isinstance(structured, dict)
+                            else envelope.answer
+                        )
+                        personalization_refs = envelope.personalization_refs
                 else:
                     recommendation = None
                     claims = ()
@@ -201,23 +215,56 @@ class DecisionSupportService:
         if final_citation_digest is None or final_citation_digest != current_citation_replay_digest:
             raise DecisionContextStaleError("decision citations changed before publication")
 
+        parsed_review = _parse_option_reviews(
+            request,
+            answer=decision_output_text,
+            claims=claims,
+            citations=analysis_citations,
+        )
+        if parsed_review is None:
+            review = tuple(
+                {
+                    "label": option.label,
+                    "description": option.description,
+                    "comparison_status": "unavailable",
+                    "benefit": "未生成可验证比较",
+                    "cost": "未生成可验证比较",
+                    "risk": "未生成可验证比较",
+                    "opportunity_cost": "未生成可验证比较",
+                    "assumption": "未生成可验证比较",
+                    "evidence": "未生成可验证比较",
+                    "change_condition": "需要重新分析并返回结构化方案比较",
+                    "citation_ids": "",
+                }
+                for option in request.options
+            )
+            benefits: tuple[str, ...] = ()
+            costs: tuple[str, ...] = ()
+            risks: tuple[str, ...] = (
+                "未生成可验证的按方案比较：模型没有返回结构化 option_reviews。",
+            )
+            opportunity_costs: tuple[str, ...] = ()
+            change_conditions: tuple[str, ...] = ("需要重新分析并返回带有效引用的结构化方案比较。",)
+        else:
+            review = parsed_review
+            benefits = tuple(item["benefit"] for item in review)
+            costs = tuple(item["cost"] for item in review)
+            risks = tuple(item["risk"] for item in review)
+            opportunity_costs = tuple(item["opportunity_cost"] for item in review)
+            change_conditions = tuple(item["change_condition"] for item in review)
         base_assumptions = ("仅提供建议、保存和复盘，不执行交易、发送、购买或发布。",)
         analysis = DecisionAnalysis(
             run_id=new_id(),
-            benefits=tuple(
-                f"{option.label}: potential benefit requires cited review"
-                for option in request.options
-            ),
-            costs=tuple(
-                f"{option.label}: cost requires cited review" for option in request.options
-            ),
-            risks=("证据覆盖不足时不得给出确定性建议。",),
-            opportunity_costs=("选择任一方案都会占用其他目标的时间和注意力。",),
-            assumptions=(*base_assumptions, *answer_assumptions),
+            benefits=benefits,
+            costs=costs,
+            risks=risks,
+            opportunity_costs=opportunity_costs,
+            assumptions=(*base_assumptions, *request.constraints, *answer_assumptions),
             citations=analysis_citations,
             claims=claims,
+            option_reviews=review,
             preference=None,
-            change_conditions=("新增正式证据或目标版本变化时需要复盘。",),
+            change_conditions=change_conditions,
             recommendation=recommendation,
             conflicts=conflicts,
             insufficiencies=insufficiencies,
@@ -277,6 +324,8 @@ class DecisionSupportService:
                         "costs": list(analysis.costs),
                         "risks": list(analysis.risks),
                         "opportunity_costs": list(analysis.opportunity_costs),
+                        "option_reviews": list(analysis.option_reviews),
+                        "constraints": list(request.constraints),
                         "assumptions": list(analysis.assumptions),
                         "conflicts": list(analysis.conflicts),
                         "insufficiencies": list(analysis.insufficiencies),
@@ -364,6 +413,10 @@ class DecisionSupportService:
                 _citation_from_json(item) for item in _object_list(review_json.get("citation_refs"))
             ),
             claims=claims,
+            option_reviews=tuple(
+                {str(key): str(item_value) for key, item_value in item.items()}
+                for item in _object_list(review_json.get("option_reviews"))
+            ),
             preference=_optional_string(recommendation_json.get("preference")),
             change_conditions=tuple(_string_list(review_json.get("change_conditions"))),
             recommendation=_optional_string(recommendation_json.get("recommendation")),
@@ -495,11 +548,20 @@ def decision_query_text(
         "options": [
             {"label": option.label, "description": option.description} for option in request.options
         ],
+        "constraints": list(request.constraints),
         "formal_goal_refs": [ref.state_key for ref in goals],
         "instructions": [
             "Provide advice only; do not execute external actions.",
             "Use only authorized knowledge citations as evidence.",
             "Use confirmed memory only as personalization context.",
+            "Compare every option against the supplied constraints.",
+            "Mark uncertainty and revisit conditions when evidence is incomplete.",
+            (
+                "For decision requests, put a strict JSON object in answer with keys "
+                "recommendation and option_reviews. option_reviews must include every option "
+                "label exactly once, and each row must contain benefit, cost, risk, "
+                "opportunity_cost, assumption, evidence, change_condition, and citation_ids."
+            ),
         ],
     }
     return json_text(payload)
@@ -540,6 +602,84 @@ def _options_hash(options: Sequence[DecisionOption]) -> str:
             ]
         }
     )
+
+
+def _parse_option_reviews(
+    request: DecisionRequest,
+    *,
+    answer: str | None,
+    claims: Sequence[AnswerClaim],
+    citations: Sequence[Citation],
+) -> tuple[dict[str, str], ...] | None:
+    if not answer:
+        return None
+    import json
+
+    try:
+        data = json.loads(answer)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw_reviews = data.get("option_reviews")
+    if not isinstance(raw_reviews, list):
+        return None
+    expected_labels = [option.label for option in request.options]
+    if len(raw_reviews) != len(expected_labels):
+        return None
+    allowed_citation_ids = {citation.citation_id for citation in citations}
+    cited_claim_ids = {citation_id for claim in claims for citation_id in claim.citation_ids}
+    required_keys = {
+        "label",
+        "benefit",
+        "cost",
+        "risk",
+        "opportunity_cost",
+        "assumption",
+        "evidence",
+        "change_condition",
+        "citation_ids",
+    }
+    normalized: list[dict[str, str]] = []
+    seen_labels: list[str] = []
+    for value in raw_reviews:
+        if not isinstance(value, dict) or set(value) != required_keys:
+            return None
+        label = value["label"]
+        citation_ids = value["citation_ids"]
+        if not isinstance(label, str) or not isinstance(citation_ids, list):
+            return None
+        if not citation_ids or not all(isinstance(item, str) for item in citation_ids):
+            return None
+        citation_id_set = set(citation_ids)
+        if not citation_id_set.issubset(allowed_citation_ids & cited_claim_ids):
+            return None
+        row: dict[str, str] = {"label": label}
+        for key in required_keys - {"label", "citation_ids"}:
+            if not isinstance(value[key], str) or not value[key].strip():
+                return None
+            row[key] = value[key].strip()
+        row["citation_ids"] = ",".join(citation_ids)
+        normalized.append(row)
+        seen_labels.append(label)
+    if sorted(seen_labels) != sorted(expected_labels):
+        return None
+    return tuple(normalized)
+
+
+def _structured_decision_output(answer: str) -> dict[str, Any] | bool | None:
+    stripped = answer.strip()
+    if not stripped.startswith("{"):
+        return None
+    import json
+
+    try:
+        data = json.loads(stripped)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(data, dict) or not isinstance(data.get("recommendation"), str):
+        return False
+    return data
 
 
 def _int_pair(value: Any) -> tuple[int, int]:

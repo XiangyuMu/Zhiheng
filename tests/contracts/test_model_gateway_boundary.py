@@ -8,7 +8,14 @@ from pathlib import Path
 def test_models_package_exports_only_public_gateway_boundary() -> None:
     import zhiheng.models as models
 
-    assert set(models.__all__) == {"ModelGateway", "ModelRequest", "ModelResponse"}
+    assert set(models.__all__) == {
+        "ImagePart",
+        "ModelContentPart",
+        "ModelGateway",
+        "ModelRequest",
+        "ModelResponse",
+        "TextPart",
+    }
     assert not hasattr(models, "OpenAICompatibleChatAdapter")
     assert not hasattr(models, "ApprovedOutboundPayload")
 
@@ -41,7 +48,11 @@ def test_network_libraries_are_only_imported_by_private_model_transports() -> No
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom)
         )
-        if imports_network and path.as_posix() != "src/zhiheng/models/_transports.py":
+        if imports_network and path.as_posix() not in {
+            "src/zhiheng/models/_transports.py",
+            "src/zhiheng/knowledge/pdf_worker.py",
+            "src/zhiheng/knowledge/import_adapters.py",
+        }:
             offenders.append(path.as_posix())
 
     assert offenders == []
@@ -55,10 +66,7 @@ def test_business_code_does_not_import_private_model_transports() -> None:
     for path in runtime_files:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         imports_private_transport = any(
-            (
-                isinstance(node, ast.ImportFrom)
-                and node.module == "zhiheng.models._transports"
-            )
+            (isinstance(node, ast.ImportFrom) and node.module == "zhiheng.models._transports")
             or (
                 isinstance(node, ast.Import)
                 and any(alias.name == "zhiheng.models._transports" for alias in node.names)

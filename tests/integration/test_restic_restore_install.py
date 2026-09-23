@@ -284,9 +284,7 @@ def test_object_install_refuses_symlink_escape_without_writing_outside(
     outside.mkdir()
     object_root.mkdir()
     (object_root / "evidence").symlink_to(outside, target_is_directory=True)
-    artifact = BackupArtifact(
-        "evidence/item.bin", _digest(staged_file), staged_file.stat().st_size
-    )
+    artifact = BackupArtifact("evidence/item.bin", _digest(staged_file), staged_file.stat().st_size)
 
     with pytest.raises(RuntimeError, match="symlink"):
         restore_restic._install_surviving_objects(staged, object_root, (artifact,))
@@ -305,9 +303,7 @@ def test_object_install_refuses_conflicting_existing_bytes_without_overwrite(
     existing = object_root / "evidence" / "item.bin"
     existing.parent.mkdir(parents=True)
     existing.write_bytes(b"existing")
-    artifact = BackupArtifact(
-        "evidence/item.bin", _digest(staged_file), staged_file.stat().st_size
-    )
+    artifact = BackupArtifact("evidence/item.bin", _digest(staged_file), staged_file.stat().st_size)
 
     with pytest.raises(RuntimeError, match="conflicting object"):
         restore_restic._install_surviving_objects(staged, object_root, (artifact,))

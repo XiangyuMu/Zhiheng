@@ -47,6 +47,9 @@ def test_relative_sqlite_url_keeps_store_relative_to_working_directory(
     assert store.root == tmp_path / "data" / "knowledge-object-store"
 
 
-def test_memory_database_requires_explicit_object_store() -> None:
+def test_memory_database_requires_explicit_object_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH", raising=False)
     with pytest.raises(ValueError, match="explicit knowledge object store"):
-        knowledge_object_store_for_settings(Settings(database_url="sqlite:///:memory:"))
+        knowledge_object_store_for_settings(
+            Settings(database_url="sqlite:///:memory:", _env_file=None)
+        )

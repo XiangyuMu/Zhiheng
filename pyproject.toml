@@ -12,6 +12,8 @@ dependencies = [
   "jieba>=0.42.1,<0.43",
   "openai>=2.0.0,<3.0",
   "presidio-analyzer>=2.2.364,<2.3.0",
+  "pypdf>=5.0.0,<6.0",
+  "jsonschema>=4.23.0,<5.0",
   "pydantic>=2.9.0,<3.0",
   "sqlite-vec==0.1.9",
   "pydantic-settings>=2.5.0,<3.0",
@@ -51,6 +53,16 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "benchmarks/retrieval/benchmark.py" = ["E501"]
+# Dense SQL statements are kept readable as SQL; Python structure remains formatted.
+"src/zhiheng/api/knowledge_workspace.py" = ["E501"]
+"src/zhiheng/evaluation/g006_runner.py" = ["E501"]
+"src/zhiheng/events/repository.py" = ["E501"]
+"src/zhiheng/evolution/maintenance_runtime.py" = ["E501"]
+"src/zhiheng/jobs/memory_extraction.py" = ["E501"]
+"src/zhiheng/knowledge/pdf_repository.py" = ["E501"]
+"src/zhiheng/privacy/erase.py" = ["E501"]
+"src/zhiheng/retrieval/authorization.py" = ["E501"]
+"tests/integration/test_answer_replay_authority.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

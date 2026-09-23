@@ -31,7 +31,8 @@ from zhiheng.evolution.trajectory_repository import TrajectoryRepository
 
 
 def test_release_execution_records_replay_and_shadow_runs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     if not (os.environ.get("ZHIHENG_RESTIC_BINARY") or shutil.which("restic")):
         pytest.skip("configure real restic to execute full release-stage contract")
@@ -53,7 +54,9 @@ def test_release_execution_records_replay_and_shadow_runs(
     finally:
         connection.close()
 
-    engine = create_sqlite_engine(Settings(environment="test", database_url=f"sqlite:///{database}"))
+    engine = create_sqlite_engine(
+        Settings(environment="test", database_url=f"sqlite:///{database}")
+    )
     factory = create_session_factory(engine)
     begun: list[Connection] = []
     event.listen(engine, "begin", begun.append)
@@ -105,11 +108,14 @@ def test_release_execution_records_replay_and_shadow_runs(
             assert len(record["cases"]) == 7
             assert len(set(record["trajectory_ids"])) == 7
             assert service.load(record["id"]) == record
-            assert service.execute(
-                release_id=prepared.release_id,
-                stage=stage,
-                idempotency_key="stage-key",
-            ) == record
+            assert (
+                service.execute(
+                    release_id=prepared.release_id,
+                    stage=stage,
+                    idempotency_key="stage-key",
+                )
+                == record
+            )
             trajectories = TrajectoryRepository(
                 deployment_secret=secret,
                 session_factory=factory,
@@ -128,11 +134,14 @@ def test_release_execution_records_replay_and_shadow_runs(
         stage_connection.close()
 
         with factory.begin() as session:
-            assert session.execute(text(
-                "SELECT count(*) FROM release_execution_runs"
-            )).scalar_one() == 3
-        for operation in ("UPDATE release_execution_runs SET record_hmac = 'fake'",
-                          "DELETE FROM release_execution_runs"):
+            assert (
+                session.execute(text("SELECT count(*) FROM release_execution_runs")).scalar_one()
+                == 3
+            )
+        for operation in (
+            "UPDATE release_execution_runs SET record_hmac = 'fake'",
+            "DELETE FROM release_execution_runs",
+        ):
             with pytest.raises(IntegrityError, match="append-only"), factory.begin() as session:
                 session.execute(text(operation))
         other_secret = ReleaseExecutionService(
@@ -160,7 +169,9 @@ def test_release_execution_rejects_unsupported_stages(tmp_path: Path) -> None:
         release_id = _bootstrap_stable(controller)
     finally:
         connection.close()
-    engine = create_sqlite_engine(Settings(environment="test", database_url=f"sqlite:///{database}"))
+    engine = create_sqlite_engine(
+        Settings(environment="test", database_url=f"sqlite:///{database}")
+    )
     service = ReleaseExecutionService(
         session_factory=create_session_factory(engine),
         project_root=Path.cwd(),

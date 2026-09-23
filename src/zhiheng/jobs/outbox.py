@@ -44,9 +44,10 @@ class ClaimedOutboxEvent:
 
 class OutboxRepository:
     def claim_pending(self, session: Session, *, limit: int = 10) -> list[ClaimedOutboxEvent]:
-        rows = session.execute(
-            text(
-                """
+        rows = (
+            session.execute(
+                text(
+                    """
                 SELECT id, event_type, aggregate_type, aggregate_id, payload_json
                 FROM outbox_events
                 WHERE status = 'pending'
@@ -54,9 +55,12 @@ class OutboxRepository:
                 ORDER BY available_at, id
                 LIMIT :limit
                 """
-            ),
-            {"limit": limit},
-        ).mappings().all()
+                ),
+                {"limit": limit},
+            )
+            .mappings()
+            .all()
+        )
         event_ids = [str(row["id"]) for row in rows]
         for event_id in event_ids:
             session.execute(

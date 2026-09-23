@@ -11,6 +11,7 @@ from typing import Any, Self, cast
 
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import new_id, sha256_json, sha256_text
+from zhiheng.evaluation.contracts import validate_evaluation_contract
 from zhiheng.evaluation.execution_records import (
     require_passing_execution,
     verify_execution_record,
@@ -398,9 +399,7 @@ class ReleaseController:
         self.load_proposal_artifact(proposal_id, binding)
         return binding
 
-    def load_proposal_artifact(
-        self, proposal_id: str, binding: ReleaseBindingV1
-    ) -> dict[str, Any]:
+    def load_proposal_artifact(self, proposal_id: str, binding: ReleaseBindingV1) -> dict[str, Any]:
         """Load the immutable candidate content recorded before validation starts."""
         rows = self._connection.execute(
             """
@@ -506,7 +505,10 @@ class ReleaseController:
         return cast(sqlite3.Row, rows[0])
 
     def _validate_source_graph_baseline(
-        self, *, binding: ReleaseBindingV1, source_graph: ProposalSourceGraphV1,
+        self,
+        *,
+        binding: ReleaseBindingV1,
+        source_graph: ProposalSourceGraphV1,
     ) -> None:
         if source_graph.task_family != binding.target_component:
             raise ValueError("proposal source graph target component mismatch")
@@ -524,12 +526,16 @@ class ReleaseController:
             raise ValueError("proposal source graph baseline mismatch")
 
     def validate_executed_proposal(
-        self, *, proposal_id: str, evaluation_run_id: str,
+        self,
+        *,
+        proposal_id: str,
+        evaluation_run_id: str,
         validator_context: EvolutionCommandContext,
     ) -> ReleaseValidationEvidence:
         """Publish verified evaluation evidence idempotently, without approving a release."""
         self._state_machine.validate_command_context(
-            validator_context, required_role=EvolutionRole.VALIDATOR,
+            validator_context,
+            required_role=EvolutionRole.VALIDATOR,
             required_capability=EvolutionCapability.VALIDATE,
         )
         if self._connection.in_transaction:
@@ -542,7 +548,8 @@ class ReleaseController:
             # trajectory records before accepting any evaluator result.
             self.load_proposal_source_graph(proposal_id)
             rows = self._connection.execute(
-                "SELECT * FROM validation_reports WHERE proposal_id = ?", (proposal_id,),
+                "SELECT * FROM validation_reports WHERE proposal_id = ?",
+                (proposal_id,),
             ).fetchall()
             if rows:
                 if len(rows) != 1 or rows[0]["status"] != "approved":
@@ -559,22 +566,26 @@ class ReleaseController:
                 if policy.get("evaluation_report_digest") != report.get("report_digest"):
                     raise ValueError("validation policy report digest mismatch")
                 return ReleaseValidationEvidence(
-                    proposal_id=proposal_id, validation_report_id=str(row["id"]),
+                    proposal_id=proposal_id,
+                    validation_report_id=str(row["id"]),
                     evaluation_report_digest=str(report["report_digest"]),
                     policy_snapshot_digest=str(policy["snapshot_digest"]),
                     source_evaluation_ids=tuple(_case_ids_from_report(report)),
                     source_trajectory_ids=tuple(policy["source_trajectory_ids"]),
                 )
             execution_row = self._connection.execute(
-                "SELECT * FROM proposal_execution_runs WHERE id = ?", (evaluation_run_id,),
+                "SELECT * FROM proposal_execution_runs WHERE id = ?",
+                (evaluation_run_id,),
             ).fetchone()
             if execution_row is None:
                 raise ValueError("protected proposal execution run not found")
             execution = verify_execution_record(dict(execution_row), secret=self._deployment_secret)
             return self.record_release_validation_evidence(
-                binding=binding, proposal_id=proposal_id,
+                binding=binding,
+                proposal_id=proposal_id,
                 validation_report_ref=binding.validation_report_ref,
-                canary_samples=_CANARY_MIN_SAMPLES, validator_context=validator_context,
+                canary_samples=_CANARY_MIN_SAMPLES,
+                validator_context=validator_context,
                 trajectory_ids=execution.get("trajectory_ids", []),
                 evaluation_run_id=evaluation_run_id,
             )
@@ -642,12 +653,17 @@ class ReleaseController:
             raise ValueError("protected proposal execution run not found")
         execution = verify_execution_record(dict(execution_row), secret=self._deployment_secret)
         require_passing_execution(
-            execution, proposal_id=proposal_id, binding_digest=binding.canonical_digest(),
+            execution,
+            proposal_id=proposal_id,
+            binding_digest=binding.canonical_digest(),
             artifact_digest=binding.approved_artifact_digest,
         )
         executed_ids = execution.get("trajectory_ids")
-        if (not isinstance(executed_ids, list) or len(set(trajectory_ids)) != len(trajectory_ids)
-            or sorted(trajectory_ids) != sorted(executed_ids)):
+        if (
+            not isinstance(executed_ids, list)
+            or len(set(trajectory_ids)) != len(trajectory_ids)
+            or sorted(trajectory_ids) != sorted(executed_ids)
+        ):
             raise ValueError("validation trajectories must match the protected execution run")
         evaluation_cases = self._load_evaluation_cases(
             binding=binding,
@@ -673,6 +689,7 @@ class ReleaseController:
             evaluation_report=evaluation_report,
             execution_run_id=evaluation_run_id,
             execution_record_digest=_digest_mapping(execution),
+            evaluation_contract=execution["evaluation_contract"],
         )
         latency_cost_json = _canonical_policy_snapshot(
             validation_report_ref=validation_report_ref,
@@ -753,9 +770,7 @@ class ReleaseController:
             ).fetchone()
             if row is None:
                 raise ValueError("validation trajectory is not persisted")
-            if row["status"] != "active" or int(
-                row["learning_eligible"]
-            ) != 1:
+            if row["status"] != "active" or int(row["learning_eligible"]) != 1:
                 raise ValueError("validation trajectory is not eligible")
             process = _json_obj(row["process_json"])
             set_name = str(process.get("set_name", ""))
@@ -851,9 +866,7 @@ class ReleaseController:
             event_json=event_json,
         )
 
-    def _verify_trajectory_integrity(
-        self, row: Mapping[str, Any], *, trajectory_id: str
-    ) -> None:
+    def _verify_trajectory_integrity(self, row: Mapping[str, Any], *, trajectory_id: str) -> None:
         evidence_refs = _json_obj(row["evidence_refs_json"])
         created_at = str(evidence_refs.get("created_at", ""))
         events = evidence_refs.get("events", [])
@@ -888,13 +901,9 @@ class ReleaseController:
             raise ValueError("trajectory event chain digest mismatch")
         if events != [event.canonical_payload() for event in envelope.events]:
             raise ValueError("trajectory stored event chain mismatch")
-        if evidence_refs.get("event_hashes") != [
-            event.event_hash for event in envelope.events
-        ]:
+        if evidence_refs.get("event_hashes") != [event.event_hash for event in envelope.events]:
             raise ValueError("trajectory event hash mismatch")
-        if evidence_refs.get("canary_observation") != envelope.process.get(
-            "canary_observation"
-        ):
+        if evidence_refs.get("canary_observation") != envelope.process.get("canary_observation"):
             raise ValueError("trajectory canary assignment mismatch")
 
     def record_release_review_evidence(
@@ -936,7 +945,8 @@ class ReleaseController:
             raise ValueError("independent review requires completed validation")
         validations = self._connection.execute(
             "SELECT id, fixed_set_result_json FROM validation_reports "
-            "WHERE proposal_id = ? AND status = 'approved'", (proposal_id,)
+            "WHERE proposal_id = ? AND status = 'approved'",
+            (proposal_id,),
         ).fetchall()
         if len(validations) != 1:
             raise ValueError("review requires exactly one successful validation report")
@@ -969,11 +979,13 @@ class ReleaseController:
                     proposal_id,
                     reviewer_context.actor_id,
                     reviewer_decision_ref,
-                    _json_text({
-                        "source_evidence_refs": list(binding.source_evidence_refs),
-                        "review_artifact": review_artifact,
-                        "review_artifact_digest": review_artifact_digest,
-                    }),
+                    _json_text(
+                        {
+                            "source_evidence_refs": list(binding.source_evidence_refs),
+                            "review_artifact": review_artifact,
+                            "review_artifact_digest": review_artifact_digest,
+                        }
+                    ),
                 ),
             )
             self._ensure_approved_release_artifact(binding, artifact_payload=artifact_payload)
@@ -1018,9 +1030,7 @@ class ReleaseController:
         spec = self._prepared_spec(release_id)
         self._validate_binding(spec["binding"])
         self._validate_release_integrity(release)
-        self._validate_reviewers(
-            proposer_id=spec["proposer_id"], reviewer_id=spec["reviewer_id"]
-        )
+        self._validate_reviewers(proposer_id=spec["proposer_id"], reviewer_id=spec["reviewer_id"])
         self._validate_fixed_sets(spec["binding"])
         self._validate_canary_assignment(spec["canary_assignment"])
         self._validate_promotion_evidence(
@@ -1134,7 +1144,9 @@ class ReleaseController:
                 "stable and rollback require their dedicated approved commands"
             )
         execution = self._validate_stage_execution(
-            release, execution_run_id=execution_run_id, expected_stage=next_state.value,
+            release,
+            execution_run_id=execution_run_id,
+            expected_stage=next_state.value,
         )
         executed_ids = tuple(str(item) for item in execution["trajectory_ids"])
         if stage_evidence_ids and sorted(stage_evidence_ids) != sorted(executed_ids):
@@ -1146,7 +1158,9 @@ class ReleaseController:
                 raise ValueError("release changed before stage advancement")
             self._validate_release_integrity(fresh)
             self._validate_stage_execution(
-                fresh, execution_run_id=execution_run_id, expected_stage=next_state.value,
+                fresh,
+                execution_run_id=execution_run_id,
+                expected_stage=next_state.value,
             )
             self._advance_release(
                 release_id,
@@ -1202,9 +1216,7 @@ class ReleaseController:
         if row is None:
             raise ValueError("release stage evidence event missing")
         payload = _json_obj(row["event_json"])
-        ids = tuple(
-            str(item) for item in _json_list(payload.get("stage_evidence_ids", []))
-        )
+        ids = tuple(str(item) for item in _json_list(payload.get("stage_evidence_ids", [])))
         if not ids:
             raise ValueError("release stage evidence ids missing")
         return ids
@@ -1392,7 +1404,6 @@ class ReleaseController:
                 step="prepared" if initial_state is ReleaseState.PREPARED else "bootstrap",
             )
         return self.load_release(release_id)
-
 
     def _advance_release(
         self,
@@ -1715,7 +1726,8 @@ class ReleaseController:
         if not baseline_without_target:
             self._validate_report_execution(
                 _json_obj(row["fixed_set_result_json"]),
-                proposal_id=str(row["proposal_id"]), binding=release.binding,
+                proposal_id=str(row["proposal_id"]),
+                binding=release.binding,
             )
             self._validate_stage_history(release)
         if (
@@ -1771,7 +1783,9 @@ class ReleaseController:
         release_input = _json_any(row["source_trajectory_ids_json"])
         _validate_canonical_promotion_report(report, binding=binding)
         self._validate_report_execution(
-            report, proposal_id=str(row["proposal_id"]), binding=binding,
+            report,
+            proposal_id=str(row["proposal_id"]),
+            binding=binding,
         )
         _validate_dynamic_report(dynamic)
         _validate_policy_snapshot(policy, canary_samples=canary_samples)
@@ -1790,7 +1804,11 @@ class ReleaseController:
         )
 
     def _validate_report_execution(
-        self, report: dict[str, Any], *, proposal_id: str, binding: ReleaseBindingV1,
+        self,
+        report: dict[str, Any],
+        *,
+        proposal_id: str,
+        binding: ReleaseBindingV1,
     ) -> None:
         run_id = report.get("execution_run_id")
         if not isinstance(run_id, str) or not run_id:
@@ -1802,13 +1820,16 @@ class ReleaseController:
             raise ValueError("validation execution reference not found")
         execution = verify_execution_record(dict(row), secret=self._deployment_secret)
         require_passing_execution(
-            execution, proposal_id=proposal_id, binding_digest=binding.canonical_digest(),
+            execution,
+            proposal_id=proposal_id,
+            binding_digest=binding.canonical_digest(),
             artifact_digest=binding.approved_artifact_digest,
         )
         if report.get("execution_record_digest") != _digest_mapping(execution):
             raise ValueError("validation execution digest mismatch")
         cases = self._load_evaluation_cases(
-            binding=binding, trajectory_ids=execution.get("trajectory_ids", []),
+            binding=binding,
+            trajectory_ids=execution.get("trajectory_ids", []),
         )
         self._validate_execution_case_links(execution, cases)
 
@@ -1830,13 +1851,16 @@ class ReleaseController:
             ReleaseState.CANARY: (ReleaseState.REPLAY, ReleaseState.SHADOW, ReleaseState.CANARY),
             ReleaseState.STABLE: (ReleaseState.REPLAY, ReleaseState.SHADOW, ReleaseState.CANARY),
             ReleaseState.ROLLED_BACK: (
-                ReleaseState.REPLAY, ReleaseState.SHADOW, ReleaseState.CANARY,
+                ReleaseState.REPLAY,
+                ReleaseState.SHADOW,
+                ReleaseState.CANARY,
             ),
         }.get(release.state, ())
         for stage in required:
             run_id = self._stage_execution_id(release.release_id, stage)
             execution = self._validate_stage_execution(
-                release, execution_run_id=run_id,
+                release,
+                execution_run_id=run_id,
                 expected_stage=stage.value,
             )
             row = self._connection.execute(
@@ -1845,19 +1869,23 @@ class ReleaseController:
                 (release.release_id, stage.value),
             ).fetchone()
             payload = _json_obj(row["event_json"])
-            if (
-                payload.get("execution_record_digest") != _digest_mapping(execution)
-                or payload.get("stage_evidence_ids") != execution.get("trajectory_ids")
-            ):
+            if payload.get("execution_record_digest") != _digest_mapping(execution) or payload.get(
+                "stage_evidence_ids"
+            ) != execution.get("trajectory_ids"):
                 raise ValueError("stage transition execution digest mismatch")
 
     def _validate_stage_execution(
-        self, release: ReleaseContext, *, execution_run_id: str | None, expected_stage: str,
+        self,
+        release: ReleaseContext,
+        *,
+        execution_run_id: str | None,
+        expected_stage: str,
     ) -> dict[str, Any]:
         if not execution_run_id:
             raise ValueError("release stage requires a protected execution run")
         row = self._connection.execute(
-            "SELECT * FROM release_execution_runs WHERE id = ?", (execution_run_id,),
+            "SELECT * FROM release_execution_runs WHERE id = ?",
+            (execution_run_id,),
         ).fetchone()
         if row is None:
             raise ValueError("protected release execution run not found")
@@ -1868,17 +1896,22 @@ class ReleaseController:
             (release.release_id,),
         ).fetchone()
         if (
-            proposal is None or record.get("release_id") != release.release_id
+            proposal is None
+            or record.get("release_id") != release.release_id
             or row["release_id"] != release.release_id
             or row["stage"] != expected_stage
-            or record.get("release_state") != {
-                "replay": "prepared", "shadow": "replay", "canary": "shadow",
+            or record.get("release_state")
+            != {
+                "replay": "prepared",
+                "shadow": "replay",
+                "canary": "shadow",
             }.get(expected_stage)
             or record.get("binding") != release.binding.canonical_payload()
         ):
             raise ValueError("stage execution release binding mismatch")
         require_passing_execution(
-            record, proposal_id=str(proposal["proposal_id"]),
+            record,
+            proposal_id=str(proposal["proposal_id"]),
             binding_digest=release.binding_digest,
             artifact_digest=release.binding.approved_artifact_digest,
             expected_stage=expected_stage,
@@ -1887,7 +1920,8 @@ class ReleaseController:
         if record.get("baseline_binding_digest") != baseline.binding_digest:
             raise ValueError("stage execution baseline binding mismatch")
         cases = self._load_evaluation_cases(
-            binding=release.binding, trajectory_ids=record.get("trajectory_ids", []),
+            binding=release.binding,
+            trajectory_ids=record.get("trajectory_ids", []),
         )
         self._validate_execution_case_links(record, cases)
         if any(
@@ -1898,7 +1932,8 @@ class ReleaseController:
             raise ValueError("trajectory execution stage mismatch")
         if expected_stage == "shadow":
             shadow = next(
-                case["observed_facts"] for case in record["cases"]
+                case["observed_facts"]
+                for case in record["cases"]
                 if case["case_id"] == "migration-answer-strategy-transfer-001"
             )
             if (
@@ -1928,17 +1963,19 @@ class ReleaseController:
 
     @staticmethod
     def _validate_execution_case_links(
-        execution: dict[str, Any], cases: Sequence[dict[str, Any]],
+        execution: dict[str, Any],
+        cases: Sequence[dict[str, Any]],
     ) -> None:
         observed = {case["case_id"]: case for case in execution["cases"]}
         for case in cases:
             expected = observed[case["case_id"]]
             process = case["process"]
-            if (process.get("artifact_digest") != execution["artifact_digest"]
+            if (
+                process.get("artifact_digest") != execution["artifact_digest"]
                 or process.get("observation_digest") != expected["observation_digest"]
-                or process.get("assertion_outcomes") != {
-                    item["name"]: item["passed"] for item in expected["assertions"]
-                }):
+                or process.get("assertion_outcomes")
+                != {item["name"]: item["passed"] for item in expected["assertions"]}
+            ):
                 raise ValueError("trajectory observations differ from protected execution")
 
     def _load_verified_release_artifact(
@@ -2068,7 +2105,9 @@ class ReleaseController:
             raise ValueError("prepared release validation report must be approved")
         report = _json_obj(validation_row["fixed_set_result_json"])
         self._validate_report_execution(
-            report, proposal_id=str(validation_row["proposal_id"]), binding=binding,
+            report,
+            proposal_id=str(validation_row["proposal_id"]),
+            binding=binding,
         )
         dynamic = _json_obj(validation_row["dynamic_set_result_json"])
         policy = _json_obj(validation_row["latency_cost_json"])
@@ -2155,7 +2194,8 @@ class ReleaseController:
         required for this negative command precondition.
         """
         row = self._connection.execute(
-            "SELECT * FROM strategy_releases WHERE id = ?", (release_id,),
+            "SELECT * FROM strategy_releases WHERE id = ?",
+            (release_id,),
         ).fetchone()
         if row is None or row["state"] != ReleaseState.CANARY.value:
             return
@@ -2174,14 +2214,14 @@ class ReleaseController:
             or not self._load_binding(release_id).matches(binding)
             or row["target_component"] != binding.target_component
             or row["rollback_target_release_id"] != binding.rollback_target_id
-            or _json_obj(row["canary_scope_json"])
-            != spec["canary_assignment"].canonical_payload()
+            or _json_obj(row["canary_scope_json"]) != spec["canary_assignment"].canonical_payload()
         ):
             raise ValueError("canary preflight binding or assignment mismatch")
         self._validate_binding(binding)
         self._validate_canary_assignment(spec["canary_assignment"])
         rows = self._matching_canary_observation_rows(
-            release_id=release_id, binding=binding,
+            release_id=release_id,
+            binding=binding,
             canary_assignment=spec["canary_assignment"],
         )
         self._require_canary_sample_count(rows, min_samples=int(spec["canary_samples"]))
@@ -2227,7 +2267,9 @@ class ReleaseController:
 
     @staticmethod
     def _require_canary_sample_count(
-        rows: Sequence[sqlite3.Row], *, min_samples: int,
+        rows: Sequence[sqlite3.Row],
+        *,
+        min_samples: int,
     ) -> None:
         if min_samples < _CANARY_MIN_SAMPLES:
             raise ValueError("canary sample threshold is below the protected minimum")
@@ -2243,7 +2285,9 @@ class ReleaseController:
         min_samples: int,
     ) -> None:
         rows = self._matching_canary_observation_rows(
-            release_id=release_id, binding=binding, canary_assignment=canary_assignment,
+            release_id=release_id,
+            binding=binding,
+            canary_assignment=canary_assignment,
         )
         self._require_canary_sample_count(rows, min_samples=min_samples)
         for row in rows:
@@ -2259,8 +2303,7 @@ class ReleaseController:
             if not evidence_refs.get("event_chain_digest"):
                 raise ValueError("canary observation event chain missing")
             event_hashes = tuple(
-                str(item)
-                for item in _json_list(evidence_refs.get("event_hashes", []))
+                str(item) for item in _json_list(evidence_refs.get("event_hashes", []))
             )
             if not event_hashes:
                 raise ValueError("canary observation event hashes missing")
@@ -2344,16 +2387,18 @@ def _json_list(value: Any) -> list[Any]:
 def _fixed_set_snapshot_from_report(report: EvaluationReport) -> dict[str, Any]:
     grouped: dict[str, Any] = {name: [] for name in _FIXED_EVAL_SETS}
     for case in sorted(report.case_assessments, key=lambda item: (item.set_name, item.case_id)):
-        grouped[case.set_name].append({
-            "case_id": case.case_id,
-            "evidence_digest": case.evidence_digest,
-            "failure_tags": list(case.failure_tags),
-            "passed": case.passed,
-            "process_score": case.process_score,
-            "quality_score": case.quality_score,
-            "result_score": case.result_score,
-            "set_name": case.set_name,
-        })
+        grouped[case.set_name].append(
+            {
+                "case_id": case.case_id,
+                "evidence_digest": case.evidence_digest,
+                "failure_tags": list(case.failure_tags),
+                "passed": case.passed,
+                "process_score": case.process_score,
+                "quality_score": case.quality_score,
+                "result_score": case.result_score,
+                "set_name": case.set_name,
+            }
+        )
     return grouped
 
 
@@ -2366,8 +2411,6 @@ def _case_ids_from_report(report: dict[str, Any]) -> tuple[str, ...]:
     raise ValueError("promotion case assessments are required")
 
 
-
-
 def _canonical_promotion_report(
     *,
     binding: ReleaseBindingV1,
@@ -2375,13 +2418,18 @@ def _canonical_promotion_report(
     evaluation_report: EvaluationReport,
     execution_run_id: str,
     execution_record_digest: str,
+    evaluation_contract: Mapping[str, Any],
 ) -> dict[str, Any]:
+    validate_evaluation_contract(evaluation_contract, require_passing=True)
     canonical_report = evaluation_report.canonical_payload()
     fixed_sets = _fixed_set_snapshot_from_report(evaluation_report)
     fixed_set_snapshot_digest = _digest_mapping(fixed_sets)
     report = {
         "execution_run_id": execution_run_id,
         "execution_record_digest": execution_record_digest,
+        "evaluation_contract": dict(evaluation_contract),
+        "evaluation_contract_digest": str(evaluation_contract["contract_digest"]),
+        "input_set_digest": str(evaluation_contract["input_set_digest"]),
         "binding_digest": binding.canonical_digest(),
         "case_assessments": canonical_report["case_assessments"],
         "candidate_only": canonical_report["candidate_only"],
@@ -2454,6 +2502,14 @@ def _validate_canonical_promotion_report(
 ) -> None:
     if report.get("schema_version") != _PROMOTION_EVAL_SCHEMA:
         raise ValueError("canonical promotion evaluation report missing")
+    contract = report.get("evaluation_contract")
+    if not isinstance(contract, dict):
+        raise ValueError("promotion evaluation contract missing")
+    validate_evaluation_contract(contract, require_passing=True)
+    if report.get("evaluation_contract_digest") != contract.get("contract_digest"):
+        raise ValueError("promotion evaluation contract digest mismatch")
+    if report.get("input_set_digest") != contract.get("input_set_digest"):
+        raise ValueError("promotion evaluation input-set digest mismatch")
     report_digest = str(report.get("report_digest", ""))
     digest_payload = dict(report)
     digest_payload.pop("report_digest", None)
@@ -2520,7 +2576,8 @@ def _validate_canonical_promotion_report(
     if snapshot_cases != [
         {**_json_mapping(case), "passed": not _json_list(_json_mapping(case)["failure_tags"])}
         for name in _FIXED_EVAL_SETS
-        for case in assessments if _json_mapping(case).get("set_name") == name
+        for case in assessments
+        if _json_mapping(case).get("set_name") == name
     ]:
         raise ValueError("fixed-set snapshot differs from complete case assessments")
 

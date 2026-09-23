@@ -1,9 +1,339 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录知衡</title>
-<style>body{font-family:system-ui,sans-serif;max-width:420px;margin:12vh auto;padding:24px;background:#f6f7f9}main{background:white;padding:28px;border-radius:14px;box-shadow:0 8px 30px #0001}label{display:block;margin:16px 0}input{display:block;width:100%;box-sizing:border-box;padding:10px;margin-top:6px}button{width:100%;padding:11px;margin-top:10px}#error{color:#b42318;min-height:1.5em}</style></head>
-<body><main><h1>登录知衡</h1><p>单用户个人知识库</p><form id="form"><label>用户名<input id="username" required autocomplete="username"></label><label>密码<input id="password" type="password" required autocomplete="current-password"></label><button>登录</button></form><p id="error"></p></main>
-<script>
-const next=new URLSearchParams(location.search).get("next")||"/knowledge-agent";
-document.querySelector("#form").addEventListener("submit",async e=>{e.preventDefault();const error=document.querySelector("#error");error.textContent="";const r=await fetch("/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},credentials:"same-origin",body:JSON.stringify({username:username.value,password:password.value})});if(!r.ok){error.textContent="用户名或密码错误";return}const data=await r.json();document.cookie=`zhiheng_csrf=${encodeURIComponent(data.csrf_token)}; Path=/; SameSite=Strict`;location.href=next});
-</script></body></html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>登录知衡</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #20242c;
+        --muted: #606775;
+        --paper: #f7f8fa;
+        --panel: #ffffff;
+        --line: #e5e8ed;
+        --accent: #315fc4;
+        --danger: #a6413b;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-size: 15px;
+      }
+
+      main {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+        align-items: center;
+        gap: 48px;
+        width: min(1040px, calc(100% - 40px));
+        margin: 0 auto;
+        padding: 48px 0;
+      }
+
+      .brand-panel {
+        max-width: 560px;
+      }
+
+      .brand {
+        display: inline-flex;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 44px;
+        color: var(--ink);
+        text-decoration: none;
+      }
+
+      .brand-mark {
+        display: inline-grid;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        border-radius: 8px;
+        background: var(--ink);
+        color: #fff;
+        font-weight: 700;
+      }
+
+      .brand strong,
+      .brand small {
+        display: block;
+      }
+
+      .brand small {
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      h1,
+      h2,
+      p {
+        margin-top: 0;
+      }
+
+      .brand-panel h1 {
+        max-width: 12em;
+        margin-bottom: 16px;
+        font-size: 2.45rem;
+        line-height: 1.14;
+      }
+
+      .brand-panel p {
+        max-width: 42em;
+        color: var(--muted);
+        line-height: 1.75;
+      }
+
+      .trust-list {
+        display: grid;
+        gap: 12px;
+        margin-top: 28px;
+      }
+
+      .trust-item {
+        padding-left: 14px;
+        border-left: 3px solid var(--accent);
+        color: var(--muted);
+      }
+
+      .login-card {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--panel);
+        padding: 28px;
+        box-shadow: 0 20px 70px rgb(32 36 44 / 10%);
+      }
+
+      .eyebrow {
+        margin-bottom: 6px;
+        color: var(--accent);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      .login-card h2 {
+        margin-bottom: 8px;
+        font-size: 1.55rem;
+      }
+
+      #subtitle {
+        margin-bottom: 22px;
+        color: var(--muted);
+      }
+
+      label {
+        display: grid;
+        gap: 7px;
+        margin: 16px 0;
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      input {
+        width: 100%;
+        min-height: 44px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--ink);
+        font: inherit;
+        padding: 0 12px;
+      }
+
+      input:focus-visible,
+      button:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 3px rgb(49 95 196 / 22%);
+      }
+
+      button {
+        width: 100%;
+        min-height: 44px;
+        margin-top: 10px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 700;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.62;
+      }
+
+      #error {
+        min-height: 1.5em;
+        margin: 14px 0 0;
+        color: var(--danger);
+      }
+
+      @media (max-width: 760px) {
+        main {
+          min-height: auto;
+          grid-template-columns: 1fr;
+          gap: 28px;
+          width: min(100% - 28px, 520px);
+          padding: 28px 0;
+        }
+
+        .brand {
+          margin-bottom: 28px;
+        }
+
+        .brand-panel h1 {
+          font-size: 2rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="brand-panel" aria-labelledby="brand-title">
+        <a class="brand" href="/knowledge-agent#research" aria-label="知衡首页">
+          <span class="brand-mark" aria-hidden="true">知</span>
+          <span><strong>知衡</strong><small>研究与知识</small></span>
+        </a>
+        <h1 id="brand-title">让个人知识库先回答有证据的问题。</h1>
+        <p>知衡围绕已经读过的资料、可核对的结论和明确的个人上下文工作。系统需要登录后才能读取本地资料和记忆。</p>
+        <div class="trust-list" aria-label="产品边界">
+          <p class="trust-item">回答优先来自已有资料，并保留原文证据入口。</p>
+          <p class="trust-item">个人上下文需要确认后才会进入正式画像。</p>
+          <p class="trust-item">缺少证据时，系统应说明缺口并请求下一步检索授权。</p>
+        </div>
+      </section>
+
+      <section class="login-card" aria-labelledby="title">
+        <p class="eyebrow">本地账户</p>
+        <h2 id="title">正在检查账户状态</h2>
+        <p id="subtitle">确认当前是登录还是首次创建模式。</p>
+        <form id="form">
+          <label>
+            用户名
+            <input id="username" required autocomplete="username" disabled />
+          </label>
+          <label>
+            密码
+            <input id="password" type="password" required autocomplete="current-password" disabled />
+          </label>
+          <button id="submit" type="submit" disabled>检查中</button>
+        </form>
+        <p id="error" role="alert"></p>
+      </section>
+    </main>
+    <script>
+      const form = document.querySelector("#form");
+      const title = document.querySelector("#title");
+      const subtitle = document.querySelector("#subtitle");
+      const username = document.querySelector("#username");
+      const password = document.querySelector("#password");
+      const submit = document.querySelector("#submit");
+      const error = document.querySelector("#error");
+      const next = safeNextUrl(new URLSearchParams(location.search).get("next"));
+      let initialized = true;
+      let ready = false;
+      let submitting = false;
+
+      configureMode();
+
+      async function configureMode() {
+        setFormEnabled(false);
+        error.textContent = "";
+        try {
+          const response = await fetch("/auth/status", { credentials: "same-origin" });
+          if (!response.ok) throw new Error(await response.text());
+          const data = await response.json();
+          initialized = Boolean(data.initialized);
+          ready = true;
+          renderMode();
+          setFormEnabled(true);
+        } catch {
+          title.textContent = "暂时无法登录";
+          subtitle.textContent = "账户状态检查失败，请稍后重试。";
+          submit.textContent = "状态不可用";
+          error.textContent = "网络或认证服务暂不可用。";
+          setFormEnabled(false);
+        }
+      }
+
+      function renderMode() {
+        if (initialized) {
+          title.textContent = "登录知衡";
+          subtitle.textContent = "进入你的研究资料、问答和个人上下文。";
+          submit.textContent = "登录";
+          password.autocomplete = "current-password";
+          return;
+        }
+        title.textContent = "创建知衡账户";
+        subtitle.textContent = "首次启动只需创建一个本地账户，密码至少 12 个字符。";
+        submit.textContent = "创建账户";
+        password.autocomplete = "new-password";
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!ready || submitting) return;
+        submitting = true;
+        setFormEnabled(false);
+        const originalText = submit.textContent;
+        submit.textContent = initialized ? "登录中" : "创建中";
+        error.textContent = "";
+
+        try {
+          const endpoint = initialized ? "/auth/login" : "/auth/bootstrap";
+          const response = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ username: username.value, password: password.value }),
+          });
+          if (!response.ok) {
+            error.textContent = initialized
+              ? "用户名或密码错误。"
+              : response.status === 422
+                ? "密码至少需要 12 个字符。"
+                : "账户创建失败，请检查配置或稍后重试。";
+            return;
+          }
+          const data = await response.json();
+          document.cookie = `zhiheng_csrf=${encodeURIComponent(data.csrf_token)}; Path=/; SameSite=Strict`;
+          location.href = next;
+        } catch {
+          error.textContent = "网络连接失败，请稍后重试。";
+        } finally {
+          submitting = false;
+          submit.textContent = originalText;
+          setFormEnabled(ready);
+        }
+      });
+
+      function setFormEnabled(enabled) {
+        username.disabled = !enabled;
+        password.disabled = !enabled;
+        submit.disabled = !enabled;
+      }
+
+      function safeNextUrl(rawValue) {
+        if (!rawValue) return "/knowledge-agent";
+        try {
+          const candidate = new URL(rawValue, location.origin);
+          if (candidate.origin !== location.origin) return "/knowledge-agent";
+          return `${candidate.pathname}${candidate.search}${candidate.hash}`;
+        } catch {
+          return "/knowledge-agent";
+        }
+      }
+    </script>
+  </body>
+</html>

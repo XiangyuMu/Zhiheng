@@ -171,10 +171,7 @@ class ConclusionRepository:
         payload = json.loads(str(row["payload_json"]))
         source = (
             session.execute(
-                text(
-                    "SELECT id,body FROM conclusion_sources "
-                    "WHERE id=:id AND owner_user_id=:o"
-                ),
+                text("SELECT id,body FROM conclusion_sources WHERE id=:id AND owner_user_id=:o"),
                 {"id": row["source_id"], "o": owner},
             )
             .mappings()
@@ -208,7 +205,11 @@ class ConclusionRepository:
             ),
             {"owner": owner, "limit": max(1, min(limit, 500))},
         ).scalars()
-        return [item for entry_id in rows if (item := self.get(session, owner, str(entry_id))) is not None]
+        return [
+            item
+            for entry_id in rows
+            if (item := self.get(session, owner, str(entry_id))) is not None
+        ]
 
     def update_draft(
         self,
@@ -234,8 +235,10 @@ class ConclusionRepository:
         if etag not in {"*", item["etag"]}:
             raise ValueError("conclusion changed after it was read")
         payload = {
-            key: value for key, value in {**item, **dict(changes)}.items()
-            if key not in {
+            key: value
+            for key, value in {**item, **dict(changes)}.items()
+            if key
+            not in {
                 "id",
                 "status",
                 "version",
@@ -269,10 +272,13 @@ class ConclusionRepository:
         version = int(item["version"]) + 1
         session.execute(
             text(
-                "INSERT INTO conclusion_versions(entry_id,version,payload_json) "
-                "VALUES (:id,:v,:p)"
+                "INSERT INTO conclusion_versions(entry_id,version,payload_json) VALUES (:id,:v,:p)"
             ),
-            {"id": entry_id, "v": version, "p": json_text({**payload, "status": "draft", "version": version})},
+            {
+                "id": entry_id,
+                "v": version,
+                "p": json_text({**payload, "status": "draft", "version": version}),
+            },
         )
         session.execute(
             text(
@@ -289,20 +295,26 @@ class ConclusionRepository:
             **payload,
             "source": item["source"],
         }
-        self.suggest_relations(session, owner, entry_id, key=f"conclusion-relations:{entry_id}:v{version}")
+        self.suggest_relations(
+            session, owner, entry_id, key=f"conclusion-relations:{entry_id}:v{version}"
+        )
         return self._write(session, owner, key, changes, result)
 
     def approve(
         self, session: Session, owner: str, entry_id: str, etag: str, key: str
     ) -> dict[str, Any]:
         request_payload = {"entry_id": entry_id, "etag": etag}
-        existing = session.execute(
-            text(
-                "SELECT request_hash,result_json FROM conclusion_operations "
-                "WHERE owner_user_id=:o AND operation_key=:k"
-            ),
-            {"o": owner, "k": key},
-        ).mappings().first()
+        existing = (
+            session.execute(
+                text(
+                    "SELECT request_hash,result_json FROM conclusion_operations "
+                    "WHERE owner_user_id=:o AND operation_key=:k"
+                ),
+                {"o": owner, "k": key},
+            )
+            .mappings()
+            .first()
+        )
         if existing is not None:
             if str(existing["request_hash"]) != sha256_json(request_payload):
                 raise ValueError("operation key already used with different payload")
@@ -330,7 +342,13 @@ class ConclusionRepository:
         return self._write(session, owner, key, request_payload, result)
 
     def decide_draft(
-        self, session: Session, owner: str, entry_id: str, etag: str, decision: str, key: str
+        self,
+        session: Session,
+        owner: str,
+        entry_id: str,
+        etag: str,
+        decision: str,
+        key: str,
     ) -> dict[str, Any]:
         if decision not in {"rejected", "deferred"}:
             raise ValueError("invalid draft decision")
@@ -340,7 +358,9 @@ class ConclusionRepository:
         if etag not in {"*", item["etag"]}:
             raise ValueError("conclusion changed after it was read")
         existing = session.execute(
-            text("SELECT result_json FROM conclusion_operations WHERE owner_user_id=:o AND operation_key=:k"),
+            text(
+                "SELECT result_json FROM conclusion_operations WHERE owner_user_id=:o AND operation_key=:k"
+            ),
             {"o": owner, "k": key},
         ).scalar_one_or_none()
         if existing is not None:
@@ -350,7 +370,9 @@ class ConclusionRepository:
             {"status": decision, "id": entry_id, "o": owner},
         )
         result = {**item, "status": decision}
-        return self._write(session, owner, key, {"entry_id": entry_id, "etag": etag, "decision": decision}, result)
+        return self._write(
+            session, owner, key, {"entry_id": entry_id, "etag": etag, "decision": decision}, result
+        )
 
     def context(self, session: Session, owner: str, query: str) -> list[dict[str, Any]]:
         ConclusionApplicabilityService().sweep(session)
@@ -539,7 +561,9 @@ class ConclusionRepository:
                 JOIN conclusion_versions lv ON lv.entry_id=r.left_id AND lv.version=r.left_version
                 JOIN conclusion_versions rv ON rv.entry_id=r.right_id AND rv.version=r.right_version
                 WHERE r.owner_user_id=:o AND (r.left_id=:id OR r.right_id=:id)
-                """ + where_status + " ORDER BY r.id DESC"
+                """
+                + where_status
+                + " ORDER BY r.id DESC"
             ),
             {"o": owner, "id": entry_id, **({"status": status} if status else {})},
         ).mappings()
@@ -628,32 +652,40 @@ class ConclusionRepository:
     ) -> dict[str, Any]:
         if decision not in {"approved", "rejected", "deferred"}:
             raise ValueError("invalid relation decision")
-        existing = session.execute(
-            text(
-                "SELECT request_hash,result_json FROM conclusion_operations "
-                "WHERE owner_user_id=:o AND operation_key=:k"
-            ),
-            {"o": owner, "k": key},
-        ).mappings().first()
+        existing = (
+            session.execute(
+                text(
+                    "SELECT request_hash,result_json FROM conclusion_operations "
+                    "WHERE owner_user_id=:o AND operation_key=:k"
+                ),
+                {"o": owner, "k": key},
+            )
+            .mappings()
+            .first()
+        )
         if existing is not None:
             request_hash = sha256_json({"relation_id": relation_id, "decision": decision})
             if str(existing["request_hash"]) != request_hash:
                 raise ValueError("operation key already used with different payload")
             return cast(dict[str, Any], json.loads(str(existing["result_json"])))
-        row = session.execute(
-            text(
-                "SELECT r.*, le.source_id AS left_source_id, re.source_id AS right_source_id, "
-                "le.current_version AS left_current_version, le.status AS left_status, "
-                "re.current_version AS right_current_version, re.status AS right_status "
-                "FROM conclusion_relations r "
-                "JOIN conclusion_entries le ON le.id=r.left_id AND le.owner_user_id=r.owner_user_id "
-                "JOIN conclusion_entries re ON re.id=r.right_id AND re.owner_user_id=r.owner_user_id "
-                "JOIN conclusion_sources ls ON ls.id=le.source_id AND ls.owner_user_id=r.owner_user_id "
-                "JOIN conclusion_sources rs ON rs.id=re.source_id AND rs.owner_user_id=r.owner_user_id "
-                "WHERE r.id=:id AND r.owner_user_id=:o"
-            ),
-            {"id": relation_id, "o": owner},
-        ).mappings().first()
+        row = (
+            session.execute(
+                text(
+                    "SELECT r.*, le.source_id AS left_source_id, re.source_id AS right_source_id, "
+                    "le.current_version AS left_current_version, le.status AS left_status, "
+                    "re.current_version AS right_current_version, re.status AS right_status "
+                    "FROM conclusion_relations r "
+                    "JOIN conclusion_entries le ON le.id=r.left_id AND le.owner_user_id=r.owner_user_id "
+                    "JOIN conclusion_entries re ON re.id=r.right_id AND re.owner_user_id=r.owner_user_id "
+                    "JOIN conclusion_sources ls ON ls.id=le.source_id AND ls.owner_user_id=r.owner_user_id "
+                    "JOIN conclusion_sources rs ON rs.id=re.source_id AND rs.owner_user_id=r.owner_user_id "
+                    "WHERE r.id=:id AND r.owner_user_id=:o"
+                ),
+                {"id": relation_id, "o": owner},
+            )
+            .mappings()
+            .first()
+        )
         if row is None:
             raise ValueError("relation not found")
         if row["status"] not in {"proposed", "deferred"}:
@@ -753,4 +785,6 @@ class ConclusionRepository:
             "left_version": row["left_version"],
             "right_version": row["right_version"],
         }
-        return self._write(session, owner, key, {"relation_id": relation_id, "decision": decision}, result)
+        return self._write(
+            session, owner, key, {"relation_id": relation_id, "decision": decision}, result
+        )
