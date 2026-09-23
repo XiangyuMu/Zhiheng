@@ -27,7 +27,7 @@ fs.mkdirSync(output, { recursive: true });
       const csrf = document.cookie.split(';').map((x) => x.trim()).find((x) => x.startsWith('zhiheng_csrf='))?.slice('zhiheng_csrf='.length) || '';
       const response = await fetch(url, { credentials: 'same-origin', ...options, headers: {
         Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': csrf,
-        'Idempotency-Key': crypto.randomUUID(), ...(options.headers || {}),
+        'Idempotency-Key': crypto.randomUUID(), 'If-Match': '*', ...(options.headers || {}),
       }, body: options.body ? JSON.stringify(options.body) : undefined });
       const body = await response.json();
       if (!response.ok) throw new Error(`${response.status}: ${body.detail || 'request failed'}`);
