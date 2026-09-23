@@ -98,6 +98,8 @@ fs.mkdirSync(output, { recursive: true });
     }
 
     await page.goto(`${base}/review-center`);
+    await page.waitForTimeout(1000);
+    console.log("SUMMARY", await page.locator("#relation-count").innerText(), await page.locator("#queue").innerText());
     await page.locator("#relation-count").filter({ hasText: "3" }).waitFor();
     await check("relation suggestions appear in the central review queue", async () => {
       assert.equal(await page.locator(".queue-item").filter({ hasText: "关系建议" }).count(), 3);
