@@ -142,7 +142,9 @@ def get_import_batch(
     states = [str(r["status"]) for r in rows]
     total = len(states)
     completed = sum(
-        s in {"succeeded", "failed", "dead_letter", "duplicate", "cancelled"} for s in states
+        s
+        in {"succeeded", "failed", "dead_letter", "unsupported", "duplicate", "cancelled"}
+        for s in states
     )
     progress_completed = sum(int(r["progress_completed"] or 0) for r in rows)
     progress_total = sum(
@@ -162,6 +164,7 @@ def get_import_batch(
             "completed": completed,
             "succeeded": states.count("succeeded"),
             "failed": states.count("failed") + states.count("dead_letter"),
+            "unsupported": states.count("unsupported"),
             "duplicate": states.count("duplicate"),
             "processing": states.count("processing"),
             "queued": states.count("queued"),
@@ -381,6 +384,8 @@ def list_import_batches(
                        sum(CASE WHEN i.status='succeeded' THEN 1 ELSE 0 END) AS succeeded_count,
                        sum(CASE WHEN i.status IN ('failed','dead_letter')
                                 THEN 1 ELSE 0 END) AS failed_count
+                       ,sum(CASE WHEN i.status='unsupported'
+                                 THEN 1 ELSE 0 END) AS unsupported_count
                 FROM import_batches b
                 LEFT JOIN import_batch_items i ON i.batch_id=b.id
                 WHERE {where}
@@ -407,6 +412,7 @@ def list_import_batches(
                 "item_count": int(row["item_count"] or 0),
                 "succeeded_count": int(row["succeeded_count"] or 0),
                 "failed_count": int(row["failed_count"] or 0),
+                "unsupported_count": int(row["unsupported_count"] or 0),
             }
             for row in rows
         ],

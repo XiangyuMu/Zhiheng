@@ -422,12 +422,42 @@ class VectorIndexRepository:
                   c.id AS chunk_id,
                   c.confirmation_generation
                 FROM chunks c
+                JOIN serving_chunks s ON s.id = c.id
                 JOIN chunk_embeddings ce
                   ON ce.chunk_id = c.id
                  AND ce.generation_id = :generation_id
                  AND ce.source_version_id = c.source_version_id
                  AND ce.confirmation_generation = c.confirmation_generation
                 WHERE c.rowid IN :rowids
+                  AND (
+                    c.source_type <> 'knowledge_object'
+                    OR EXISTS (
+                    SELECT 1
+                    FROM jobs completed_index
+                    WHERE completed_index.job_type = 'knowledge.index'
+                      AND completed_index.status = 'completed'
+                      AND (
+                        json_extract(completed_index.payload_json, '$.knowledge_object_id')
+                          = c.source_id
+                        OR json_extract(completed_index.payload_json, '$.aggregate_id')
+                          = c.source_id
+                      )
+                    )
+                  )
+                  AND (
+                    c.source_type <> 'knowledge_object'
+                    OR EXISTS (
+                      SELECT 1
+                      FROM knowledge_objects ko
+                      JOIN knowledge_versions kv ON kv.id = ko.current_version_id
+                      JOIN content_versions cv ON cv.id = kv.content_version_id
+                      JOIN evidence_objects eo ON eo.id = cv.evidence_object_id
+                      WHERE ko.id = c.source_id
+                        AND ko.current_version_id = c.source_version_id
+                        AND cv.status = 'active'
+                        AND eo.status = 'active'
+                    )
+                  )
                 """
             ).bindparams(bindparam("rowids", expanding=True)),
             {"generation_id": generation.id, "rowids": rowids},

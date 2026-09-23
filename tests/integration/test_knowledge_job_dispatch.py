@@ -279,3 +279,89 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
     assert completed == 1
     assert state == ("completed", "succeeded", 1)
     assert index_event == ("knowledge.index", "pdf_parse_attempt", "attempt-1")
+
+
+def test_missing_pdf_executor_persists_unsupported_terminal_state(
+    tmp_path: Path,
+) -> None:
+    session_factory = _session_factory(tmp_path)
+    task_id = new_id()
+    evidence_id = new_id()
+    with session_scope(session_factory) as session:
+        session.execute(
+            text(
+                """
+                INSERT INTO evidence_objects (
+                  id, object_uri, sha256, media_type, byte_size, source_kind,
+                  source_metadata_json, status, erasable
+                )
+                VALUES (
+                  :id, 'artifact://evidence/unsupported.pdf', :sha256,
+                  'application/pdf', 1, 'imported_document', '{}', 'active', 1
+                )
+                """
+            ),
+            {"id": evidence_id, "sha256": "a" * 64},
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO pdf_tasks (
+                  id, evidence_object_id, backend, options_hash,
+                  idempotency_key, state
+                )
+                VALUES (
+                  :task_id, :evidence_id, 'deepdoc', :options_hash,
+                  :idempotency_key, 'queued'
+                )
+                """
+            ),
+            {
+                "task_id": task_id,
+                "evidence_id": evidence_id,
+                "options_hash": "b" * 64,
+                "idempotency_key": f"unsupported:{task_id}",
+            },
+        )
+        _insert_job(
+            session,
+            "knowledge.parse_pdf",
+            {
+                "task_id": task_id,
+                "evidence_object_id": evidence_id,
+                "failure_stage": "parse",
+            },
+        )
+
+    completed = process_knowledge_jobs_once(
+        session_factory,
+        _RecordingExecutor(
+            KnowledgeIndexResult(fts_indexed=0, vector_indexed=0, generation_id="unused")
+        ),  # type: ignore[arg-type]
+        worker_id="dispatch-worker",
+        pdf_executor=None,
+    )
+
+    with session_scope(session_factory) as session:
+        state = session.execute(
+            text(
+                """
+                SELECT j.status, json_extract(j.payload_json, '$.failure_code'),
+                       a.status, a.error_class, p.state
+                FROM jobs j
+                JOIN job_attempts a ON a.job_id=j.id
+                JOIN pdf_tasks p ON p.id=:task_id
+                WHERE j.job_type='knowledge.parse_pdf'
+                """
+            ),
+            {"task_id": task_id},
+        ).one()
+
+    assert completed == 1
+    assert state == (
+        "unsupported",
+        "unsupported_pdf_parser",
+        "unsupported",
+        "unsupported_pdf_parser",
+        "unsupported",
+    )

@@ -49,6 +49,7 @@ _TERMINAL_BATCH_STATES = {
     "succeeded",
     "failed",
     "dead_letter",
+    "unsupported",
     "cancelled",
     "duplicate",
 }
@@ -218,6 +219,7 @@ def _project_batch_item(session: Session, item: dict[str, Any]) -> dict[str, Any
         "completed": "succeeded",
         "failed": "failed",
         "dead": "dead_letter",
+        "unsupported": "unsupported",
     }.get(str(job["status"]), str(job["status"]))
     code = str(payload.get("failure_code") or "").strip() or None
     stage = str(payload.get("failure_stage") or "").strip() or (
@@ -251,12 +253,18 @@ def _pdf_public_status(row: Any) -> str:
     source_status = str(row["state"]) if row["state"] else None
     if job_status == "processing":
         return "processing"
+    if job_status == "unsupported":
+        return "unsupported"
     if job_status == "dead":
         return "dead_letter"
     if job_status == "failed":
         return "failed"
+    if source_status == "unsupported":
+        return "unsupported"
     if source_status == "parsed":
-        return "succeeded"
+        # Parsing is not formal retrieval qualification. The indexing job must
+        # publish a knowledge object and serving pointer before success.
+        return "processing"
     if source_status == "partial":
         return "partial"
     return "queued" if source_status == "queued" else source_status or "queued"
@@ -274,7 +282,7 @@ def _pdf_stage(status: str) -> str:
 
 
 def _error_fields(row: Any, status: str) -> dict[str, Any]:
-    if status not in {"failed", "dead_letter"} and not row["error_message"]:
+    if status not in {"failed", "dead_letter", "unsupported"} and not row["error_message"]:
         return {
             "error_stage": None,
             "error_summary": None,
@@ -321,7 +329,12 @@ def _recompute_batch(session: Session, batch_id: str) -> int:
     if all(status == "succeeded" for status in statuses):
         aggregate = "succeeded"
     elif all(status in _TERMINAL_BATCH_STATES for status in statuses):
-        aggregate = "partial" if any(status == "succeeded" for status in statuses) else "failed"
+        if any(status == "succeeded" for status in statuses):
+            aggregate = "partial"
+        elif all(status == "unsupported" for status in statuses):
+            aggregate = "unsupported"
+        else:
+            aggregate = "failed"
     elif any(status in {"processing", "partial"} for status in statuses):
         aggregate = "processing"
     else:
@@ -601,6 +614,8 @@ def _pdf_status(
 ) -> str:
     if job_status == "processing":
         return "processing"
+    if job_status == "unsupported":
+        return "unsupported"
     if job_status == "dead":
         return "dead_letter"
     if job_status == "failed":
@@ -610,7 +625,9 @@ def _pdf_status(
     if source_status == "partial":
         return "partial"
     if source_status == "parsed":
-        return "succeeded"
+        return "processing"
+    if source_status == "unsupported":
+        return "unsupported"
     if failure is not None:
         return failure.code
     return source_status or "failed"

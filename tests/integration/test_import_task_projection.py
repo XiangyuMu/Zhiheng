@@ -107,3 +107,27 @@ def test_import_task_projection_exposes_failure_and_status_filter(
     assert items[0]["retryable"] is True
     assert items[0]["failure"]["code"] == "parser_timeout"
     assert items[0]["failure"]["stage"] == "parse"
+
+
+def test_text_import_processing_is_observable_before_worker_consumes_outbox(
+    tmp_path: Path,
+) -> None:
+    client, _session_factory = _client(tmp_path)
+    csrf = _login(client)
+    imported = client.post(
+        "/v1/knowledge/imports",
+        json={
+            "title": "queued text",
+            "text": "这条内容等待独立 Worker 建立索引。",
+            "primary_domain_id": "technology.ai",
+        },
+        headers=_headers(csrf, "queued-text-import"),
+    )
+    assert imported.status_code == 200
+    knowledge_id = imported.json()["result"]["knowledge_object_id"]
+
+    processing = client.get(f"/v1/knowledge/{knowledge_id}/processing")
+
+    assert processing.status_code == 200
+    assert processing.json()["status"] == "queued"
+    assert processing.json()["searchable"] is False

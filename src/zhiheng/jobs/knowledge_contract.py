@@ -25,6 +25,7 @@ class JobStatus(StrEnum):
     SUCCEEDED = "completed"
     FAILED = "failed"
     DEAD_LETTER = "dead"
+    UNSUPPORTED = "unsupported"
 
 
 class KnowledgeLifecycleStatus(StrEnum):
@@ -80,7 +81,12 @@ def project_import_status(
             searchable=False,
             failure=failure,
         )
-    if job_status == JobStatus.QUEUED.value:
+    if (
+        (failure is not None and _is_unsupported_failure(failure.code))
+        or job_status == JobStatus.UNSUPPORTED.value
+    ):
+        public_status = ImportPublicStatus.UNSUPPORTED
+    elif job_status == JobStatus.QUEUED.value:
         public_status = ImportPublicStatus.QUEUED
     elif job_status == JobStatus.PROCESSING.value:
         public_status = ImportPublicStatus.PROCESSING
@@ -90,8 +96,6 @@ def project_import_status(
         public_status = ImportPublicStatus.DEAD_LETTER
     elif job_status == JobStatus.FAILED.value:
         public_status = ImportPublicStatus.FAILED
-    elif failure is not None and failure.code == "unsupported_media_type":
-        public_status = ImportPublicStatus.UNSUPPORTED
     elif failure is not None and failure.code == "parse_failed":
         public_status = ImportPublicStatus.PARSE_FAILED
     else:
@@ -120,6 +124,8 @@ def failure_from_row(
     if not code:
         if error_class in {"UnsupportedMediaTypeError", "UnsupportedMediaType"}:
             code = "unsupported_media_type"
+        elif error_class in {"PdfCapabilityUnavailable", "UnsupportedCapabilityError"}:
+            code = "unsupported_pdf_parser"
         elif error_class in {"ParseError", "ParserError"}:
             code = "parse_failed"
         else:
@@ -134,6 +140,10 @@ def failure_from_row(
         retryable=retryable,
         redacted_summary=message[:512],
     )
+
+
+def _is_unsupported_failure(code: str) -> bool:
+    return code == "unsupported_media_type" or code.startswith("unsupported_")
 
 
 def _job_status(value: str | None) -> JobStatus | None:

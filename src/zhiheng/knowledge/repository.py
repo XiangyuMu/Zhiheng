@@ -1055,6 +1055,29 @@ class KnowledgeRepository:
                 JOIN chunks c ON c.rowid = fts_chunks.rowid
                 JOIN serving_chunks s ON s.id = c.id
                 WHERE fts_chunks MATCH :query
+                  AND EXISTS (
+                    SELECT 1
+                    FROM jobs completed_index
+                    WHERE completed_index.job_type = 'knowledge.index'
+                      AND completed_index.status = 'completed'
+                      AND (
+                        json_extract(completed_index.payload_json, '$.knowledge_object_id')
+                          = s.source_id
+                        OR json_extract(completed_index.payload_json, '$.aggregate_id')
+                          = s.source_id
+                      )
+                  )
+                  AND EXISTS (
+                    SELECT 1
+                    FROM knowledge_objects ko
+                    JOIN knowledge_versions kv ON kv.id = ko.current_version_id
+                    JOIN content_versions cv ON cv.id = kv.content_version_id
+                    JOIN evidence_objects eo ON eo.id = cv.evidence_object_id
+                    WHERE ko.id = s.source_id
+                      AND ko.current_version_id = s.source_version_id
+                      AND cv.status = 'active'
+                      AND eo.status = 'active'
+                  )
                 ORDER BY bm25(fts_chunks)
                 LIMIT :limit
                 """
