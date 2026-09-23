@@ -803,7 +803,7 @@ def search_knowledge(
                   = c.source_id
               )
           )
-          GROUP BY source_id
+          GROUP BY c.source_id
         ) hit ON hit.source_id = ko.id
         """
     )
