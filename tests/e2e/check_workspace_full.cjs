@@ -170,6 +170,7 @@ fs.mkdirSync(output, { recursive: true });
       assert((await page.locator('#detail').innerText()).includes('固定条件'));
       await page.getByRole('button', { name: '稍后处理' }).click();
       await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
+      await page.locator('#queue').filter({ hasText: '浏览器审核草稿' }).waitFor();
       await page.reload();
       await page.locator('#total').waitFor();
       assert((await page.locator('#queue').innerText()).includes('浏览器审核草稿'));
