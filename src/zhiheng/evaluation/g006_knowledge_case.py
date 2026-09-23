@@ -15,6 +15,7 @@ from zhiheng.api.retrieval import EvidenceBoundAnswerModel
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import new_id, sha256_json
 from zhiheng.db.session import create_session_factory, create_sqlite_engine
+from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
 from zhiheng.evolution.artifacts import (
     artifact_digest,
     validate_serving_strategy_artifact,
@@ -204,6 +205,9 @@ def _seed_knowledge_snapshot(
             )
             for index, content in enumerate(contents)
         ]
+        with factory.begin() as session:
+            for item in items:
+                mark_formal_knowledge_indexed(session, item.knowledge_object_id)
         stale = items[-1]
         with factory.begin() as session:
             replacement = new_id()

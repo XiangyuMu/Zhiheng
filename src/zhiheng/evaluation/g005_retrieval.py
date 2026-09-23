@@ -20,6 +20,7 @@ from zhiheng.decisions import (
     DecisionSupportService,
     decision_query_text,
 )
+from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
 from zhiheng.evolution.releases import ReleaseContext
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import LocalKnowledgeObjectStore, StoredTextArtifacts
@@ -189,6 +190,8 @@ def evaluate_g005_retrieval_runtime(
             imported[item["fixture_id"]] = _import_corpus_item(
                 session, item, imported, artifacts[item["fixture_id"]]
             )
+            if imported[item["fixture_id"]].expected_serving:
+                mark_formal_knowledge_indexed(session, imported[item["fixture_id"]].source_id)
 
         serving_vectors = {
             imported[item["fixture_id"]].chunk_id: item["vector"]
@@ -642,7 +645,9 @@ def _evaluate_query(
     required = set(query_case.get("required_fixture_ids", []))
     forbidden = set(query_case.get("forbidden_fixture_ids", []))
     unauthorized = sorted(set(hybrid_fixture_ids) & forbidden)
-    citation_coverage = _citation_coverage(answer.claims, answer.citations)
+    citation_coverage = (
+        _citation_coverage(answer.claims, answer.citations) if answer.citations else 0.0
+    )
     return {
         "case_id": query_case["case_id"],
         "mode": query_case["mode"],
@@ -667,6 +672,7 @@ def _evaluate_query(
             "context_chunks": answer.budget_usage.context_chunks,
             "wall_clock_ms": answer.budget_usage.wall_clock_ms,
         },
+        "retrieval_profile": "real_fts_deterministic_fixture_vectors",
         "model_id": model_config["id"],
         "generation_id": generation_id,
     }

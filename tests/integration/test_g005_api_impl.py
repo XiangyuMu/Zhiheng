@@ -14,6 +14,7 @@ from tests.knowledge_helpers import stored_text_artifacts
 from zhiheng.api.main import create_app
 from zhiheng.core.config import Settings
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
+from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.memory import MemoryRepository, MemoryValue
 from zhiheng.query import AnswerEnvelope, BudgetUsage, StopReason
@@ -69,6 +70,7 @@ def _seed(session_factory: sessionmaker[Session], tmp_path: Path) -> dict[str, s
             user_authority=KnowledgeUserAuthority("synthetic-test-user"),
             stored_artifacts=artifacts,
         )
+        mark_formal_knowledge_indexed(session, knowledge.knowledge_object_id)
     assert goal.formal_memory_id is not None
     assert goal.formal_version_id is not None
     assert goal.generation is not None

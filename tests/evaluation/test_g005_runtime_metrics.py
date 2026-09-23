@@ -36,3 +36,9 @@ def test_g005_runtime_retrieval_metrics_meet_acceptance_gates(tmp_path: Path) ->
     assert result.metrics.conflict_surfaced, failure_report
     assert result.metrics.empty_db_no_hallucination, failure_report
     assert result.passed, failure_report
+
+    for detail in result.per_query_details:
+        if detail["mode"] != "structured":
+            assert detail["retrieval_profile"] == "real_fts_deterministic_fixture_vectors"
+            assert detail["hybrid_recalled"], failure_report
+            assert detail["source_fixture_ids"], failure_report

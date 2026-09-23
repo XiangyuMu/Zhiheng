@@ -19,6 +19,7 @@ from zhiheng.api.main import create_app
 from zhiheng.api.retrieval import VectorAwareHybridRetriever
 from zhiheng.core.config import Settings
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
+from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import StoredTextArtifacts
 from zhiheng.retrieval import VectorIndexRepository
@@ -98,22 +99,20 @@ def _headers(csrf: str, key: str) -> dict[str, str]:
 
 
 def _ingest(session: Session, text_value: str, artifacts: StoredTextArtifacts) -> str:
-    return (
-        KnowledgeRepository()
-        .ingest_text(
-            session,
-            TextEvidenceInput(
-                title="中文 hybrid 证据",
-                primary_domain_id="technology.ai",
-                text=text_value,
-                source_metadata={"fixture": "g005-production-hybrid"},
-                summary="hybrid evidence",
-            ),
-            user_authority=KnowledgeUserAuthority("synthetic-test-user"),
-            stored_artifacts=artifacts,
-        )
-        .chunk_id
+    knowledge = KnowledgeRepository().ingest_text(
+        session,
+        TextEvidenceInput(
+            title="中文 hybrid 证据",
+            primary_domain_id="technology.ai",
+            text=text_value,
+            source_metadata={"fixture": "g005-production-hybrid"},
+            summary="hybrid evidence",
+        ),
+        user_authority=KnowledgeUserAuthority("synthetic-test-user"),
+        stored_artifacts=artifacts,
     )
+    mark_formal_knowledge_indexed(session, knowledge.knowledge_object_id)
+    return knowledge.chunk_id
 
 
 def _activate_generation(session_factory: sessionmaker[Session], chunk_id: str) -> str:

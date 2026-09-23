@@ -19,6 +19,7 @@ from zhiheng.api.retrieval import EvidenceBoundAnswerModel
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import sha256_json
 from zhiheng.evaluation.g006_memory_query import _CandidateRouter
+from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
 from zhiheng.evolution.trajectory_repository import TrajectoryRepository
 from zhiheng.knowledge import KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.service import KnowledgeIngestionService
@@ -85,6 +86,9 @@ def execute_memory_generation_probe(
         ),
         user_authority=KnowledgeUserAuthority("protected-synthetic-user"),
     )
+
+    with session_factory.begin() as session:
+        mark_formal_knowledge_indexed(session, ingested.knowledge_object_id)
 
     model = _RecordingEvidenceBoundAnswerModel()
     service = QueryAnswerService(
