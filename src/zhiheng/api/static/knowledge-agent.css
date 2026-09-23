@@ -1,3 +1,4 @@
+body { overflow-x: hidden; }
 :root {
   color-scheme: light;
   --canvas: #f7f8fa; --surface: #fff; --ink: #20242c; --muted: #606775;
