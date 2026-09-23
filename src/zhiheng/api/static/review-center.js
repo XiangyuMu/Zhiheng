@@ -105,6 +105,7 @@
       const button = document.createElement("button");
       button.className = "queue-item";
       button.type = "button";
+      button.dataset.entryId = item.id;
       button.setAttribute("aria-current", state.selected?.id === item.id ? "true" : "false");
       const label = item.kind === "conclusion"
         ? item.title

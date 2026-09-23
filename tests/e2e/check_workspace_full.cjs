@@ -173,7 +173,7 @@ fs.mkdirSync(output, { recursive: true });
       await page.locator('#queue').filter({ hasText: '浏览器审核草稿' }).waitFor();
       await page.reload();
       await page.locator('#queue').filter({ hasText: '浏览器审核草稿' }).waitFor();
-      await page.getByRole('button', { name: /浏览器审核草稿/ }).last().click();
+      await page.locator(`button.queue-item[data-entry-id=\"${first.id}\"]`).click();
       await page.getByRole('button', { name: '批准' }).click();
       await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
       assert.equal((await apiJson(`/v1/conclusions/${first.id}`)).status, 'formal');
