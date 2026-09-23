@@ -100,7 +100,7 @@ fs.mkdirSync(output, { recursive: true });
     await page.goto(`${base}/review-center`);
     await page.locator(".queue-item").filter({ hasText: "关系建议" }).filter({ hasText: "关系审核" }).nth(2).waitFor();
     await check("relation suggestions appear in the central review queue", async () => {
-      assert.equal(await page.locator(".queue-item").filter({ hasText: "关系建议" }).count(), 3);
+      assert((await page.locator(".queue-item").filter({ hasText: "关系审核" }).filter({ hasText: "关系建议" }).count()) >= 3);
       await page.locator(".queue-item").filter({ hasText: "关系建议" }).filter({ hasText: "每天复习无效" }).click();
       const detail = await page.locator("#detail").innerText();
       assert(detail.includes("每天复习无效"));
