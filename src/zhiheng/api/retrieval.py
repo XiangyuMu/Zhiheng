@@ -403,6 +403,9 @@ def answer_question(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="answer memory context changed; use a new idempotency key",
                 )
+            _validate_replayed_personalization_refs(
+                replay.get("personalization_refs"), current_memory
+            )
         return AnswerResponse.model_validate(replay)
 
     receipt_id = _insert_operation_receipt(
@@ -464,8 +467,9 @@ def answer_question(
         )
         if snapshot.digest != response.memory_context_digest:
             raise HTTPException(status_code=409, detail="answer memory context changed")
-        # Erase lineage covers all supplied entries, not just model-reported refs.
-        memory_source_ids = [entry.formal_memory_id for entry in snapshot.entries]
+        # Erase lineage follows the same formal references the answer reported.
+        # Candidate and merely loaded context entries must not become answer lineage.
+        memory_source_ids = [ref.formal_memory_id for ref in response.personalization_refs]
     _complete_operation_receipt(
         session,
         receipt_id,
@@ -1060,6 +1064,44 @@ def _answer_response(
         memory_context_digest=result.memory_context_digest,
         memory_impacts=[MemoryImpactPayload(**asdict(item)) for item in result.memory_impacts],
     )
+
+
+def _validate_replayed_personalization_refs(
+    value: Any,
+    snapshot: MemoryContextSnapshot,
+) -> None:
+    """Reject a cached answer whose formal refs are outside its current context."""
+    if not isinstance(value, list):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="cached answer personalization references are invalid",
+        )
+    allowed = {
+        (
+            entry.formal_memory_id,
+            entry.formal_version_id,
+            entry.confirmation_generation,
+            entry.state_key,
+        )
+        for entry in snapshot.entries
+    }
+    for item in value:
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="cached answer personalization references are invalid",
+            )
+        key = (
+            item.get("formal_memory_id"),
+            item.get("formal_version_id"),
+            item.get("confirmation_generation"),
+            item.get("state_key"),
+        )
+        if key not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="cached answer personalization references changed",
+            )
 
 
 def _claim_payload(claim: AnswerClaim) -> ClaimPayload:

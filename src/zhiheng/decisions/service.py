@@ -272,9 +272,9 @@ class DecisionSupportService:
             personalization_refs=personalization_refs,
             memory_context_digest=memory_context.digest if memory_context is not None else None,
             memory_topic_prefix=memory_context.topic_prefix if memory_context is not None else None,
-            memory_source_ids=tuple(entry.formal_memory_id for entry in memory_context.entries)
-            if memory_context is not None
-            else (),
+            # Keep decision replay and erase lineage tied to the refs the answer
+            # actually reported, rather than every entry loaded as context.
+            memory_source_ids=tuple(ref.formal_memory_id for ref in personalization_refs),
             decision_query_hash=decision_query_hash,
             citation_replay_digest=current_citation_replay_digest,
             formal_goal_refs=formal_goal_refs,
