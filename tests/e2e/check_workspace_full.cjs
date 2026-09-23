@@ -166,7 +166,7 @@ fs.mkdirSync(output, { recursive: true });
       await page.goto(`${base}/review-center`);
       await page.locator('#total').filter({ hasText: /[2-9]/ }).waitFor();
       assert(await page.getByText('结论草稿').first().isVisible());
-      await page.getByRole('button', { name: /浏览器审核草稿/ }).first().click();
+      await page.locator(`button.queue-item[data-entry-id=\"${second.id}\"]`).click();
       assert((await page.locator('#detail').innerText()).includes('固定条件'));
       await page.getByRole('button', { name: '稍后处理' }).click();
       await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
