@@ -41,21 +41,29 @@ def test_production_answer_consumes_formal_context_and_keeps_citations_separate(
     ids = _seed(factory, tmp_path)
     with factory.begin() as session:
         topic = MemoryRepository().commit_explicit_memory(
-            session, MemoryValue("preference", "style.answer", {"text": "synthetic formal L1"}),
+            session,
+            MemoryValue("preference", "style.answer", {"text": "synthetic formal L1"}),
             operation_key="synthetic-topic",
         )
         for state_key in ("goal.finance", "identity.pending"):
-            MemoryRepository().propose_candidate(session, MemoryCandidateInput(
-                candidate_type="inferred", memory_type="goal", state_key=state_key,
-                proposed_value={"text": "unconfirmed-private-sentinel"},
-                rationale="synthetic isolation probe", source_kind="agent_inferred",
-                confidence=0.7,
-            ))
+            MemoryRepository().propose_candidate(
+                session,
+                MemoryCandidateInput(
+                    candidate_type="inferred",
+                    memory_type="goal",
+                    state_key=state_key,
+                    proposed_value={"text": "unconfirmed-private-sentinel"},
+                    rationale="synthetic isolation probe",
+                    source_kind="agent_inferred",
+                    confidence=0.7,
+                ),
+            )
     assert isinstance(client.app, FastAPI)
     model = _RecordingProductionModel()
     client.app.state.query_answer_service._rag._model_gateway = model
     response = client.post(
-        "/v1/answers", json={"query": QUERY, "memory_topic_prefix": "style."},
+        "/v1/answers",
+        json={"query": QUERY, "memory_topic_prefix": "style."},
         headers=_headers(csrf, "context-positive"),
     )
     assert response.status_code == 200
@@ -67,7 +75,8 @@ def test_production_answer_consumes_formal_context_and_keeps_citations_separate(
     assert "learn quantitative finance" in serialized_context
     assert "unconfirmed-private-sentinel" not in serialized_context
     assert {ref["formal_memory_id"] for ref in payload["personalization_refs"]} == {
-        ids["goal_id"], topic.formal_memory_id,
+        ids["goal_id"],
+        topic.formal_memory_id,
     }
     assert payload["citations"]
     assert {citation["source_type"] for citation in payload["citations"]} == {"knowledge_object"}
@@ -87,7 +96,8 @@ def test_new_constraint_after_context_load_blocks_model_entry(tmp_path: Path) ->
         def load(self, session: Session, **kwargs: Any) -> MemoryContextSnapshot:
             snapshot = super().load(session, **kwargs)
             MemoryRepository().commit_explicit_memory(
-                session, MemoryValue("constraint", "constraint.new", {"text": "new constraint"}),
+                session,
+                MemoryValue("constraint", "constraint.new", {"text": "new constraint"}),
                 operation_key="new-constraint-before-model",
             )
             return snapshot
@@ -101,7 +111,9 @@ def test_new_constraint_after_context_load_blocks_model_entry(tmp_path: Path) ->
     model = _RecordingProductionModel()
     service._rag._model_gateway = model
     response = client.post(
-        "/v1/answers", json={"query": QUERY}, headers=_headers(csrf, "context-before-change"),
+        "/v1/answers",
+        json={"query": QUERY},
+        headers=_headers(csrf, "context-before-change"),
     )
     assert response.status_code == 200
     assert response.json()["stop_reason"] == "memory_context_changed"
@@ -117,14 +129,18 @@ def test_memory_deleted_during_model_discards_output(tmp_path: Path) -> None:
     def delete_memory() -> None:
         with factory.begin() as session:
             MemoryRepository().soft_delete(
-                session, formal_memory_id=ids["goal_id"], operation_key="delete-during-model",
+                session,
+                formal_memory_id=ids["goal_id"],
+                operation_key="delete-during-model",
             )
 
     assert isinstance(client.app, FastAPI)
     model = _RecordingProductionModel(delete_memory)
     client.app.state.query_answer_service._rag._model_gateway = model
     response = client.post(
-        "/v1/answers", json={"query": QUERY}, headers=_headers(csrf, "context-after-change"),
+        "/v1/answers",
+        json={"query": QUERY},
+        headers=_headers(csrf, "context-after-change"),
     )
     payload = response.json()
     assert response.status_code == 200
@@ -144,7 +160,8 @@ def test_answer_receipt_cannot_replay_outdated_personalization(tmp_path: Path) -
     assert first.json()["personalization_refs"]
     with factory.begin() as session:
         MemoryRepository().commit_explicit_memory(
-            session, MemoryValue("goal", "goal.finance", {"text": "changed formal goal"}),
+            session,
+            MemoryValue("goal", "goal.finance", {"text": "changed formal goal"}),
             operation_key="change-after-answer",
         )
     replay = client.post("/v1/answers", json={"query": QUERY}, headers=headers)

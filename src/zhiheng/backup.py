@@ -90,14 +90,18 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
         raise ValueError("backup bundle must not contain symlinks")
     payload = json.loads((root / "manifest.json").read_text())
     if not isinstance(payload, dict) or set(payload) != {
-        "format_version", "original_object_root", "database_sha256", "artifacts"
+        "format_version",
+        "original_object_root",
+        "database_sha256",
+        "artifacts",
     }:
         raise ValueError("unsupported backup manifest schema")
     if type(payload["format_version"]) is not int or payload["format_version"] != 1:
         raise ValueError("unsupported backup format version")
-    if not isinstance(payload["original_object_root"], str) or not Path(
-        payload["original_object_root"]
-    ).is_absolute():
+    if (
+        not isinstance(payload["original_object_root"], str)
+        or not Path(payload["original_object_root"]).is_absolute()
+    ):
         raise ValueError("backup original object root must be absolute")
     if _file_digest(root / "database.sqlite") != payload["database_sha256"]:
         raise ValueError("backup database checksum mismatch")
@@ -127,9 +131,7 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
         if _file_digest(artifact_path) != item["sha256"] or artifact_path.stat().st_size != size:
             raise ValueError("backup artifact checksum or size mismatch")
         artifacts.append(BackupArtifact(relative, item["sha256"], size))
-    actual_files = {
-        path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()
-    }
+    actual_files = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
     if actual_files != expected_files:
         raise ValueError("backup bundle contains unlisted or missing files")
     return tuple(artifacts)

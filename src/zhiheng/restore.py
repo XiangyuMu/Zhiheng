@@ -37,9 +37,14 @@ def prepare_restored_bundle(
     config.set_main_option("sqlalchemy.url", f"sqlite:///{database.resolve()}")
     command.upgrade(config, "head")
     with sqlite3.connect(database) as anchor_connection:
-        if anchor_connection.execute(
-            "SELECT 1 FROM privacy_erase_journal_anchor WHERE id=1"
-        ).fetchone() is None and journal.path.exists() and journal.path.stat().st_size > 0:
+        if (
+            anchor_connection.execute(
+                "SELECT 1 FROM privacy_erase_journal_anchor WHERE id=1"
+            ).fetchone()
+            is None
+            and journal.path.exists()
+            and journal.path.stat().st_size > 0
+        ):
             raise ValueError("restored database has no erase-journal anchor")
     root = (bundle / "objects").resolve()
     relocate_object_references(database, Path(manifest["original_object_root"]), root)

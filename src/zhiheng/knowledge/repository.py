@@ -109,7 +109,286 @@ class FtsHit:
     text: str
 
 
+@dataclass(frozen=True)
+class KnowledgeDetail:
+    knowledge_object_id: str
+    knowledge_version_id: str
+    title: str
+    primary_domain_id: str
+    media_type: str
+    object_kind: str
+    lifecycle_status: str
+    searchable: bool
+    summary: str | None
+    source_metadata: dict[str, Any]
+    text: str
+    citations: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class DuplicateMatch:
+    kind: str
+    knowledge_object_id: str
+    knowledge_version_id: str
+    content_sha256: str
+    source_url: str | None = None
+
+
 class KnowledgeRepository:
+    def find_duplicate(
+        self,
+        session: Session,
+        *,
+        user_id: str,
+        text_value: str,
+        source_url: str | None = None,
+    ) -> DuplicateMatch | None:
+        """Classify an import against all versions owned by the authenticated user."""
+        content_sha256 = sha256_text(text_value)
+        rows = session.execute(
+            text(
+                """
+                SELECT ko.id AS knowledge_object_id, kv.id AS knowledge_version_id,
+                       cv.content_sha256, eo.source_metadata_json
+                FROM knowledge_objects ko
+                JOIN knowledge_versions kv ON kv.knowledge_object_id = ko.id
+                JOIN content_versions cv ON cv.id = kv.content_version_id
+                JOIN evidence_objects eo ON eo.id = cv.evidence_object_id
+                WHERE ko.owner_user_id = :user_id
+                ORDER BY kv.version_no DESC
+                """
+            ),
+            {"user_id": user_id},
+        ).mappings()
+        for row in rows:
+            metadata = self._json_object(row["source_metadata_json"])
+            row_url = metadata.get("source_url") or metadata.get("url") or metadata.get("web_url")
+            if str(row["content_sha256"]) == content_sha256:
+                return DuplicateMatch(
+                    kind="duplicate",
+                    knowledge_object_id=str(row["knowledge_object_id"]),
+                    knowledge_version_id=str(row["knowledge_version_id"]),
+                    content_sha256=content_sha256,
+                    source_url=str(row_url) if row_url else None,
+                )
+            if source_url and row_url and str(row_url) == source_url:
+                return DuplicateMatch(
+                    kind="new_version_candidate",
+                    knowledge_object_id=str(row["knowledge_object_id"]),
+                    knowledge_version_id=str(row["knowledge_version_id"]),
+                    content_sha256=content_sha256,
+                    source_url=source_url,
+                )
+        return None
+
+    def append_text_version(
+        self,
+        session: Session,
+        item: TextEvidenceInput,
+        *,
+        knowledge_object_id: str,
+        user_authority: KnowledgeUserAuthority,
+        stored_artifacts: StoredTextArtifacts,
+    ) -> IngestedKnowledge:
+        """Append a new current version and preserve the previous version for history."""
+        self._validate_user_authority(user_authority)
+        if not item.text:
+            raise ValueError("text evidence cannot be empty")
+        body_hash = sha256_text(item.text)
+        self._validate_stored_artifacts(stored_artifacts, expected_hash=body_hash)
+        current = (
+            session.execute(
+                text(
+                    """
+                SELECT ko.current_version_id, ko.confirmation_generation, kv.version_no
+                FROM knowledge_objects ko
+                JOIN knowledge_versions kv ON kv.id = ko.current_version_id
+                WHERE ko.id = :id AND ko.owner_user_id = :user_id
+                  AND ko.visibility_scope = 'formal'
+                """
+                ),
+                {"id": knowledge_object_id, "user_id": user_authority.user_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if current is None:
+            raise ValueError("knowledge object not found")
+
+        evidence_id = new_id()
+        content_version_id = new_id()
+        content_span_id = new_id()
+        knowledge_version_id = new_id()
+        chunk_id = new_id()
+        outbox_event_id = new_id()
+        version_no = int(current["version_no"]) + 1
+        metadata = {
+            **item.source_metadata,
+            "confirmed_by_user_id": user_authority.user_id,
+            "confirmation_authority": user_authority.authority_kind,
+        }
+        session.execute(
+            text(
+                """
+                INSERT INTO evidence_objects (
+                  id, object_uri, sha256, media_type, byte_size, source_kind,
+                  source_metadata_json, status, erasable
+                ) VALUES (
+                  :id, :uri, :sha256, :media_type, :byte_size, 'user_explicit',
+                  :metadata, 'active', :erasable
+                )
+                """
+            ),
+            {
+                "id": evidence_id,
+                "uri": stored_artifacts.evidence_object_uri,
+                "sha256": stored_artifacts.sha256,
+                "media_type": item.media_type,
+                "byte_size": stored_artifacts.byte_size,
+                "metadata": json_text(metadata),
+                "erasable": item.erasable,
+            },
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO content_versions (
+                  id, evidence_object_id, version_no, processor_name, processor_version,
+                  text_artifact_uri, content_sha256, status
+                ) VALUES (
+                  :id, :evidence_id, 1, 'manual-text-ingestor', 'step0',
+                  :text_uri, :sha256, 'active'
+                )
+                """
+            ),
+            {
+                "id": content_version_id,
+                "evidence_id": evidence_id,
+                "text_uri": stored_artifacts.text_artifact_uri,
+                "sha256": stored_artifacts.sha256,
+            },
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO content_spans (
+                  id, content_version_id, span_kind, start_offset, end_offset,
+                  page_no, section_path, quote_hash
+                ) VALUES (:id, :version_id, 'body', 0, :end, NULL, NULL, :hash)
+                """
+            ),
+            {
+                "id": content_span_id,
+                "version_id": content_version_id,
+                "end": len(item.text),
+                "hash": body_hash,
+            },
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO knowledge_versions (
+                  id, knowledge_object_id, version_no, content_version_id, markdown_uri,
+                  summary, source_quality
+                ) VALUES (
+                  :id, :object_id, :version_no, :content_id, :markdown_uri,
+                  :summary, 'user_provided'
+                )
+                """
+            ),
+            {
+                "id": knowledge_version_id,
+                "object_id": knowledge_object_id,
+                "version_no": version_no,
+                "content_id": content_version_id,
+                "markdown_uri": stored_artifacts.markdown_uri,
+                "summary": item.summary,
+            },
+        )
+        session.execute(
+            text(
+                """
+                UPDATE chunks SET status = 'superseded', updated_at = CURRENT_TIMESTAMP
+                WHERE source_id = :object_id AND source_type = 'knowledge_object'
+                  AND status = 'ready'
+                """
+            ),
+            {"object_id": knowledge_object_id},
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO chunks (
+                  id, source_type, source_id, source_version_id, chunk_no, title,
+                  text, raw_text, segmented_text, span_start, span_end,
+                  visibility_scope, confirmation_generation, status
+                ) VALUES (
+                  :id, 'knowledge_object', :object_id, :version_id, 0, :title,
+                  :text, :text, :segmented, 0, :span_end, 'formal', :generation, 'ready'
+                )
+                """
+            ),
+            {
+                "id": chunk_id,
+                "object_id": knowledge_object_id,
+                "version_id": knowledge_version_id,
+                "title": item.title,
+                "text": item.text,
+                "segmented": segment_for_fts(item.text),
+                "span_end": len(item.text),
+                "generation": int(current["confirmation_generation"]),
+            },
+        )
+        session.execute(
+            text(
+                """
+                UPDATE knowledge_objects
+                SET current_version_id = :version_id, title = :title,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :object_id
+                """
+            ),
+            {
+                "version_id": knowledge_version_id,
+                "title": item.title,
+                "object_id": knowledge_object_id,
+            },
+        )
+        self._index_chunk_fts(session, chunk_id=chunk_id, title=item.title, text_value=item.text)
+        session.execute(
+            text(
+                """
+                INSERT INTO outbox_events (
+                  id, event_type, aggregate_type, aggregate_id, payload_json, status
+                ) VALUES (
+                  :id, 'knowledge.version_created', 'knowledge_object', :object_id,
+                  :payload, 'pending'
+                )
+                """
+            ),
+            {
+                "id": outbox_event_id,
+                "object_id": knowledge_object_id,
+                "payload": json_text(
+                    {
+                        "knowledge_object_id": knowledge_object_id,
+                        "knowledge_version_id": knowledge_version_id,
+                        "content_version_id": content_version_id,
+                        "version_no": version_no,
+                    }
+                ),
+            },
+        )
+        return IngestedKnowledge(
+            evidence_object_id=evidence_id,
+            content_version_id=content_version_id,
+            content_span_id=content_span_id,
+            knowledge_object_id=knowledge_object_id,
+            knowledge_version_id=knowledge_version_id,
+            chunk_id=chunk_id,
+            outbox_event_id=outbox_event_id,
+        )
+
     def ingest_text(
         self,
         session: Session,
@@ -153,6 +432,7 @@ class KnowledgeRepository:
             erasable=item.erasable,
             index_fts=True,
             stored_artifacts=stored_artifacts,
+            owner_user_id=user_authority.user_id,
         )
 
     def create_external_candidate(
@@ -249,9 +529,10 @@ class KnowledgeRepository:
         user_authority: KnowledgeUserAuthority,
     ) -> KnowledgeConfirmationResult:
         self._validate_user_authority(user_authority)
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT
                   ko.id,
                   ko.current_version_id,
@@ -268,9 +549,12 @@ class KnowledgeRepository:
                 JOIN evidence_objects eo ON eo.id = cv.evidence_object_id
                 WHERE ko.id = :knowledge_object_id
                 """
-            ),
-            {"knowledge_object_id": knowledge_object_id},
-        ).mappings().one_or_none()
+                ),
+                {"knowledge_object_id": knowledge_object_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise ValueError("knowledge candidate not found")
         if row["lifecycle_status"] != "awaiting_user_confirmation":
@@ -284,16 +568,20 @@ class KnowledgeRepository:
             or row["sha256"] != expected_content_sha256
         ):
             raise ValueError("knowledge candidate content hash mismatch")
-        request_row = session.execute(
-            text(
-                """
+        request_row = (
+            session.execute(
+                text(
+                    """
                 SELECT id, target_type, target_id, status, proposed_value_json
                 FROM knowledge_confirmation_requests
                 WHERE id = :request_id
                 """
-            ),
-            {"request_id": confirmation_request_id},
-        ).mappings().one_or_none()
+                ),
+                {"request_id": confirmation_request_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
         if request_row is None:
             raise ValueError("knowledge confirmation request not found")
         if (
@@ -323,9 +611,10 @@ class KnowledgeRepository:
         ):
             raise ValueError("knowledge confirmation request content binding mismatch")
 
-        chunk = session.execute(
-            text(
-                """
+        chunk = (
+            session.execute(
+                text(
+                    """
                 SELECT id, text, raw_text, title
                 FROM chunks
                 WHERE source_type = 'knowledge_object'
@@ -335,12 +624,15 @@ class KnowledgeRepository:
                   AND confirmation_generation = 0
                   AND status = 'blocked_by_confirmation'
                 """
-            ),
-            {
-                "knowledge_object_id": knowledge_object_id,
-                "source_version_id": row["current_version_id"],
-            },
-        ).mappings().one_or_none()
+                ),
+                {
+                    "knowledge_object_id": knowledge_object_id,
+                    "source_version_id": row["current_version_id"],
+                },
+            )
+            .mappings()
+            .one_or_none()
+        )
         if chunk is None:
             raise ValueError("knowledge candidate chunk is not confirmable")
         if (
@@ -502,6 +794,7 @@ class KnowledgeRepository:
         erasable: bool,
         index_fts: bool,
         stored_artifacts: StoredTextArtifacts,
+        owner_user_id: str | None = None,
     ) -> IngestedKnowledge:
 
         evidence_id = new_id()
@@ -584,12 +877,13 @@ class KnowledgeRepository:
                 """
                 INSERT INTO knowledge_objects (
                   id, primary_domain_id, title, object_kind, record_type, lifecycle_status,
-                  visibility_scope, current_version_id, confirmation_generation,
+                  visibility_scope, current_version_id, confirmation_generation, owner_user_id,
                   sensitivity_level
                 )
                 VALUES (
                   :id, :primary_domain_id, :title, :object_kind, :record_type, :lifecycle_status,
-                  :visibility_scope, NULL, :confirmation_generation, :sensitivity_level
+                  :visibility_scope, NULL, :confirmation_generation, :owner_user_id,
+                  :sensitivity_level
                 )
                 """
             ),
@@ -602,6 +896,7 @@ class KnowledgeRepository:
                 "lifecycle_status": lifecycle_status,
                 "visibility_scope": visibility_scope,
                 "confirmation_generation": confirmation_generation,
+                "owner_user_id": owner_user_id,
                 "sensitivity_level": sensitivity_level,
             },
         )
@@ -768,6 +1063,74 @@ class KnowledgeRepository:
         ).mappings()
         return [self._fts_hit(row) for row in rows]
 
+    def get_detail(self, session: Session, knowledge_object_id: str) -> KnowledgeDetail | None:
+        row = (
+            session.execute(
+                text(
+                    """
+                SELECT ko.id, ko.current_version_id, ko.title, ko.primary_domain_id,
+                       ko.object_kind, ko.lifecycle_status, kv.summary, eo.media_type,
+                       eo.source_metadata_json, c.raw_text,
+                       EXISTS (
+                         SELECT 1 FROM chunks serving
+                         WHERE serving.source_id = ko.id AND serving.status = 'ready'
+                       ) AS searchable
+                FROM knowledge_objects ko
+                JOIN knowledge_versions kv
+                  ON kv.id = ko.current_version_id
+                JOIN content_versions cv
+                  ON cv.id = kv.content_version_id
+                JOIN evidence_objects eo
+                  ON eo.id = cv.evidence_object_id
+                LEFT JOIN chunks c
+                  ON c.source_id = ko.id
+                 AND c.source_version_id = ko.current_version_id
+                WHERE ko.id = :id
+                ORDER BY c.chunk_no
+                LIMIT 1
+                """
+                ),
+                {"id": knowledge_object_id},
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            return None
+        citations = [
+            dict(item)
+            for item in session.execute(
+                text(
+                    """
+                    SELECT id AS content_span_id, span_kind, start_offset, end_offset,
+                           page_no, section_path, quote_hash
+                    FROM content_spans
+                    WHERE content_version_id = (
+                      SELECT content_version_id
+                      FROM knowledge_versions
+                      WHERE id = :version_id
+                    )
+                    ORDER BY start_offset, id
+                    """
+                ),
+                {"version_id": row["current_version_id"]},
+            ).mappings()
+        ]
+        return KnowledgeDetail(
+            knowledge_object_id=str(row["id"]),
+            knowledge_version_id=str(row["current_version_id"]),
+            title=str(row["title"]),
+            primary_domain_id=str(row["primary_domain_id"]),
+            media_type=str(row["media_type"]),
+            object_kind=str(row["object_kind"]),
+            lifecycle_status=str(row["lifecycle_status"]),
+            searchable=bool(row["searchable"]),
+            summary=str(row["summary"]) if row["summary"] is not None else None,
+            source_metadata=self._json_object(row["source_metadata_json"]),
+            text=str(row["raw_text"] or ""),
+            citations=citations,
+        )
+
     def rebuild_fts_index(self, session: Session) -> int:
         rows = session.execute(
             text(
@@ -791,12 +1154,16 @@ class KnowledgeRepository:
                  AND cs.content_version_id = s.content_version_id
                  AND cs.start_offset = s.span_start
                  AND cs.end_offset = s.span_end
-                ORDER BY s.id
+                UNION ALL
+                SELECT c.rowid, s.id, s.title, s.raw_text
+                FROM serving_chunks s JOIN chunks c ON c.id=s.id
+                WHERE s.source_type='event_memory'
+                ORDER BY 2
                 """
             )
         ).mappings()
         indexed = 0
-        session.execute(text("DELETE FROM fts_chunks"))
+        session.execute(text("INSERT INTO fts_chunks(fts_chunks) VALUES ('delete-all')"))
         for row in rows:
             segmented_text = segment_for_fts(str(row["raw_text"]))
             session.execute(
@@ -863,6 +1230,91 @@ class KnowledgeRepository:
             {
                 "id": new_id(),
                 "knowledge_object_id": knowledge_object_id,
+                "payload_json": json_text({"knowledge_object_id": knowledge_object_id}),
+            },
+        )
+
+    def restore_knowledge(self, session: Session, knowledge_object_id: str) -> None:
+        row = (
+            session.execute(
+                text(
+                    """
+                SELECT id, confirmation_generation, lifecycle_status
+                FROM knowledge_objects
+                WHERE id = :id
+                """
+                ),
+                {"id": knowledge_object_id},
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            raise ValueError("knowledge object not found")
+        if row["lifecycle_status"] != "soft_deleted":
+            raise ValueError("only deleted knowledge can be restored")
+        generation = int(row["confirmation_generation"])
+        session.execute(
+            text(
+                """
+                UPDATE knowledge_objects
+                SET lifecycle_status = 'formal_current', updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id
+                """
+            ),
+            {"id": knowledge_object_id},
+        )
+        session.execute(
+            text(
+                """
+                UPDATE chunks
+                SET status = 'ready', visibility_scope = 'formal',
+                    confirmation_generation = :generation,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE source_type = 'knowledge_object' AND source_id = :id
+                """
+            ),
+            {"id": knowledge_object_id, "generation": generation},
+        )
+        self._append_lifecycle_event(
+            session,
+            knowledge_object_id,
+            "knowledge.restored",
+        )
+
+    def reindex_knowledge(self, session: Session, knowledge_object_id: str) -> None:
+        row = session.execute(
+            text("SELECT lifecycle_status FROM knowledge_objects WHERE id = :id"),
+            {"id": knowledge_object_id},
+        ).scalar_one_or_none()
+        if row is None:
+            raise ValueError("knowledge object not found")
+        if row != "formal_current":
+            raise ValueError("only formal knowledge can be reindexed")
+        self._append_lifecycle_event(session, knowledge_object_id, "knowledge.reindex_requested")
+
+    def _append_lifecycle_event(
+        self,
+        session: Session,
+        knowledge_object_id: str,
+        event_type: str,
+    ) -> None:
+        session.execute(
+            text(
+                """
+                INSERT INTO outbox_events (
+                  id, event_type, aggregate_type, aggregate_id, payload_json, status
+                )
+                VALUES (
+                  :id, :event_type, 'knowledge_object', :aggregate_id,
+                  :payload_json, 'pending'
+                )
+                """
+            ),
+            {
+                "id": new_id(),
+                "event_type": event_type,
+                "aggregate_id": knowledge_object_id,
                 "payload_json": json_text({"knowledge_object_id": knowledge_object_id}),
             },
         )

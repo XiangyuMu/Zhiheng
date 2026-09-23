@@ -15,9 +15,7 @@ def _client(tmp_path: Path) -> TestClient:
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
     command.upgrade(cfg, "head")
-    return TestClient(
-        create_app(Settings(environment="test", database_url=f"sqlite:///{db_path}"))
-    )
+    return TestClient(create_app(Settings(environment="test", database_url=f"sqlite:///{db_path}")))
 
 
 def _login(client: TestClient) -> None:
@@ -45,19 +43,17 @@ def test_evolution_center_static_assets_are_authenticated_real_api_clients(
     assert script.status_code == 200
     assert style.status_code == 200
     assert b"/v1/evolution/overview" in script.content
-    assert b'"X-CSRF-Token"' in script.content
-    assert b'"Idempotency-Key"' in script.content
-    assert b'"If-Match"' in script.content
+    # This management view is read-only; no privileged mutation controls are exposed.
+    assert b'method: "POST"' not in script.content
+    assert b"promotion-requests" not in script.content
+    assert b"rollback-requests" not in script.content
     assert b"raw_text" not in page.content + script.content
     assert b"api_key" not in page.content + script.content
     assert b"secret" not in page.content + script.content
 
 
 def test_evolution_center_browser_does_not_submit_privileged_roles() -> None:
-    script = (
-        Path("src/zhiheng/api/static/evolution-center.js").read_text(encoding="utf-8")
-        .lower()
-    )
+    script = Path("src/zhiheng/api/static/evolution-center.js").read_text(encoding="utf-8").lower()
 
     assert '"reviewer"' not in script
     assert '"validator"' not in script

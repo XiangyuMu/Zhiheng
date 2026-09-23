@@ -82,6 +82,16 @@ class PersonalizationRef:
 
 
 @dataclass(frozen=True)
+class MemoryImpact:
+    formal_memory_id: str
+    formal_version_id: str
+    state_key: str
+    effect_type: str
+    explanation: str
+    used: bool = True
+
+
+@dataclass(frozen=True)
 class AnswerEnvelope:
     answer: str
     claims: tuple[AnswerClaim, ...]
@@ -98,6 +108,7 @@ class AnswerEnvelope:
     trajectory_id: str | None = None
     personalization_refs: tuple[PersonalizationRef, ...] = ()
     memory_context_digest: str | None = None
+    memory_impacts: tuple[MemoryImpact, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -143,6 +154,7 @@ class AnswerModelPort(Protocol):
         citations: Sequence[Citation],
         max_output_tokens: int | None = None,
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> GeneratedAnswer: ...
 
 

@@ -57,17 +57,21 @@ class SessionService:
         password: str,
         ttl: timedelta = timedelta(hours=12),
     ) -> AuthenticatedSession:
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT id, password_hash
                 FROM auth_users
                 WHERE username = :username
                   AND status = 'active'
                 """
-            ),
-            {"username": username},
-        ).mappings().one_or_none()
+                ),
+                {"username": username},
+            )
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise PermissionError("invalid credentials")
 
@@ -107,9 +111,10 @@ class SessionService:
         )
 
     def resolve_session(self, session: Session, token: str) -> str:
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT au.id AS user_id
                 FROM auth_sessions auth
                 JOIN auth_users au ON au.id = auth.user_id
@@ -118,9 +123,12 @@ class SessionService:
                   AND auth.expires_at > :now
                   AND au.status = 'active'
                 """
-            ),
-            {"token_hash": sha256_text(token), "now": datetime.now(UTC)},
-        ).mappings().one_or_none()
+                ),
+                {"token_hash": sha256_text(token), "now": datetime.now(UTC)},
+            )
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise PermissionError("invalid or expired session")
         session.execute(
@@ -134,6 +142,42 @@ class SessionService:
             {"token_hash": sha256_text(token)},
         )
         return str(row["user_id"])
+
+    def refresh(
+        self, session: Session, token: str, *, ttl: timedelta = timedelta(hours=12)
+    ) -> AuthenticatedSession:
+        row = (
+            session.execute(
+                text("""
+            SELECT id, user_id FROM auth_sessions
+            WHERE token_hash = :token_hash AND status = 'active' AND expires_at > :now
+        """),
+                {"token_hash": sha256_text(token), "now": datetime.now(UTC)},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise PermissionError("invalid or expired session")
+        new_token = secrets.token_urlsafe(48)
+        expires_at = datetime.now(UTC) + ttl
+        new_id_value = new_id()
+        session.execute(
+            text("UPDATE auth_sessions SET status = 'revoked' WHERE id = :id"), {"id": row["id"]}
+        )
+        session.execute(
+            text("""
+            INSERT INTO auth_sessions (id, user_id, token_hash, status, expires_at)
+            VALUES (:id, :user_id, :token_hash, 'active', :expires_at)
+        """),
+            {
+                "id": new_id_value,
+                "user_id": row["user_id"],
+                "token_hash": sha256_text(new_token),
+                "expires_at": expires_at,
+            },
+        )
+        return AuthenticatedSession(new_id_value, str(row["user_id"]), new_token, expires_at)
 
     def revoke_session(self, session: Session, token: str) -> None:
         session.execute(

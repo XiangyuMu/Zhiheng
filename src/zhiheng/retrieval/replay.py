@@ -17,24 +17,37 @@ class CitationReplayValidator:
         authorizer = RetrievalAuthorizer()
         proofs = []
         for citation in citations:
-            generation = session.execute(text(
-                "SELECT confirmation_generation FROM serving_chunks WHERE id = :id"
-            ), {"id": citation.chunk_id}).scalar_one_or_none()
+            generation = session.execute(
+                text("SELECT confirmation_generation FROM serving_chunks WHERE id = :id"),
+                {"id": citation.chunk_id},
+            ).scalar_one_or_none()
             if generation is None:
                 return None
-            chunks = authorizer.authorize_batch(session, [RetrievalCandidate(
-                source_type=citation.source_type, source_id=citation.source_id,
-                source_version_id=citation.source_version_id, chunk_id=citation.chunk_id,
-                confirmation_generation=int(generation), generation=None,
-                rank=1, score=1.0, retriever=RetrievalSource.LEXICAL,
-            )])
+            chunks = authorizer.authorize_batch(
+                session,
+                [
+                    RetrievalCandidate(
+                        source_type=citation.source_type,
+                        source_id=citation.source_id,
+                        source_version_id=citation.source_version_id,
+                        chunk_id=citation.chunk_id,
+                        confirmation_generation=int(generation),
+                        generation=None,
+                        rank=1,
+                        score=1.0,
+                        retriever=RetrievalSource.LEXICAL,
+                    )
+                ],
+            )
             if len(chunks) != 1:
                 return None
             manifest = authorizer.seal_manifest(query_hash="cached-citation", chunks=chunks)
             try:
                 current = CitationBuilder().build(
-                    manifest, chunk_id=citation.chunk_id,
-                    start_offset=citation.offset[0], end_offset=citation.offset[1],
+                    manifest,
+                    chunk_id=citation.chunk_id,
+                    start_offset=citation.offset[0],
+                    end_offset=citation.offset[1],
                 )
             except ValueError:
                 return None

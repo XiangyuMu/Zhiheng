@@ -1,0 +1,5 @@
+services:
+  deepdoc-worker:
+    image: ${ZHIHENG_DEEPDOC_IMAGE:?ZHIHENG_DEEPDOC_IMAGE must be a registry @sha256 digest}
+  mineru-worker:
+    image: ${ZHIHENG_MINERU_IMAGE:?ZHIHENG_MINERU_IMAGE must be a registry @sha256 digest}

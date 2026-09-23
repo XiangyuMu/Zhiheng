@@ -26,26 +26,36 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def advance_to_canary_with_execution(
-    controller: ReleaseController, release_id: str, *, actor_id: str = "publisher-a",
+    controller: ReleaseController,
+    release_id: str,
+    *,
+    actor_id: str = "publisher-a",
 ) -> ReleaseContext:
     database = _controller_database_path(controller)
-    engine = create_sqlite_engine(Settings(environment="test", database_url=f"sqlite:///{database}"))
+    engine = create_sqlite_engine(
+        Settings(environment="test", database_url=f"sqlite:///{database}")
+    )
     try:
         service = ReleaseExecutionService(
-            session_factory=create_session_factory(engine), project_root=REPO_ROOT,
+            session_factory=create_session_factory(engine),
+            project_root=REPO_ROOT,
             deployment_secret=controller._deployment_secret,
         )
         release = controller.load_release(release_id)
         for stage in (ReleaseState.REPLAY, ReleaseState.SHADOW, ReleaseState.CANARY):
             request_id = f"advance-{release_id}-{stage.value}"
             execution = service.execute(
-                release_id=release_id, stage=G006ExecutionStage(stage.value),
+                release_id=release_id,
+                stage=G006ExecutionStage(stage.value),
                 idempotency_key=request_id,
             )
             release = controller.advance_release_stage(
-                release_id, next_state=stage, execution_run_id=execution["id"],
+                release_id,
+                next_state=stage,
+                execution_run_id=execution["id"],
                 publisher_context=command_context_for_role(actor_id, EvolutionRole.PUBLISHER),
-                request_id=request_id, step=stage.value,
+                request_id=request_id,
+                step=stage.value,
             )
         return release
     finally:
@@ -120,9 +130,7 @@ def prepare_release_with_persisted_evidence(
     )
 
 
-def _existing_release_evidence(
-    controller: ReleaseController, release_id: str
-) -> dict[str, str]:
+def _existing_release_evidence(controller: ReleaseController, release_id: str) -> dict[str, str]:
     row = controller._connection.execute(  # noqa: SLF001 - test fixture bridge
         """
         SELECT ri.validation_report_id, ri.review_report_id,
@@ -201,9 +209,7 @@ def _fixed_cases(
                 else "fail"
             },
             "result": {
-                "status": "success"
-                if safety_passed or registered.set_name != "safety"
-                else "fail"
+                "status": "success" if safety_passed or registered.set_name != "safety" else "fail"
             },
             "set_name": registered.set_name,
             "trajectory_id": (
@@ -312,29 +318,33 @@ def insert_signed_canary_observations(
             "cohort": cohort,
             "assignment_scope": {"cohort": cohort, "percentage": 5},
         }
-        envelope = TrajectoryEnvelopeV1.from_mapping({
-            "trajectory_id": trajectory_id,
-            "task_id": trajectory_id,
-            "task_family": binding.target_component,
-            "agent_version": f"release:{release_id}",
-            "knowledge_version": "knowledge",
-            "environment_version": "env",
-            "created_at": "2026-09-06T00:00:00+00:00",
-            "result": {"stop_reason": "completed"},
-            "process": {
-                "release_id": release_id,
-                "release_state": "canary",
-                "binding_digest": binding.canonical_digest(),
-                "canary_observation": observation,
-            },
-            "quality": {"completed": True},
-            "events": [{
-                "event_id": f"event-{trajectory_id}",
-                "event_type": "result",
+        envelope = TrajectoryEnvelopeV1.from_mapping(
+            {
+                "trajectory_id": trajectory_id,
+                "task_id": trajectory_id,
+                "task_family": binding.target_component,
+                "agent_version": f"release:{release_id}",
+                "knowledge_version": "knowledge",
+                "environment_version": "env",
                 "created_at": "2026-09-06T00:00:00+00:00",
-                "payload": {"stop_reason": "completed"},
-            }],
-        })
+                "result": {"stop_reason": "completed"},
+                "process": {
+                    "release_id": release_id,
+                    "release_state": "canary",
+                    "binding_digest": binding.canonical_digest(),
+                    "canary_observation": observation,
+                },
+                "quality": {"completed": True},
+                "events": [
+                    {
+                        "event_id": f"event-{trajectory_id}",
+                        "event_type": "result",
+                        "created_at": "2026-09-06T00:00:00+00:00",
+                        "payload": {"stop_reason": "completed"},
+                    }
+                ],
+            }
+        )
         refs = {
             "created_at": envelope.created_at,
             "task_id": envelope.task_id,
@@ -357,7 +367,12 @@ def insert_signed_canary_observations(
             "INSERT INTO task_evaluations "
             "(id, trajectory_id, result_json, process_json, quality_json, "
             "failure_tags_json, confidence, learning_eligible) VALUES (?, ?, ?, ?, ?, '[]', 1, 1)",
-            (f"evaluation-{trajectory_id}", trajectory_id, json.dumps(envelope.result),
-             json.dumps(envelope.process), json.dumps(envelope.quality)),
+            (
+                f"evaluation-{trajectory_id}",
+                trajectory_id,
+                json.dumps(envelope.result),
+                json.dumps(envelope.process),
+                json.dumps(envelope.quality),
+            ),
         )
     connection.commit()

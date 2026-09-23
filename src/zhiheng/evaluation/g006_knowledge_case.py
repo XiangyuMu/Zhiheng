@@ -32,14 +32,20 @@ from zhiheng.retrieval import (
 
 
 def execute_knowledge_boundary(
-    *, project_root: Path, work_dir: Path, artifact: dict[str, Any], scenario: str = "boundary",
+    *,
+    project_root: Path,
+    work_dir: Path,
+    artifact: dict[str, Any],
+    scenario: str = "boundary",
 ) -> tuple[dict[str, Any], dict[str, bool]]:
     if scenario == "migration":
         validate_serving_strategy_artifact(artifact)
     else:
         validate_strategy_artifact(artifact)
     seed = _seed_knowledge_snapshot(
-        project_root=project_root, work_dir=work_dir, scenario=scenario,
+        project_root=project_root,
+        work_dir=work_dir,
+        scenario=scenario,
     )
     return _run_knowledge_query(
         db_path=seed["db_path"],
@@ -63,7 +69,9 @@ def execute_knowledge_shadow(
     validate_serving_strategy_artifact(baseline_artifact)
     validate_strategy_artifact(candidate_artifact)
     seed = _seed_knowledge_snapshot(
-        project_root=project_root, work_dir=work_dir / "seed", scenario="boundary",
+        project_root=project_root,
+        work_dir=work_dir / "seed",
+        scenario="boundary",
     )
     baseline_snapshot = _copy_snapshot(
         source_db=seed["db_path"],
@@ -139,31 +147,41 @@ def execute_knowledge_shadow(
             )
         ),
     }
-    facts["observation_digest"] = sha256_json(
-        {"facts": facts, "outcomes": outcomes}
-    )
+    facts["observation_digest"] = sha256_json({"facts": facts, "outcomes": outcomes})
     return facts, outcomes
 
 
 def _seed_knowledge_snapshot(
-    *, project_root: Path, work_dir: Path, scenario: str,
+    *,
+    project_root: Path,
+    work_dir: Path,
+    scenario: str,
 ) -> dict[str, Any]:
     scenarios = {
-        "boundary": ("缓存策略", (
-            "缓存策略：系统必须启用缓存。", "缓存策略：系统必须禁用缓存。",
-            "缓存策略：旧版本哨兵，不得作为当前证据。",
-        )),
-        "migration": ("资料共享", (
-            "资料共享：研究团队必须共享资料。", "资料共享：研究团队不得共享资料。",
-            "资料共享：过期版本哨兵，不得作为当前证据。",
-        )),
+        "boundary": (
+            "缓存策略",
+            (
+                "缓存策略：系统必须启用缓存。",
+                "缓存策略：系统必须禁用缓存。",
+                "缓存策略：旧版本哨兵，不得作为当前证据。",
+            ),
+        ),
+        "migration": (
+            "资料共享",
+            (
+                "资料共享：研究团队必须共享资料。",
+                "资料共享：研究团队不得共享资料。",
+                "资料共享：过期版本哨兵，不得作为当前证据。",
+            ),
+        ),
     }
     query, contents = scenarios[scenario]
     work_dir.mkdir(parents=True, exist_ok=True)
     db_path = work_dir / "knowledge.sqlite"
     object_store_path = work_dir / "objects"
     settings = Settings(
-        environment="test", database_url=f"sqlite:///{db_path}",
+        environment="test",
+        database_url=f"sqlite:///{db_path}",
         knowledge_object_store_path=str(object_store_path),
     )
     config = Config(str(project_root / "alembic.ini"))
@@ -174,27 +192,37 @@ def _seed_knowledge_snapshot(
     factory = create_session_factory(engine)
     try:
         ingestion = KnowledgeIngestionService(settings)
-        items = [ingestion.ingest_user_text(
-            factory,
-            TextEvidenceInput(
-                title=f"synthetic policy {index}", text=content,
-                primary_domain_id="technology.ai",
-            ),
-            user_authority=KnowledgeUserAuthority("protected-synthetic-user"),
-        ) for index, content in enumerate(contents)]
+        items = [
+            ingestion.ingest_user_text(
+                factory,
+                TextEvidenceInput(
+                    title=f"synthetic policy {index}",
+                    text=content,
+                    primary_domain_id="technology.ai",
+                ),
+                user_authority=KnowledgeUserAuthority("protected-synthetic-user"),
+            )
+            for index, content in enumerate(contents)
+        ]
         stale = items[-1]
         with factory.begin() as session:
             replacement = new_id()
-            session.execute(text(
-                "INSERT INTO knowledge_versions "
-                "(id, knowledge_object_id, version_no, content_version_id, markdown_uri, "
-                "summary, source_quality) "
-                "SELECT :replacement, knowledge_object_id, 2, content_version_id, "
-                "markdown_uri, summary, source_quality FROM knowledge_versions WHERE id = :old"
-            ), {"replacement": replacement, "old": stale.knowledge_version_id})
-            session.execute(text(
-            "UPDATE knowledge_objects SET current_version_id = :replacement WHERE id = :id"
-            ), {"replacement": replacement, "id": stale.knowledge_object_id})
+            session.execute(
+                text(
+                    "INSERT INTO knowledge_versions "
+                    "(id, knowledge_object_id, version_no, content_version_id, markdown_uri, "
+                    "summary, source_quality) "
+                    "SELECT :replacement, knowledge_object_id, 2, content_version_id, "
+                    "markdown_uri, summary, source_quality FROM knowledge_versions WHERE id = :old"
+                ),
+                {"replacement": replacement, "old": stale.knowledge_version_id},
+            )
+            session.execute(
+                text(
+                    "UPDATE knowledge_objects SET current_version_id = :replacement WHERE id = :id"
+                ),
+                {"replacement": replacement, "id": stale.knowledge_object_id},
+            )
     finally:
         engine.dispose()
     seed = {
@@ -223,7 +251,8 @@ def _run_knowledge_query(
 ) -> tuple[dict[str, Any], dict[str, bool]]:
     override = artifact["routing"]["route_override"]
     route = QueryRouter().route(
-        query, route_override=QueryRoute(override) if override is not None else None,
+        query,
+        route_override=QueryRoute(override) if override is not None else None,
     )
     if route.route is not QueryRoute.HYBRID:
         facts = {
@@ -235,16 +264,20 @@ def _run_knowledge_query(
             "snapshot_digest": snapshot_digest,
             "unsupported_route": route.route.value,
         }
-        outcomes = {name: False for name in (
-            "rag.recall_at_10", "rag.citation_coverage", "rag.conflict_detected",
-            "rag.stale_evidence_not_authoritative",
-        )}
-        facts["observation_digest"] = sha256_json(
-            {"facts": facts, "outcomes": outcomes}
-        )
+        outcomes = {
+            name: False
+            for name in (
+                "rag.recall_at_10",
+                "rag.citation_coverage",
+                "rag.conflict_detected",
+                "rag.stale_evidence_not_authoritative",
+            )
+        }
+        facts["observation_digest"] = sha256_json({"facts": facts, "outcomes": outcomes})
         return facts, outcomes
     settings = Settings(
-        environment="test", database_url=f"sqlite:///{db_path}",
+        environment="test",
+        database_url=f"sqlite:///{db_path}",
         knowledge_object_store_path=str(object_store_path),
     )
     engine = create_sqlite_engine(settings)
@@ -253,17 +286,26 @@ def _run_knowledge_query(
         started = time.monotonic()
         with factory.begin() as session:
             result = HybridRetriever().search_offline(
-                session, query, limit=10,
+                session,
+                query,
+                limit=10,
                 overfetch_factor=artifact["retrieval"]["overfetch_factor"],
                 rrf_k=artifact["retrieval"]["rrf_k"],
             )
             manifest = result.manifest
-        citations = tuple(CitationBuilder().build(
-            manifest, chunk_id=chunk.chunk_id,
-            start_offset=chunk.span_start, end_offset=chunk.span_end,
-        ) for chunk in manifest.chunks)
+        citations = tuple(
+            CitationBuilder().build(
+                manifest,
+                chunk_id=chunk.chunk_id,
+                start_offset=chunk.span_start,
+                end_offset=chunk.span_end,
+            )
+            for chunk in manifest.chunks
+        )
         generated = EvidenceBoundAnswerModel().generate_answer(
-            query=query, manifest=manifest, citations=citations,
+            query=query,
+            manifest=manifest,
+            citations=citations,
         )
         with factory.begin() as session:
             authorized = RetrievalAuthorizer().validate_manifest(session, manifest)
@@ -277,15 +319,21 @@ def _run_knowledge_query(
             "artifact_digest": artifact_digest(artifact),
             "input_digest": sha256_json({"query": query, "contents": contents}),
             "query_wall_clock_ms": (time.monotonic() - started) * 1000,
-            "estimated_output_tokens": max(1, len(
-                generated.answer + "".join(generated.conflicts)
-                + "".join(generated.insufficiencies)
-                + "".join(claim.text for claim in generated.claims)
-            ) // 4),
+            "estimated_output_tokens": max(
+                1,
+                len(
+                    generated.answer
+                    + "".join(generated.conflicts)
+                    + "".join(generated.insufficiencies)
+                    + "".join(claim.text for claim in generated.claims)
+                )
+                // 4,
+            ),
             "retrieved_chunks": len(manifest.chunks),
             "expected_current_chunks": len(expected),
             "recall_at_10": len(expected & recalled) / len(expected),
-            "citation_count": len(citations), "claim_count": len(generated.claims),
+            "citation_count": len(citations),
+            "claim_count": len(generated.claims),
             "conflict_count": len(generated.conflicts),
             "snapshot_digest": snapshot_digest,
             "stale_chunk_recalled": stale_chunk_id in recalled,
@@ -298,16 +346,17 @@ def _run_knowledge_query(
             "rag.conflict_detected": bool(generated.conflicts),
             "rag.stale_evidence_not_authoritative": stale_chunk_id not in recalled and authorized,
         }
-        facts["observation_digest"] = sha256_json(
-            {"facts": facts, "outcomes": outcomes}
-        )
+        facts["observation_digest"] = sha256_json({"facts": facts, "outcomes": outcomes})
         return facts, outcomes
     finally:
         engine.dispose()
 
 
 def _copy_snapshot(
-    *, source_db: Path, source_objects: Path, target_dir: Path,
+    *,
+    source_db: Path,
+    source_objects: Path,
+    target_dir: Path,
 ) -> dict[str, Any]:
     if target_dir.exists():
         raise FileExistsError(f"shadow snapshot target already exists: {target_dir}")

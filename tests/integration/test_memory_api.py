@@ -74,11 +74,14 @@ def test_memory_routes_require_auth_and_mutations_require_csrf(tmp_path: Path) -
     )
 
     assert response.status_code == 403
-    assert client.post(
-        "/v1/memory/formal",
-        json=_formal_payload(),
-        headers=_headers(csrf, "with-csrf"),
-    ).status_code == 200
+    assert (
+        client.post(
+            "/v1/memory/formal",
+            json=_formal_payload(),
+            headers=_headers(csrf, "with-csrf"),
+        ).status_code
+        == 200
+    )
 
 
 def test_auth_requests_reject_extra_fields(tmp_path: Path) -> None:
@@ -193,6 +196,49 @@ def test_candidate_create_stays_isolated_until_confirmed(tmp_path: Path) -> None
     assert l0_after.json() == {"goal.answer": {"text": "keep answers concise"}}
 
 
+def test_profile_preview_exposes_formal_only_context_and_candidate_count(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    csrf = _login(client)
+
+    formal = client.post(
+        "/v1/memory/formal",
+        json=_formal_payload("finish thesis"),
+        headers=_headers(csrf, "profile-preview-formal"),
+    )
+    candidate = client.post(
+        "/v1/memory/candidates",
+        json=_candidate_payload("candidate-only preference"),
+        headers=_headers(csrf, "profile-preview-candidate"),
+    )
+
+    preview = client.get("/v1/memory/profile-preview")
+
+    assert formal.status_code == 200
+    assert candidate.status_code == 200
+    assert preview.status_code == 200
+    body = preview.json()
+    assert body["status"] == "formal_only"
+    assert body["formal_count"] == 1
+    assert body["candidate_count"] == 1
+    assert body["l0"] == {}
+    assert [item["value"] for item in body["items"]] == [{"text": "finish thesis"}]
+    assert "candidate-only preference" not in str(body)
+
+    candidate_item = client.get("/v1/memory/candidates").json()["items"][0]
+    confirmed = client.post(
+        f"/v1/memory/candidates/{candidate_item['id']}/confirm",
+        json={"decision": "confirmed"},
+        headers=_headers(csrf, "profile-preview-confirm", candidate_item["etag"]),
+    )
+    after = client.get("/v1/memory/profile-preview").json()
+
+    assert confirmed.status_code == 200
+    assert after["candidate_count"] == 0
+    assert any(item["value"] == {"text": "candidate-only preference"} for item in after["items"])
+
+
 def test_stale_candidate_etag_fails_closed(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
     csrf = _login(client)
@@ -262,9 +308,7 @@ def test_formal_patch_delete_restore_and_rollback_use_cas(tmp_path: Path) -> Non
     assert deleted.status_code == 200
     assert restored.status_code == 200
     assert rolled_back.status_code == 200
-    assert client.get("/v1/memory/formal").json()["items"][0]["value"] == {
-        "text": "finish thesis"
-    }
+    assert client.get("/v1/memory/formal").json()["items"][0]["value"] == {"text": "finish thesis"}
 
 
 def test_batch_is_all_or_nothing_on_stale_item(tmp_path: Path) -> None:
@@ -557,9 +601,7 @@ def test_memory_lists_expose_version_lineage_evidence_and_impact(tmp_path: Path)
     csrf = _login(client)
     payload = {
         **_formal_payload(),
-        "evidence_refs": [
-            {"trajectory_id": "synthetic-trajectory", "support_type": "supporting"}
-        ],
+        "evidence_refs": [{"trajectory_id": "synthetic-trajectory", "support_type": "supporting"}],
     }
     response = client.post(
         "/v1/memory/formal",

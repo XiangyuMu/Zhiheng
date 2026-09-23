@@ -48,9 +48,7 @@ class HeuristicConversationConclusionExtractor:
         plain_matches = [
             match
             for match in self._PLAIN_PATTERN.finditer(source)
-            if not any(
-                start < match.end(1) and match.start(1) < end for start, end in occupied
-            )
+            if not any(start < match.end(1) and match.start(1) < end for start, end in occupied)
         ]
         matches = sorted(
             [(match, True) for match in explicit_matches]

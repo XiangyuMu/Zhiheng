@@ -131,9 +131,7 @@ def test_answer_api_uses_configured_model_gateway_and_counting_transport(
     assert "pending-memory-sentinel" not in transport.calls[0]
     assert payload["answer"] == "网关模型基于授权证据生成回答。"
     assert payload["claims"][0]["citation_ids"] == [payload["citations"][0]["citation_id"]]
-    assert {ref["formal_memory_id"] for ref in payload["personalization_refs"]} == {
-        ids["goal_id"]
-    }
+    assert {ref["formal_memory_id"] for ref in payload["personalization_refs"]} == {ids["goal_id"]}
     with session_scope(session_factory) as session:
         assert session.execute(text("SELECT count(*) FROM model_call_audits")).scalar_one() == 1
 

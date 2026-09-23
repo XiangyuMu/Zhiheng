@@ -27,9 +27,91 @@ class RetrievalAuthorizer:
 
         authorized: list[AuthorizedChunk] = []
         for candidate in unique.values():
-            row = session.execute(
-                text(
-                    """
+            if candidate.generation is not None:
+                vector_row = session.execute(
+                    text(
+                        """
+                        SELECT 1
+                        FROM chunk_embeddings ce
+                        JOIN embedding_generations eg ON eg.id = ce.generation_id
+                        WHERE ce.chunk_id = :chunk_id
+                          AND ce.generation_id = :generation_id
+                          AND eg.index_status = 'active'
+                          AND ce.source_version_id = :source_version_id
+                          AND ce.visibility_scope = 'formal'
+                          AND ce.confirmation_generation = :confirmation_generation
+                        """
+                    ),
+                    {
+                        "chunk_id": candidate.chunk_id,
+                        "generation_id": candidate.generation,
+                        "source_version_id": candidate.source_version_id,
+                        "confirmation_generation": candidate.confirmation_generation,
+                    },
+                ).first()
+                if vector_row is None:
+                    continue
+
+            if candidate.source_type == "event_memory":
+                event_row = (
+                    session.execute(
+                        text("""
+                  SELECT s.source_type,s.source_id,s.source_version_id,s.id AS chunk_id,
+                         s.confirmation_generation,s.title,s.text,s.span_start,s.span_end,
+                         s.quote_hash
+                  FROM serving_chunks s
+                  JOIN event_memories e ON e.id=s.source_id AND e.status='formal_current'
+                  JOIN event_memory_versions v ON v.id=s.source_version_id AND v.event_memory_id=e.id
+                  JOIN event_memory_evidence ev ON ev.event_version_id=v.id
+                  JOIN answer_history h ON h.id=e.source_history_id
+                  WHERE s.source_type='event_memory' AND s.source_id=:source_id
+                    AND s.source_version_id=:source_version_id AND s.id=:chunk_id
+                    AND s.confirmation_generation=:generation
+                """),
+                        {
+                            "source_id": candidate.source_id,
+                            "source_version_id": candidate.source_version_id,
+                            "chunk_id": candidate.chunk_id,
+                            "generation": candidate.confirmation_generation,
+                        },
+                    )
+                    .mappings()
+                    .first()
+                )
+                if event_row is None or str(event_row["quote_hash"]) != sha256_text(
+                    str(event_row["text"])
+                ):
+                    continue
+                authorized.append(
+                    AuthorizedChunk(
+                        source_type="event_memory",
+                        source_id=str(event_row["source_id"]),
+                        source_version_id=str(event_row["source_version_id"]),
+                        chunk_id=str(event_row["chunk_id"]),
+                        confirmation_generation=int(event_row["confirmation_generation"]),
+                        generation=candidate.generation,
+                        title=str(event_row["title"]),
+                        text=str(event_row["text"]),
+                        span_start=int(event_row["span_start"]),
+                        span_end=int(event_row["span_end"]),
+                        content_version_id=None,
+                        content_span_id=None,
+                        evidence_object_id=None,
+                        page_no=None,
+                        section_path=None,
+                        quote_hash=str(event_row["quote_hash"]),
+                        score=candidate.score,
+                        rank=candidate.rank,
+                        retrievers=(candidate.retriever,),
+                        component_ranks=candidate.component_ranks
+                        or ((candidate.retriever, candidate.rank),),
+                    )
+                )
+                continue
+            row = (
+                session.execute(
+                    text(
+                        """
                     SELECT
                       s.source_type,
                       s.source_id,
@@ -75,43 +157,22 @@ class RetrievalAuthorizer:
                       AND s.id = :chunk_id
                       AND s.confirmation_generation = :confirmation_generation
                     """
-                ),
-                {
-                    "source_type": candidate.source_type,
-                    "source_id": candidate.source_id,
-                    "source_version_id": candidate.source_version_id,
-                    "chunk_id": candidate.chunk_id,
-                    "confirmation_generation": candidate.confirmation_generation,
-                },
-            ).mappings().first()
+                    ),
+                    {
+                        "source_type": candidate.source_type,
+                        "source_id": candidate.source_id,
+                        "source_version_id": candidate.source_version_id,
+                        "chunk_id": candidate.chunk_id,
+                        "confirmation_generation": candidate.confirmation_generation,
+                    },
+                )
+                .mappings()
+                .first()
+            )
             if row is None:
                 continue
             if row["quote_hash"] != sha256_text(str(row["text"])):
                 continue
-            if candidate.generation is not None:
-                vector_row = session.execute(
-                    text(
-                        """
-                        SELECT 1
-                        FROM chunk_embeddings ce
-                        JOIN embedding_generations eg ON eg.id = ce.generation_id
-                        WHERE ce.chunk_id = :chunk_id
-                          AND ce.generation_id = :generation_id
-                          AND eg.index_status = 'active'
-                          AND ce.source_version_id = :source_version_id
-                          AND ce.visibility_scope = 'formal'
-                          AND ce.confirmation_generation = :confirmation_generation
-                        """
-                    ),
-                    {
-                        "chunk_id": candidate.chunk_id,
-                        "generation_id": candidate.generation,
-                        "source_version_id": candidate.source_version_id,
-                        "confirmation_generation": candidate.confirmation_generation,
-                    },
-                ).first()
-                if vector_row is None:
-                    continue
 
             authorized.append(
                 AuthorizedChunk(

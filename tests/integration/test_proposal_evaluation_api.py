@@ -44,17 +44,13 @@ def test_proposal_evaluation_request_api_enqueues_outbox_and_job(tmp_path: Path)
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "queued"
-    assert response.json()["result"]["event_type"] == (
-        "evolution.proposal.validation_requested"
-    )
+    assert response.json()["result"]["event_type"] == ("evolution.proposal.validation_requested")
     assert process_outbox_once(settings) == 1
     with sqlite3.connect(db_path) as connection:
         event = connection.execute(
             "SELECT event_type, aggregate_id, payload_json FROM outbox_events"
         ).fetchone()
-        job = connection.execute(
-            "SELECT job_type, payload_json FROM jobs"
-        ).fetchone()
+        job = connection.execute("SELECT job_type, payload_json FROM jobs").fetchone()
 
     assert event[0] == "evolution.proposal.validation_requested"
     assert event[1] == proposal_id
@@ -207,9 +203,7 @@ def test_validation_requested_payload_cannot_override_aggregate_proposal_id(
 
     assert process_outbox_once(settings) == 1
     with sqlite3.connect(db_path) as connection:
-        payload = json.loads(
-            connection.execute("SELECT payload_json FROM jobs").fetchone()[0]
-        )
+        payload = json.loads(connection.execute("SELECT payload_json FROM jobs").fetchone()[0])
     assert payload["proposal_id"] == aggregate_id
     assert payload["proposal_id"] != payload_id
 
@@ -234,26 +228,38 @@ def test_worker_evaluates_proposal_once_and_does_not_approve_or_publish(
     assert process_worker_once(settings, worker_id="validator-worker") == 0
     with sqlite3.connect(db_path) as connection:
         assert _scalar(connection, "SELECT count(*) FROM proposal_execution_runs") == 1
-        assert _scalar(
-            connection,
-            "SELECT count(*) FROM validation_reports WHERE proposal_id = ?",
-            (proposal_id,),
-        ) == 1
-        assert _scalar(
-            connection,
-            "SELECT count(*) FROM review_reports WHERE proposal_id = ?",
-            (proposal_id,),
-        ) == 0
+        assert (
+            _scalar(
+                connection,
+                "SELECT count(*) FROM validation_reports WHERE proposal_id = ?",
+                (proposal_id,),
+            )
+            == 1
+        )
+        assert (
+            _scalar(
+                connection,
+                "SELECT count(*) FROM review_reports WHERE proposal_id = ?",
+                (proposal_id,),
+            )
+            == 0
+        )
         assert _scalar(connection, "SELECT count(*) FROM strategy_releases") == 1
-        assert _scalar(
-            connection,
-            "SELECT count(*) FROM release_transition_events WHERE next_state = 'stable'",
-        ) == 1
-        assert _scalar(
-            connection,
-            "SELECT state FROM evolution_proposals WHERE id = ?",
-            (proposal_id,),
-        ) == "validating"
+        assert (
+            _scalar(
+                connection,
+                "SELECT count(*) FROM release_transition_events WHERE next_state = 'stable'",
+            )
+            == 1
+        )
+        assert (
+            _scalar(
+                connection,
+                "SELECT state FROM evolution_proposals WHERE id = ?",
+                (proposal_id,),
+            )
+            == "validating"
+        )
         assert _scalar(connection, "SELECT status FROM jobs") == "completed"
 
 
@@ -306,21 +312,30 @@ def test_worker_retry_after_validation_commit_is_idempotent_before_job_ack(
     assert process_worker_once(settings, worker_id="validator-retry") == 1
     with sqlite3.connect(db_path) as connection:
         assert _scalar(connection, "SELECT count(*) FROM proposal_execution_runs") == 1
-        assert _scalar(
-            connection,
-            "SELECT count(*) FROM validation_reports WHERE proposal_id = ?",
-            (proposal_id,),
-        ) == 1
-        assert _scalar(
-            connection,
-            "SELECT count(*) FROM review_reports WHERE proposal_id = ?",
-            (proposal_id,),
-        ) == 0
-        assert _scalar(
-            connection,
-            "SELECT state FROM evolution_proposals WHERE id = ?",
-            (proposal_id,),
-        ) == "validating"
+        assert (
+            _scalar(
+                connection,
+                "SELECT count(*) FROM validation_reports WHERE proposal_id = ?",
+                (proposal_id,),
+            )
+            == 1
+        )
+        assert (
+            _scalar(
+                connection,
+                "SELECT count(*) FROM review_reports WHERE proposal_id = ?",
+                (proposal_id,),
+            )
+            == 0
+        )
+        assert (
+            _scalar(
+                connection,
+                "SELECT state FROM evolution_proposals WHERE id = ?",
+                (proposal_id,),
+            )
+            == "validating"
+        )
         assert _scalar(connection, "SELECT status FROM jobs") == "completed"
 
 
@@ -370,29 +385,24 @@ def _create_candidate_proposal(db_path: Path, settings: Settings, label: str) ->
 
         evaluation_ids: list[str] = []
         with factory() as session:
-            known = set(session.execute(
-                text("SELECT id FROM task_evaluations")
-            ).scalars())
+            known = set(session.execute(text("SELECT id FROM task_evaluations")).scalars())
         for index in range(5):
             service._rag._model_gateway = FailedModel() if index < 3 else EvidenceBoundAnswerModel()
             query = "中文全文检索 正式视图" if index < 4 else "个人知识库恢复删除日志"
             response = client.post(
-                "/v1/answers", json={"query": query},
+                "/v1/answers",
+                json={"query": query},
                 headers={"X-CSRF-Token": csrf, "Idempotency-Key": f"synthetic-{label}-{index}"},
             )
             assert response.status_code == 200, response.text
             with factory() as session:
-                current = set(session.execute(
-                    text("SELECT id FROM task_evaluations")
-                ).scalars())
+                current = set(session.execute(text("SELECT id FROM task_evaluations")).scalars())
                 added = current - known
                 assert len(added) == 1
                 evaluation_ids.append(str(added.pop()))
                 known = current
         with factory() as session:
-            graph = LearningEvidenceLoader(
-                settings.secret_key.get_secret_value()
-            ).build_graph(
+            graph = LearningEvidenceLoader(settings.secret_key.get_secret_value()).build_graph(
                 session,
                 baseline_release_id=baseline_ids[0],
                 baseline_binding_digest=baseline_ids[1],
@@ -410,7 +420,8 @@ def _create_candidate_proposal(db_path: Path, settings: Settings, label: str) ->
                 binding=binding,
                 artifact_payload=default_release_artifact(),
                 proposer_context=command_context_for_role(
-                    f"proposer-{label}", EvolutionRole.PROPOSER,
+                    f"proposer-{label}",
+                    EvolutionRole.PROPOSER,
                 ),
                 source_graph=graph,
             )
@@ -422,6 +433,7 @@ def _create_candidate_proposal(db_path: Path, settings: Settings, label: str) ->
             return proposal.proposal_id
     finally:
         engine.dispose()
+
 
 def _login(client: TestClient) -> str:
     response = client.post(

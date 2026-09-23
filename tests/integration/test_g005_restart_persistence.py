@@ -124,16 +124,20 @@ def test_decision_save_recovers_analysis_from_db_after_app_restart(tmp_path: Pat
     assert saved.status_code == 200
     assert saved.json()["external_action_count"] == 0
     with session_scope(session_factory) as session:
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT prompt_hash, recommendation_json, review_json
                 FROM decision_support_runs
                 WHERE id = :id
                 """
-            ),
-            {"id": run_id},
-        ).mappings().one()
+                ),
+                {"id": run_id},
+            )
+            .mappings()
+            .one()
+        )
     serialized = f"{row['prompt_hash']} {row['recommendation_json']} {row['review_json']}"
     assert "是否学习量化投资" not in serialized
     assert "citation_refs" in serialized

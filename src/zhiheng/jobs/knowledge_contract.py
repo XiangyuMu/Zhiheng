@@ -85,9 +85,7 @@ def project_import_status(
     elif job_status == JobStatus.PROCESSING.value:
         public_status = ImportPublicStatus.PROCESSING
     elif job_status == JobStatus.SUCCEEDED.value:
-        public_status = (
-            ImportPublicStatus.SUCCEEDED if searchable else ImportPublicStatus.FAILED
-        )
+        public_status = ImportPublicStatus.SUCCEEDED if searchable else ImportPublicStatus.FAILED
     elif job_status == JobStatus.DEAD_LETTER.value:
         public_status = ImportPublicStatus.DEAD_LETTER
     elif job_status == JobStatus.FAILED.value:

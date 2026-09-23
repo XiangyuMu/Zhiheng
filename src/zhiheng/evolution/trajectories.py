@@ -147,9 +147,7 @@ class TrajectoryEnvelopeV1:
             result=_sanitize_payload(_mapping_value(data, "result")),
             process=_sanitize_payload(_mapping_value(data, "process")),
             quality=_sanitize_payload(_mapping_value(data, "quality")),
-            failure_tags=tuple(
-                _sanitize_string(item) for item in data.get("failure_tags", ())
-            ),
+            failure_tags=tuple(_sanitize_string(item) for item in data.get("failure_tags", ())),
             confidence=float(data.get("confidence", 1.0)),
             user_feedback=_optional_sanitized_str(data.get("user_feedback")),
             learning_eligible=_learning_eligible_from_mapping(

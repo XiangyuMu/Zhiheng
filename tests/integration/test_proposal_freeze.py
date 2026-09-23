@@ -20,11 +20,15 @@ def test_freeze_draft_reloads_persisted_sources_and_replays_idempotently(tmp_pat
                (id, artifact_kind, binding_digest, artifact_digest,
                 artifact_json, status, source_ref)
                VALUES ('draft-1', 'strategy_proposal_draft', 'x', 'y', :payload, 'draft', NULL)"""),
-            {"payload": json.dumps({
-                "output_type": "strategy_proposal_draft",
-                "target_component": "retrieval.answer_strategy",
-                "failure_tag": "not-a-persisted-failure",
-            })},
+            {
+                "payload": json.dumps(
+                    {
+                        "output_type": "strategy_proposal_draft",
+                        "target_component": "retrieval.answer_strategy",
+                        "failure_tag": "not-a-persisted-failure",
+                    }
+                )
+            },
         )
         del row
         session.commit()

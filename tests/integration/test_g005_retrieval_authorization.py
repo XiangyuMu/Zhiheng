@@ -65,16 +65,20 @@ def _candidate_from_chunk(
     *,
     generation: str | None = None,
 ) -> RetrievalCandidate:
-    row = session.execute(
-        text(
-            """
+    row = (
+        session.execute(
+            text(
+                """
             SELECT source_type, source_id, source_version_id, confirmation_generation
             FROM chunks
             WHERE id = :chunk_id
             """
-        ),
-        {"chunk_id": chunk_id},
-    ).mappings().one()
+            ),
+            {"chunk_id": chunk_id},
+        )
+        .mappings()
+        .one()
+    )
     return RetrievalCandidate(
         source_type=str(row["source_type"]),
         source_id=str(row["source_id"]),
@@ -195,19 +199,24 @@ def test_lexical_vector_hybrid_only_store_final_authorized_results_and_query_has
         )
         assert citation.content_version_id is not None
 
-        run = session.execute(
-            text(
-                """
+        run = (
+            session.execute(
+                text(
+                    """
                 SELECT query_hash, result_count, manifest_hash
                 FROM retrieval_runs
                 WHERE id = :run_id
                 """
-            ),
-            {"run_id": result.run_id},
-        ).mappings().one()
-        rows = session.execute(
-            text(
-                """
+                ),
+                {"run_id": result.run_id},
+            )
+            .mappings()
+            .one()
+        )
+        rows = (
+            session.execute(
+                text(
+                    """
                 SELECT
                   rr.chunk_id,
                   rr.content_version_id,
@@ -226,20 +235,27 @@ def test_lexical_vector_hybrid_only_store_final_authorized_results_and_query_has
                 WHERE rr.run_id = :run_id
                 ORDER BY rr.rank
                 """
-            ),
-            {"run_id": result.run_id},
-        ).mappings().all()
-        event_types = session.execute(
-            text(
-                """
+                ),
+                {"run_id": result.run_id},
+            )
+            .mappings()
+            .all()
+        )
+        event_types = (
+            session.execute(
+                text(
+                    """
                 SELECT DISTINCT event_type
                 FROM retrieval_authorization_events
                 WHERE run_id = :run_id
                 ORDER BY event_type
                 """
-            ),
-            {"run_id": result.run_id},
-        ).scalars().all()
+                ),
+                {"run_id": result.run_id},
+            )
+            .scalars()
+            .all()
+        )
 
     assert run["query_hash"] != raw_query
     assert run["result_count"] == len(result.manifest.chunks)

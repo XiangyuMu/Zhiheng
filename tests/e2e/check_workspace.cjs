@@ -24,10 +24,10 @@ fs.mkdirSync(output, { recursive: true });
   async function noOverflow() { assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'body must not scroll horizontally'); }
   async function apiJson(url, options = {}) {
     return page.evaluate(async ({ url, options }) => {
-      const csrf = document.cookie.split(';').map((x) => x.trim()).find((x) => x.startsWith('zhiheng_csrf='))?.slice(14) || '';
+      const csrf = document.cookie.split(';').map((x) => x.trim()).find((x) => x.startsWith('zhiheng_csrf='))?.slice('zhiheng_csrf='.length) || '';
       const response = await fetch(url, { credentials: 'same-origin', ...options, headers: {
         Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-Token': csrf,
-        'Idempotency-Key': crypto.randomUUID(), ...(options.headers || {}),
+        'Idempotency-Key': crypto.randomUUID(), 'If-Match': '*', ...(options.headers || {}),
       }, body: options.body ? JSON.stringify(options.body) : undefined });
       const body = await response.json();
       if (!response.ok) throw new Error(`${response.status}: ${body.detail || 'request failed'}`);
@@ -64,6 +64,7 @@ fs.mkdirSync(output, { recursive: true });
     await shot('library-desktop');
     await check('library filtering and reader preserve context', async () => {
       await page.locator('#library-search').fill('不存在的资料标题');
+      await page.waitForFunction(() => document.querySelectorAll('.material-row').length === 0);
       assert.equal(await page.locator('.material-row').count(), 0);
       await page.getByRole('button', { name: '清除筛选', exact: true }).click();
       await page.getByRole('button', { name: '中文检索研究记录', exact: true }).click();
@@ -158,14 +159,14 @@ fs.mkdirSync(output, { recursive: true });
       await page.goto(`${base}/review-center`);
       await page.locator('#total').filter({ hasText: /[2-9]/ }).waitFor();
       assert(await page.getByText('结论草稿').first().isVisible());
-      await page.getByRole('button', { name: /浏览器审核草稿/ }).first().click();
+      await page.locator('.queue-item').filter({ hasText: '固定条件下复习需要复核' }).click();
       assert((await page.locator('#detail').innerText()).includes('固定条件'));
       await page.getByRole('button', { name: '稍后处理' }).click();
       await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
       await page.reload();
       await page.locator('#total').waitFor();
-      assert((await page.locator('#queue').innerText()).includes('浏览器审核草稿'));
-      await page.getByRole('button', { name: /浏览器审核草稿/ }).last().click();
+      assert((await page.locator('#queue').innerText()).includes('固定条件下复习需要复核'));
+      await page.locator('.queue-item').filter({ hasText: '固定条件下复习有效' }).click();
       await page.getByRole('button', { name: '批准' }).click();
       await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
       assert.equal((await apiJson(`/v1/conclusions/${first.id}`)).status, 'formal');

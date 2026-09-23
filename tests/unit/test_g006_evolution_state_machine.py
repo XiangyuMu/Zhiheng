@@ -85,9 +85,7 @@ def test_release_binding_canonical_digest_is_stable_and_ordered() -> None:
 def test_evolution_state_machine_enforces_transition_and_role_rules() -> None:
     machine = EvolutionStateMachine()
 
-    assert machine.can_transition_proposal(
-        ProposalState.CANDIDATE, ProposalState.EVIDENCE_READY
-    )
+    assert machine.can_transition_proposal(ProposalState.CANDIDATE, ProposalState.EVIDENCE_READY)
     assert machine.can_transition_release(ReleaseState.CANARY, ReleaseState.STABLE)
     assert machine.can_perform(EvolutionRole.PUBLISHER, EvolutionCapability.PUBLISH)
 
@@ -281,9 +279,7 @@ def test_g006_migration_creates_append_only_evolution_tables_and_stable_only_vie
 
         serving_rows = {
             row[0]
-            for row in connection.execute(
-                "SELECT id FROM serving_strategy_releases ORDER BY id"
-            )
+            for row in connection.execute("SELECT id FROM serving_strategy_releases ORDER BY id")
         }
         with pytest.raises(sqlite3.DatabaseError, match="append-only"):
             connection.execute(

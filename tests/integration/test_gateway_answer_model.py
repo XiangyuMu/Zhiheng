@@ -61,9 +61,15 @@ def test_gateway_answer_model_uses_privacy_pipeline_and_strict_scope(
     )
     citation = _citation_for(chunk)
     memory_context = _memory_context(sensitivity_level="sensitive" if local else "private")
-    memory_context = replace(memory_context, entries=(replace(
-        memory_context.entries[0], formal_memory_id=memory_id,
-    ),))
+    memory_context = replace(
+        memory_context,
+        entries=(
+            replace(
+                memory_context.entries[0],
+                formal_memory_id=memory_id,
+            ),
+        ),
+    )
     if memory_id != "memory-1":
         assert DeterministicPatternAnalyzer().analyze(memory_id)
     expected_ref = PersonalizationRef(
@@ -100,8 +106,11 @@ def test_gateway_answer_model_uses_privacy_pipeline_and_strict_scope(
     with session_scope(session_factory) as session:
         if local:
             _insert_provider(
-                session, provider_kind="ollama", endpoint_url="http://127.0.0.1:11434",
-                endpoint_origin="http://127.0.0.1:11434", secret_ref=None,
+                session,
+                provider_kind="ollama",
+                endpoint_url="http://127.0.0.1:11434",
+                endpoint_origin="http://127.0.0.1:11434",
+                secret_ref=None,
             )
         else:
             _insert_provider(session)
@@ -261,11 +270,15 @@ def test_retrieval_retry_keeps_unresolved_dispatch_binding(tmp_path: Path) -> No
     model = GatewayAnswerModel(gateway=gateway, provider_id="provider-openai", model_id="gpt-test")
     chunk = _chunk()
     authorizer = RetrievalAuthorizer()
-    manifests = [authorizer.seal_manifest(query_hash=sha256_text("query"), chunks=[chunk])
-                 for _ in range(2)]
-    citations = [CitationBuilder().build(manifest, chunk_id=chunk.chunk_id,
-                                        start_offset=0, end_offset=len(chunk.text))
-                 for manifest in manifests]
+    manifests = [
+        authorizer.seal_manifest(query_hash=sha256_text("query"), chunks=[chunk]) for _ in range(2)
+    ]
+    citations = [
+        CitationBuilder().build(
+            manifest, chunk_id=chunk.chunk_id, start_offset=0, end_offset=len(chunk.text)
+        )
+        for manifest in manifests
+    ]
     assert manifests[0].manifest_id != manifests[1].manifest_id
     assert citations[0].citation_id != citations[1].citation_id
     with pytest.raises(SystemExit):
@@ -289,16 +302,24 @@ def test_wire_reference_binds_evidence_version_and_span() -> None:
         assert alias != _wire_citation_id(changed)
 
 
-@pytest.mark.parametrize("field", [
-    "source_id", "source_version_id", "evidence_object_id", "quote_hash",
-])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "source_id",
+        "source_version_id",
+        "evidence_object_id",
+        "quote_hash",
+    ],
+)
 def test_gateway_answer_model_rejects_mismatched_citation_before_dispatch(
-    tmp_path: Path, field: str,
+    tmp_path: Path,
+    field: str,
 ) -> None:
     _, settings, session_factory = _migrated_session_factory(tmp_path)
     transport = CountingTransport(responses=[], calls=[])
     gateway = ModelGateway._for_test(
-        session_factory=session_factory, settings=settings,
+        session_factory=session_factory,
+        settings=settings,
         privacy_pipeline=PrivacyPipeline(analyzer=DeterministicPatternAnalyzer()),
         transports={"openai-compatible": transport},
     )
@@ -333,10 +354,14 @@ def test_gateway_answer_model_refuses_unavailable_classification(tmp_path: Path)
     manifest = RetrievalAuthorizer().seal_manifest(query_hash=sha256_text("query"), chunks=[chunk])
     with pytest.raises(PermissionError):
         model = GatewayAnswerModel(
-            gateway=gateway, provider_id="provider-openai", model_id="gpt-test",
+            gateway=gateway,
+            provider_id="provider-openai",
+            model_id="gpt-test",
         )
         model.generate_answer(
-            query="query", manifest=manifest, citations=[_citation_for(chunk)],
+            query="query",
+            manifest=manifest,
+            citations=[_citation_for(chunk)],
         )
     assert transport.calls == []
 

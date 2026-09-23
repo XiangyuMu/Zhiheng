@@ -290,17 +290,21 @@ class PersonalUpdateService:
         reason: str,
     ) -> dict[str, Any]:
         state_key = "context.missing." + sha256_json({"query": query})[:24]
-        existing = session.execute(
-            text(
-                """
+        existing = (
+            session.execute(
+                text(
+                    """
                 SELECT id, reason, payload_json FROM personal_prompts
                 WHERE owner_user_id=:owner AND prompt_kind='missing' AND state_key=:state_key
                   AND status='pending'
                 ORDER BY created_at DESC LIMIT 1
                 """
-            ),
-            {"owner": owner_user_id, "state_key": state_key},
-        ).mappings().first()
+                ),
+                {"owner": owner_user_id, "state_key": state_key},
+            )
+            .mappings()
+            .first()
+        )
         if existing is not None:
             return {
                 "id": str(existing["id"]),

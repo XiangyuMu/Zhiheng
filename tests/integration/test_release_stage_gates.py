@@ -29,44 +29,68 @@ def test_stage_gate_rejects_validation_and_wrong_stage_runs(tmp_path: Path) -> N
     baseline_id = _bootstrap_stable(controller)
     binding = _binding("stage-gate-probe", baseline_id)
     prepared = prepare_release_with_persisted_evidence(
-        controller, binding=binding, proposer_id="proposer", reviewer_id="reviewer",
-        canary_assignment=_assignment(), canary_samples=5, request_id="prepare-stage-gate",
+        controller,
+        binding=binding,
+        proposer_id="proposer",
+        reviewer_id="reviewer",
+        canary_assignment=_assignment(),
+        canary_samples=5,
+        request_id="prepare-stage-gate",
     )
-    engine = create_sqlite_engine(Settings(environment="test", database_url=f"sqlite:///{database}"))
+    engine = create_sqlite_engine(
+        Settings(environment="test", database_url=f"sqlite:///{database}")
+    )
     service = ReleaseExecutionService(
-        session_factory=create_session_factory(engine), project_root=Path.cwd(),
+        session_factory=create_session_factory(engine),
+        project_root=Path.cwd(),
         deployment_secret=controller._deployment_secret,
     )
     try:
         validation_id = connection.execute("SELECT id FROM proposal_execution_runs").fetchone()[0]
-        for run_id, error in ((None, "requires a protected execution run"),
-                              (validation_id, "protected release execution run not found")):
+        for run_id, error in (
+            (None, "requires a protected execution run"),
+            (validation_id, "protected release execution run not found"),
+        ):
             with pytest.raises(ValueError, match=error):
                 controller.advance_release_stage(
-                    prepared.release_id, next_state=ReleaseState.REPLAY,
-                    execution_run_id=run_id, publisher_context=_publisher_context(),
-                    request_id="invalid-replay", step="replay",
+                    prepared.release_id,
+                    next_state=ReleaseState.REPLAY,
+                    execution_run_id=run_id,
+                    publisher_context=_publisher_context(),
+                    request_id="invalid-replay",
+                    step="replay",
                 )
         replay = service.execute(
-            release_id=prepared.release_id, stage=G006ExecutionStage.REPLAY,
+            release_id=prepared.release_id,
+            stage=G006ExecutionStage.REPLAY,
             idempotency_key="real-replay",
         )
         with pytest.raises(ValueError, match="stage trajectories must match"):
             controller.advance_release_stage(
-                prepared.release_id, next_state=ReleaseState.REPLAY,
-                execution_run_id=replay["id"], stage_evidence_ids=("caller-made",),
-                publisher_context=_publisher_context(), request_id="invalid-ids", step="replay",
+                prepared.release_id,
+                next_state=ReleaseState.REPLAY,
+                execution_run_id=replay["id"],
+                stage_evidence_ids=("caller-made",),
+                publisher_context=_publisher_context(),
+                request_id="invalid-ids",
+                step="replay",
             )
         controller.advance_release_stage(
-            prepared.release_id, next_state=ReleaseState.REPLAY,
-            execution_run_id=replay["id"], publisher_context=_publisher_context(),
-            request_id="real-replay", step="replay",
+            prepared.release_id,
+            next_state=ReleaseState.REPLAY,
+            execution_run_id=replay["id"],
+            publisher_context=_publisher_context(),
+            request_id="real-replay",
+            step="replay",
         )
         with pytest.raises(ValueError, match="stage execution release binding mismatch"):
             controller.advance_release_stage(
-                prepared.release_id, next_state=ReleaseState.SHADOW,
-                execution_run_id=replay["id"], publisher_context=_publisher_context(),
-                request_id="relabel-replay", step="shadow",
+                prepared.release_id,
+                next_state=ReleaseState.SHADOW,
+                execution_run_id=replay["id"],
+                publisher_context=_publisher_context(),
+                request_id="relabel-replay",
+                step="shadow",
             )
         assert controller.load_release(prepared.release_id).state is ReleaseState.REPLAY
         stable = controller.load_default_head(binding.target_component)

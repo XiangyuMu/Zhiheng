@@ -102,9 +102,7 @@ def test_g005_query_fixtures_lock_routes_budgets_and_forbidden_sources() -> None
     assert structured["max_model_calls"] == 0
     assert "agentic_rag" in structured["forbidden_routes"]
     assert set(hybrid["required_citation_fields"]) == REQUIRED_CITATION_FIELDS
-    assert {"ko-candidate", "ko-deleted", "ko-erased"}.issubset(
-        set(hybrid["forbidden_source_ids"])
-    )
+    assert {"ko-candidate", "ko-deleted", "ko-erased"}.issubset(set(hybrid["forbidden_source_ids"]))
     assert REQUIRED_AGENTIC_BUDGET_FIELDS.issubset(agentic)
     assert {"no_new_evidence", "repeated_query"}.issubset(set(agentic["must_stop_on"]))
 
@@ -156,9 +154,7 @@ def test_g005_api_modules_do_not_directly_write_domain_tables() -> None:
     ]
 
     route_paths = {
-        route.path
-        for module in (retrieval, decisions, gaps)
-        for route in module.router.routes
+        route.path for module in (retrieval, decisions, gaps) for route in module.router.routes
     }
     assert {
         "/v1/answers",
@@ -177,8 +173,7 @@ def test_g005_api_modules_do_not_directly_write_domain_tables() -> None:
         calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
         source = path.read_text(encoding="utf-8")
         has_raw_sql_execute = any(
-            isinstance(call.func, ast.Attribute) and call.func.attr == "execute"
-            for call in calls
+            isinstance(call.func, ast.Attribute) and call.func.attr == "execute" for call in calls
         )
         forbidden_table_mentions = [
             table for table in FORBIDDEN_API_TABLES if re.search(rf"\b{table}\b", source)

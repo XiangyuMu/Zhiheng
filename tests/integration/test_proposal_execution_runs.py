@@ -21,7 +21,8 @@ from zhiheng.evolution.trajectory_repository import TrajectoryRepository
 
 
 def test_execution_uses_immutable_proposal_and_records_failed_suite(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Exercise a real dependency failure independently of the host's restic setup.
     monkeypatch.delenv("ZHIHENG_RESTIC_BINARY", raising=False)
@@ -32,12 +33,15 @@ def test_execution_uses_immutable_proposal_and_records_failed_suite(
         controller = ReleaseController.from_db(connection)
         binding = _binding("execution-probe", _bootstrap_stable(controller))
         proposal = controller.create_release_proposal(
-            binding=binding, artifact_payload=default_release_artifact(),
+            binding=binding,
+            artifact_payload=default_release_artifact(),
             proposer_context=command_context_for_role("proposer", EvolutionRole.PROPOSER),
         )
     finally:
         connection.close()
-    engine = create_sqlite_engine(Settings(environment="test", database_url=f"sqlite:///{database}"))
+    engine = create_sqlite_engine(
+        Settings(environment="test", database_url=f"sqlite:///{database}")
+    )
     factory = create_session_factory(engine)
     begun: list[Connection] = []
     event.listen(engine, "begin", begun.append)
@@ -50,7 +54,9 @@ def test_execution_uses_immutable_proposal_and_records_failed_suite(
 
     monkeypatch.setattr(ProtectedFixedSuiteRunner, "run", checked_run)
     service = ProposalExecutionService(
-        session_factory=factory, project_root=Path.cwd(), deployment_secret="synthetic-secret",
+        session_factory=factory,
+        project_root=Path.cwd(),
+        deployment_secret="synthetic-secret",
     )
     try:
         record = service.execute(proposal_id=proposal.proposal_id, idempotency_key="probe")
@@ -59,12 +65,14 @@ def test_execution_uses_immutable_proposal_and_records_failed_suite(
         assert len(record["cases"]) == 7
         assert len(set(record["trajectory_ids"])) == 7
         trajectories = TrajectoryRepository(
-            deployment_secret="synthetic-secret", session_factory=factory,
+            deployment_secret="synthetic-secret",
+            session_factory=factory,
         )
         for trajectory_id, observed in zip(record["trajectory_ids"], record["cases"], strict=True):
             trajectory = trajectories.get(trajectory_id)
-            assert trajectory.envelope.process["observation_digest"] == (
-                observed["observation_digest"]
+            assert (
+                trajectory.envelope.process["observation_digest"]
+                == (observed["observation_digest"])
             )
             assert trajectory.envelope.created_at == observed["observed_at"]
             linked = {"case_id": observed["case_id"], "process": dict(trajectory.envelope.process)}
@@ -77,12 +85,12 @@ def test_execution_uses_immutable_proposal_and_records_failed_suite(
         assert service.load(record["id"]) == record
         assert service.execute(proposal_id=proposal.proposal_id, idempotency_key="probe") == record
         with sqlite3.connect(database) as gate_connection:
-            gate = ReleaseController.from_db(
-                gate_connection, deployment_secret="synthetic-secret"
-            )
+            gate = ReleaseController.from_db(gate_connection, deployment_secret="synthetic-secret")
             validation: dict[str, Any] = dict(
-                binding=binding, proposal_id=proposal.proposal_id,
-                validation_report_ref=binding.validation_report_ref, canary_samples=5,
+                binding=binding,
+                proposal_id=proposal.proposal_id,
+                validation_report_ref=binding.validation_report_ref,
+                canary_samples=5,
                 validator_context=command_context_for_role("validator", EvolutionRole.VALIDATOR),
                 trajectory_ids=(),
             )
@@ -94,30 +102,42 @@ def test_execution_uses_immutable_proposal_and_records_failed_suite(
                 )
             with pytest.raises(ValueError, match="protected execution reference"):
                 gate._validate_report_execution(
-                    {}, proposal_id=proposal.proposal_id, binding=binding,
+                    {},
+                    proposal_id=proposal.proposal_id,
+                    binding=binding,
                 )
             with pytest.raises(ValueError, match="reference not found"):
                 gate._validate_report_execution(
                     {"execution_run_id": "missing"},
-                    proposal_id=proposal.proposal_id, binding=binding,
+                    proposal_id=proposal.proposal_id,
+                    binding=binding,
                 )
             with pytest.raises(ValueError, match="failed fixed assertions"):
                 gate._validate_report_execution(
                     {"execution_run_id": record["id"]},
-                    proposal_id=proposal.proposal_id, binding=binding,
+                    proposal_id=proposal.proposal_id,
+                    binding=binding,
                 )
         with factory.begin() as session:
-            assert session.execute(text(
-                "SELECT state FROM evolution_proposals WHERE id = :id"
-            ), {"id": proposal.proposal_id}).scalar_one() == "candidate"
+            assert (
+                session.execute(
+                    text("SELECT state FROM evolution_proposals WHERE id = :id"),
+                    {"id": proposal.proposal_id},
+                ).scalar_one()
+                == "candidate"
+            )
             count = session.execute(text("SELECT count(*) FROM proposal_execution_runs")).scalar()
             assert count == 1
-        for operation in ("UPDATE proposal_execution_runs SET record_hmac = 'fake'",
-                          "DELETE FROM proposal_execution_runs"):
+        for operation in (
+            "UPDATE proposal_execution_runs SET record_hmac = 'fake'",
+            "DELETE FROM proposal_execution_runs",
+        ):
             with pytest.raises(IntegrityError, match="append-only"), factory.begin() as session:
                 session.execute(text(operation))
         other_secret = ProposalExecutionService(
-            session_factory=factory, project_root=Path.cwd(), deployment_secret="wrong-secret",
+            session_factory=factory,
+            project_root=Path.cwd(),
+            deployment_secret="wrong-secret",
         )
         with pytest.raises(ValueError, match="signature"):
             other_secret.load(record["id"])
@@ -147,12 +167,16 @@ def test_real_passing_execution_validates_but_does_not_approve(tmp_path: Path) -
     controller = ReleaseController.from_db(connection, deployment_secret=secret)
     binding = _binding("passing-execution", _bootstrap_stable(controller))
     proposal = controller.create_release_proposal(
-        binding=binding, artifact_payload=default_release_artifact(),
+        binding=binding,
+        artifact_payload=default_release_artifact(),
         proposer_context=command_context_for_role("proposer", EvolutionRole.PROPOSER),
     )
-    engine = create_sqlite_engine(Settings(environment="test", database_url=f"sqlite:///{database}"))
+    engine = create_sqlite_engine(
+        Settings(environment="test", database_url=f"sqlite:///{database}")
+    )
     service = ProposalExecutionService(
-        session_factory=create_session_factory(engine), project_root=Path.cwd(),
+        session_factory=create_session_factory(engine),
+        project_root=Path.cwd(),
         deployment_secret=secret,
     )
     try:
@@ -160,22 +184,30 @@ def test_real_passing_execution_validates_but_does_not_approve(tmp_path: Path) -
         assert record["report"]["promotion_eligible"] is True
         assert record["report"]["failure_count"] == 0
         validation_kwargs = dict(
-            binding=binding, proposal_id=proposal.proposal_id,
-            validation_report_ref=binding.validation_report_ref, canary_samples=5,
+            binding=binding,
+            proposal_id=proposal.proposal_id,
+            validation_report_ref=binding.validation_report_ref,
+            canary_samples=5,
             validator_context=command_context_for_role("validator", EvolutionRole.VALIDATOR),
             evaluation_run_id=record["id"],
         )
         with pytest.raises(ValueError, match="trajectories must match"):
             controller.record_release_validation_evidence(
-                **validation_kwargs, trajectory_ids=record["trajectory_ids"][:-1],
+                **validation_kwargs,
+                trajectory_ids=record["trajectory_ids"][:-1],
             )
         evidence = controller.record_release_validation_evidence(
-            **validation_kwargs, trajectory_ids=record["trajectory_ids"],
+            **validation_kwargs,
+            trajectory_ids=record["trajectory_ids"],
         )
         assert evidence.proposal_id == proposal.proposal_id
-        assert connection.execute(
-            "SELECT state FROM evolution_proposals WHERE id = ?", (proposal.proposal_id,),
-        ).fetchone()[0] == "validating"
+        assert (
+            connection.execute(
+                "SELECT state FROM evolution_proposals WHERE id = ?",
+                (proposal.proposal_id,),
+            ).fetchone()[0]
+            == "validating"
+        )
         assert connection.execute("SELECT count(*) FROM review_reports").fetchone()[0] == 1
         stable = controller.load_default_head(binding.target_component)
         assert stable is not None

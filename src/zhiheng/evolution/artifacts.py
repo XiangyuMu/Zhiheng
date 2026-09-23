@@ -48,9 +48,9 @@ def validate_strategy_artifact(payload: dict[str, Any]) -> None:
     if rrf_k is not None and (type(rrf_k) is not int or not 1 <= rrf_k <= 1000):
         raise ValueError("strategy rrf_k must be null or an integer between 1 and 1000")
     route = routing["route_override"]
-    if route is not None and (not isinstance(route, str) or route not in {
-        "structured", "hybrid", "agentic"
-    }):
+    if route is not None and (
+        not isinstance(route, str) or route not in {"structured", "hybrid", "agentic"}
+    ):
         raise ValueError("strategy route_override must be null or a registered route")
 
 

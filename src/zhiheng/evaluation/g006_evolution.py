@@ -121,9 +121,7 @@ def evaluate_g006_evolution(
             raise ValueError("case set does not match report set")
 
     assessments = tuple(_assess_case(case) for case in parsed_cases)
-    ordered_assessments = tuple(
-        sorted(assessments, key=lambda item: (item.set_name, item.case_id))
-    )
+    ordered_assessments = tuple(sorted(assessments, key=lambda item: (item.set_name, item.case_id)))
     scores = _aggregate_scores(ordered_assessments)
     failure_count = sum(1 for case in ordered_assessments if not case.passed)
     fixed_set_coverage = {
@@ -132,9 +130,7 @@ def evaluate_g006_evolution(
     }
     candidate_only = set_name == "dynamic"
     all_fixed_sets_present = all(fixed_set_coverage.values())
-    learning_eligible = (
-        not candidate_only and failure_count == 0 and all_fixed_sets_present
-    )
+    learning_eligible = not candidate_only and failure_count == 0 and all_fixed_sets_present
     promotion_eligible = learning_eligible
     return EvaluationReport(
         release_id=release_id,
@@ -158,19 +154,12 @@ def _parse_case(case: Mapping[str, Any], *, index: int) -> dict[str, Any]:
     process = _require_mapping(case, "process", path=f"cases[{index}]")
     quality = _require_mapping(case, "quality", path=f"cases[{index}]")
     evidence = _require_mapping(case, "evidence", path=f"cases[{index}]")
-    result_evidence = _require_evidence_layer(
-        evidence, "result", path=f"cases[{index}].evidence"
-    )
-    process_evidence = _require_evidence_layer(
-        evidence, "process", path=f"cases[{index}].evidence"
-    )
-    quality_evidence = _require_evidence_layer(
-        evidence, "quality", path=f"cases[{index}].evidence"
-    )
+    result_evidence = _require_evidence_layer(evidence, "result", path=f"cases[{index}].evidence")
+    process_evidence = _require_evidence_layer(evidence, "process", path=f"cases[{index}].evidence")
+    quality_evidence = _require_evidence_layer(evidence, "quality", path=f"cases[{index}].evidence")
     failure_tags = case.get("failure_tags", ())
-    if (
-        not isinstance(failure_tags, (list, tuple))
-        or any(not isinstance(tag, str) or not tag.strip() for tag in failure_tags)
+    if not isinstance(failure_tags, (list, tuple)) or any(
+        not isinstance(tag, str) or not tag.strip() for tag in failure_tags
     ):
         raise ValueError("failure_tags must be a sequence of nonempty strings")
     return {
@@ -233,16 +222,12 @@ def _aggregate_scores(cases: Sequence[G006CaseAssessment]) -> dict[str, float]:
     }
 
 
-def _score_axis(
-    axis: Mapping[str, Any], *, accepted_statuses: set[str]
-) -> tuple[float, bool]:
+def _score_axis(axis: Mapping[str, Any], *, accepted_statuses: set[str]) -> tuple[float, bool]:
     for field in ("passed", "clean", "violation"):
         if field in axis and type(axis[field]) is not bool:
             raise ValueError(f"axis {field} must be a boolean")
     declared_failure = (
-        axis.get("passed") is False
-        or axis.get("clean") is False
-        or axis.get("violation") is True
+        axis.get("passed") is False or axis.get("clean") is False or axis.get("violation") is True
     )
     if "score" in axis:
         if type(axis["score"]) not in (int, float):
@@ -324,9 +309,7 @@ def _require_str(case: Mapping[str, Any], field: str, *, path: str) -> str:
     return value
 
 
-def _require_mapping(
-    case: Mapping[str, Any], field: str, *, path: str
-) -> Mapping[str, Any]:
+def _require_mapping(case: Mapping[str, Any], field: str, *, path: str) -> Mapping[str, Any]:
     value = case.get(field)
     if not isinstance(value, Mapping):
         raise ValueError(f"{path}.{field} is required")

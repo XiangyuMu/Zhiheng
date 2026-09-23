@@ -115,9 +115,7 @@ def execute_memory_generation_probe(
         trajectory_payload = _trajectory_payload(session)
 
     captured_context = model.contexts[0] if model.contexts else None
-    context_payload = (
-        captured_context.canonical_payload() if captured_context is not None else {}
-    )
+    context_payload = captured_context.canonical_payload() if captured_context is not None else {}
     generated_payload = [asdict(item) for item in model.generated]
     response_payload = {
         "answer": result.answer,
@@ -131,11 +129,19 @@ def execute_memory_generation_probe(
     serialized_response = json.dumps(response_payload, ensure_ascii=False, sort_keys=True)
     serialized_trajectory = json.dumps(trajectory_payload, ensure_ascii=False, sort_keys=True)
     serialized_generated = json.dumps(generated_payload, ensure_ascii=False, sort_keys=True)
-    formal_refs = {
-        (entry.formal_memory_id, entry.formal_version_id, entry.confirmation_generation,
-         entry.state_key)
-        for entry in captured_context.entries
-    } if captured_context is not None else set()
+    formal_refs = (
+        {
+            (
+                entry.formal_memory_id,
+                entry.formal_version_id,
+                entry.confirmation_generation,
+                entry.state_key,
+            )
+            for entry in captured_context.entries
+        }
+        if captured_context is not None
+        else set()
+    )
     response_refs = {
         (ref.formal_memory_id, ref.formal_version_id, ref.confirmation_generation, ref.state_key)
         for ref in result.personalization_refs
@@ -159,14 +165,13 @@ def execute_memory_generation_probe(
     facts: dict[str, Any] = {
         "answer_route": result.route.value,
         "context_entry_count": len(captured_context.entries) if captured_context else 0,
-        "context_state_keys": [
-            entry.state_key for entry in captured_context.entries
-        ] if captured_context else [],
+        "context_state_keys": [entry.state_key for entry in captured_context.entries]
+        if captured_context
+        else [],
         "formal_context_contains_goal_fixed": (
             captured_context is not None
             and any(
-                entry.state_key == "goal.fixed"
-                and entry.value_json == '{"text":"confirmed-probe"}'
+                entry.state_key == "goal.fixed" and entry.value_json == '{"text":"confirmed-probe"}'
                 for entry in captured_context.entries
             )
         ),
@@ -178,7 +183,9 @@ def execute_memory_generation_probe(
                 "state_key": entry.state_key,
             }
             for entry in captured_context.entries
-        ] if captured_context else [],
+        ]
+        if captured_context
+        else [],
         "generated_personalization_ref_count": (
             len(model.generated[0].personalization_refs) if model.generated else 0
         ),
@@ -202,7 +209,8 @@ def execute_memory_generation_probe(
             facts["formal_context_contains_goal_fixed"] and model.calls == 1
         ),
         "memory.pending_context_zero": (
-            no_pending_in_context and len(pending_candidate_ids) == 3
+            no_pending_in_context
+            and len(pending_candidate_ids) == 3
             and pending_candidates_unchanged
         ),
         "memory.pending_response_zero": no_pending_in_response and no_pending_in_generated,

@@ -445,7 +445,7 @@ class MemoryRepository:
                        fmv.value_json
                 FROM formal_memories fm
                 JOIN formal_memory_versions fmv ON fmv.id = fm.current_version_id
-                WHERE {' AND '.join(predicates)}
+                WHERE {" AND ".join(predicates)}
                 ORDER BY datetime(fm.valid_to), fm.updated_at DESC
                 LIMIT :limit
                 """
@@ -493,7 +493,7 @@ class MemoryRepository:
                        fmv.generation, fmv.created_at
                 FROM formal_memory_versions fmv
                 JOIN formal_memories fm ON fm.id = fmv.formal_memory_id
-                WHERE {' AND '.join(predicates)}
+                WHERE {" AND ".join(predicates)}
                 ORDER BY datetime(fmv.created_at) DESC, fmv.version_no DESC
                 LIMIT :limit
                 """
@@ -1025,17 +1025,21 @@ class MemoryRepository:
         self._require_formal_etag(memory, expected_etag)
         if memory["status"] == "privacy_erased":
             raise ValueError("privacy_erased formal memory is terminal")
-        target = session.execute(
-            text(
-                """
+        target = (
+            session.execute(
+                text(
+                    """
                 SELECT value_json
                 FROM formal_memory_versions
                 WHERE id = :target_version_id
                   AND formal_memory_id = :formal_memory_id
                 """
-            ),
-            {"target_version_id": target_version_id, "formal_memory_id": formal_memory_id},
-        ).mappings().first()
+                ),
+                {"target_version_id": target_version_id, "formal_memory_id": formal_memory_id},
+            )
+            .mappings()
+            .first()
+        )
         if target is None:
             raise ValueError("rollback target not found")
         receipt_id = self._insert_receipt(session, operation_key, "rollback_memory", request_hash)
@@ -1121,13 +1125,9 @@ class MemoryRepository:
             raise StaleConfirmationError("confirmation request is stale or closed")
         candidate_value = self._candidate_version(session, str(request["candidate_version_id"]))
         final_value = (
-            edited_value
-            if edited_value is not None
-            else _json_dict(candidate_value["value_json"])
+            edited_value if edited_value is not None else _json_dict(candidate_value["value_json"])
         )
-        current = self._current_formal_memory_for_state(
-            session, str(candidate["state_key"])
-        )
+        current = self._current_formal_memory_for_state(session, str(candidate["state_key"]))
         formal_id = str(current["id"]) if current is not None else new_id()
         version_id = new_id()
         generation = self._next_generation(session, str(candidate["state_key"]))
@@ -1315,17 +1315,21 @@ class MemoryRepository:
         if remove_current:
             transition_version_id = current_version_id
         else:
-            current_value = session.execute(
-                text(
-                    """
+            current_value = (
+                session.execute(
+                    text(
+                        """
                     SELECT value_json
                     FROM formal_memory_versions
                     WHERE id = :version_id
                       AND formal_memory_id = :formal_memory_id
                     """
-                ),
-                {"version_id": current_version_id, "formal_memory_id": formal_memory_id},
-            ).mappings().one()
+                    ),
+                    {"version_id": current_version_id, "formal_memory_id": formal_memory_id},
+                )
+                .mappings()
+                .one()
+            )
             transition_version_id = new_id()
             session.execute(
                 text(
@@ -1567,9 +1571,7 @@ class MemoryRepository:
                 },
             )
         except IntegrityError:
-            existing = self._receipt(
-                session, operation_key, request_hash=bound_request_hash
-            )
+            existing = self._receipt(session, operation_key, request_hash=bound_request_hash)
             if existing is None:
                 raise
             return str(existing["id"])
@@ -1617,16 +1619,20 @@ class MemoryRepository:
     def _receipt(
         self, session: Session, operation_key: str, *, request_hash: str | None = None
     ) -> RowMapping | None:
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT id, result_json, status, request_hash
                 FROM memory_operation_receipts
                 WHERE operation_key = :operation_key
                 """
-            ),
-            {"operation_key": operation_key},
-        ).mappings().first()
+                ),
+                {"operation_key": operation_key},
+            )
+            .mappings()
+            .first()
+        )
         if row is None:
             return None
         if request_hash is not None and row["request_hash"] != request_hash:
@@ -1641,8 +1647,7 @@ class MemoryRepository:
             and candidate["current_version_id"] == request["candidate_version_id"]
             and candidate["status"] in {"pending_confirmation", "edited"}
             and request["status"] == "pending"
-            and
-            current_hash == request["proposed_value_hash"]
+            and current_hash == request["proposed_value_hash"]
             and _coerce_datetime(request["expires_at"]) > _utc_now()
         )
 
@@ -1680,42 +1685,62 @@ class MemoryRepository:
         )
 
     def _candidate(self, session: Session, candidate_id: str) -> RowMapping | None:
-        return session.execute(
-            text("SELECT * FROM memory_candidates WHERE id = :id"),
-            {"id": candidate_id},
-        ).mappings().first()
+        return (
+            session.execute(
+                text("SELECT * FROM memory_candidates WHERE id = :id"),
+                {"id": candidate_id},
+            )
+            .mappings()
+            .first()
+        )
 
     def _candidate_version(self, session: Session, version_id: str) -> RowMapping:
-        row = session.execute(
-            text("SELECT * FROM memory_candidate_versions WHERE id = :id"),
-            {"id": version_id},
-        ).mappings().one()
+        row = (
+            session.execute(
+                text("SELECT * FROM memory_candidate_versions WHERE id = :id"),
+                {"id": version_id},
+            )
+            .mappings()
+            .one()
+        )
         return row
 
     def _pending_request(self, session: Session, request_id: str) -> RowMapping | None:
-        return session.execute(
-            text(
-                """
+        return (
+            session.execute(
+                text(
+                    """
                 SELECT *
                 FROM memory_confirmation_requests
                 WHERE id = :id
                   AND status = 'pending'
                 """
-            ),
-            {"id": request_id},
-        ).mappings().first()
+                ),
+                {"id": request_id},
+            )
+            .mappings()
+            .first()
+        )
 
     def _request(self, session: Session, request_id: str) -> RowMapping | None:
-        return session.execute(
-            text("SELECT * FROM memory_confirmation_requests WHERE id = :id"),
-            {"id": request_id},
-        ).mappings().first()
+        return (
+            session.execute(
+                text("SELECT * FROM memory_confirmation_requests WHERE id = :id"),
+                {"id": request_id},
+            )
+            .mappings()
+            .first()
+        )
 
     def _formal_memory(self, session: Session, formal_memory_id: str) -> RowMapping | None:
-        return session.execute(
-            text("SELECT * FROM formal_memories WHERE id = :id"),
-            {"id": formal_memory_id},
-        ).mappings().first()
+        return (
+            session.execute(
+                text("SELECT * FROM formal_memories WHERE id = :id"),
+                {"id": formal_memory_id},
+            )
+            .mappings()
+            .first()
+        )
 
     def formal_etag(self, session: Session, formal_memory_id: str) -> str | None:
         memory = self._formal_memory(session, formal_memory_id)
@@ -1738,19 +1763,21 @@ class MemoryRepository:
         ).first()
         return None if row is None else str(row[0])
 
-    def _require_formal_etag(
-        self, memory: RowMapping, expected_etag: str | None
-    ) -> None:
+    def _require_formal_etag(self, memory: RowMapping, expected_etag: str | None) -> None:
         if expected_etag is not None and formal_memory_etag(memory) != expected_etag:
             raise StaleMemoryStateError("formal memory lifecycle state changed")
 
     def _current_formal_memory_for_state(
         self, session: Session, state_key: str
     ) -> RowMapping | None:
-        return session.execute(
-            text("SELECT * FROM current_formal_memory WHERE state_key = :state_key"),
-            {"state_key": state_key},
-        ).mappings().first()
+        return (
+            session.execute(
+                text("SELECT * FROM current_formal_memory WHERE state_key = :state_key"),
+                {"state_key": state_key},
+            )
+            .mappings()
+            .first()
+        )
 
     def _is_serving_formal_memory(self, session: Session, formal_memory_id: str) -> bool:
         return (

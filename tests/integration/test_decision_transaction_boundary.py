@@ -37,7 +37,8 @@ def test_decision_model_runs_outside_request_transaction(tmp_path: Path) -> None
     client.app.dependency_overrides[get_db_session] = capture_session
     _install_model(client, _DecisionRecordingModel(after_generate=assert_no_transaction))
     response = client.post(
-        "/v1/decisions/analyze", json=_decision_payload(memory_topic_prefix=None),
+        "/v1/decisions/analyze",
+        json=_decision_payload(memory_topic_prefix=None),
         headers=_headers(csrf, "decision-no-transaction"),
     )
     assert response.status_code == 200

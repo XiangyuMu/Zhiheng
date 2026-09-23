@@ -119,8 +119,7 @@ def test_temporal_change_updates_current_and_preserves_history(tmp_path: Path) -
         "profile.city": {"text": "杭州"}
     }
     history = client.get(
-        "/v1/memory/timeline?formal_memory_id="
-        + first.json()["result"]["formal_memory_id"]
+        "/v1/memory/timeline?formal_memory_id=" + first.json()["result"]["formal_memory_id"]
     )
     assert history.status_code == 200
     values = [item["value"] for item in history.json()["items"]][:2]

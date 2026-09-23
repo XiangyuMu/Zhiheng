@@ -1,0 +1,561 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "pdf-parser.manifest.v1"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "evidence_object_id": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "evidence_object_id",
+        "uri",
+        "sha256"
+      ]
+    },
+    "parser": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "enum": [
+            "deepdoc",
+            "mineru"
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "attempt_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "backend",
+        "version",
+        "attempt_id"
+      ]
+    },
+    "pages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/page"
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/block"
+      }
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/table"
+      }
+    },
+    "images": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/image"
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "task_id",
+    "source",
+    "parser",
+    "pages",
+    "blocks",
+    "tables",
+    "images",
+    "diagnostics",
+    "artifacts"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:zhiheng:pdf-parser:manifest:v1",
+  "$defs": {
+    "bbox": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "items": false,
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "uri": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "uri",
+        "sha256",
+        "media_type",
+        "bytes"
+      ]
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "task",
+            "page",
+            "block",
+            "image"
+          ]
+        },
+        "target": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "scope",
+        "target",
+        "retryable"
+      ]
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "page_no": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "rotation": {
+          "enum": [
+            0,
+            90,
+            180,
+            270
+          ]
+        },
+        "crop_box": {
+          "$ref": "#/$defs/bbox"
+        },
+        "user_unit": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "render": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/artifact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "parsed",
+            "failed",
+            "empty"
+          ]
+        }
+      },
+      "required": [
+        "page_no",
+        "width",
+        "height",
+        "rotation",
+        "crop_box",
+        "user_unit",
+        "render",
+        "status"
+      ]
+    },
+    "block": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "page_no": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "region_type": {
+          "enum": [
+            "title",
+            "heading",
+            "paragraph",
+            "list",
+            "caption",
+            "table",
+            "image",
+            "header",
+            "footer",
+            "equation",
+            "unknown"
+          ]
+        },
+        "reading_order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bbox": {
+          "$ref": "#/$defs/bbox"
+        },
+        "raw_bbox": {
+          "$ref": "#/$defs/bbox"
+        },
+        "raw_space": {
+          "type": "string"
+        },
+        "transform_version": {
+          "const": "pdf-crop-rotate-v1"
+        },
+        "text": {
+          "type": "string"
+        },
+        "quote_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "status": {
+          "enum": [
+            "formal",
+            "candidate",
+            "awaiting_confirmation",
+            "failed"
+          ]
+        },
+        "parent_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text_source": {
+          "enum": [
+            "text_layer",
+            "ocr",
+            "generated",
+            "none"
+          ]
+        },
+        "ocr_trigger": {
+          "enum": [
+            "missing",
+            "garbled",
+            "overlap",
+            "low_confidence"
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "page_no",
+        "region_type",
+        "reading_order",
+        "bbox",
+        "raw_bbox",
+        "raw_space",
+        "transform_version",
+        "text",
+        "quote_hash",
+        "confidence",
+        "status",
+        "parent_key",
+        "text_source"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "text_source": {
+                "const": "ocr"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "ocr_trigger"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "ocr_trigger"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "cell": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "row": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "col": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rowspan": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "colspan": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "bbox": {
+          "$ref": "#/$defs/bbox"
+        },
+        "text": {
+          "type": "string"
+        },
+        "is_header": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "formal",
+            "candidate",
+            "awaiting_confirmation",
+            "failed"
+          ]
+        }
+      },
+      "required": [
+        "row",
+        "col",
+        "rowspan",
+        "colspan",
+        "bbox",
+        "text",
+        "is_header",
+        "status"
+      ]
+    },
+    "merge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "row": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "col": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rowspan": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "colspan": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "row",
+        "col",
+        "rowspan",
+        "colspan"
+      ]
+    },
+    "table": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "block_key": {
+          "type": "string"
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cols": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/cell"
+          }
+        },
+        "merges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/merge"
+          }
+        },
+        "linear_text": {
+          "type": "string"
+        },
+        "structure_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "key",
+        "block_key",
+        "rows",
+        "cols",
+        "cells",
+        "merges",
+        "linear_text",
+        "structure_sha256"
+      ]
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "block_key": {
+          "type": "string"
+        },
+        "page_no": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "bbox": {
+          "$ref": "#/$defs/bbox"
+        },
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        },
+        "caption_block_keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "caption": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description_origin": {
+          "enum": [
+            "not_requested",
+            "model"
+          ]
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "formal",
+            "retryable",
+            "awaiting_confirmation",
+            "failed"
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "block_key",
+        "page_no",
+        "bbox",
+        "artifact",
+        "caption_block_keys",
+        "caption",
+        "description",
+        "description_origin",
+        "status"
+      ]
+    }
+  }
+}

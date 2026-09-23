@@ -19,7 +19,8 @@ def test_real_recovery_case_replays_memory_and_knowledge_erase_twice(tmp_path: P
 
 
 def test_missing_backup_tool_never_claims_recovery_pass(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("ZHIHENG_RESTIC_BINARY", raising=False)
     monkeypatch.setattr(shutil, "which", lambda _: None)
@@ -32,10 +33,18 @@ def test_missing_backup_tool_never_claims_recovery_pass(
 
 
 def test_failed_recovery_subprocess_preserves_diagnostic_and_never_returns_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(
-        args=args[0], returncode=1, stdout="", stderr="synthetic manifest mismatch",
-    ))
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=1,
+            stdout="",
+            stderr="synthetic manifest mismatch",
+        ),
+    )
     with pytest.raises(RuntimeError, match="synthetic manifest mismatch"):
         _run(["synthetic-recovery"], tmp_path, {})

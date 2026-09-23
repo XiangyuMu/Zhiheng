@@ -98,6 +98,7 @@ def test_knowledge_privacy_erase_physically_removes_all_local_artifacts(
     original_unlink = Path.unlink
 
     with session_scope(session_factory) as session:
+
         def checked_read_bytes(path: Path) -> bytes:
             if path in checked_paths:
                 assert not session.in_transaction()
@@ -369,9 +370,10 @@ def test_knowledge_privacy_erase_removes_sensitive_plaintext_metadata(
             request_id=erase_request_id,
             knowledge_object_id=knowledge_object_id,
         )
-        retained_values = session.execute(
-            text(
-                """
+        retained_values = (
+            session.execute(
+                text(
+                    """
                 SELECT ko.title,
                        eo.source_metadata_json,
                        kv.summary,
@@ -392,9 +394,12 @@ def test_knowledge_privacy_erase_removes_sensitive_plaintext_metadata(
                   ON kor.result_json LIKE '%' || ko.id || '%'
                 WHERE ko.id = :knowledge_object_id
                 """
-            ),
-            {"knowledge_object_id": knowledge_object_id},
-        ).mappings().one()
+                ),
+                {"knowledge_object_id": knowledge_object_id},
+            )
+            .mappings()
+            .one()
+        )
 
     serialized_values = "\n".join(str(value) for value in retained_values.values())
     for sensitive_value in (

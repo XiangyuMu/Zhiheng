@@ -1,4 +1,5 @@
 """Persisted model-default lookup used during answer bootstrap."""
+
 from __future__ import annotations
 
 from sqlalchemy import text

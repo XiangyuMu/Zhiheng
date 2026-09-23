@@ -1,0 +1,34 @@
+#
+# MinerU is a whole-task fallback. Keep this image separate from DeepDoc so a
+# parser upgrade or license review cannot silently change the default backend.
+ARG REGISTRY=docker.m.daocloud.io
+FROM ${REGISTRY}/library/python:3.12-slim
+
+ARG MINERU_REPOSITORY=https://github.com/opendatalab/MinerU.git
+ARG MINERU_COMMIT=fbb1257a555a3fde78ae5aaaa931e3b3f8fb2883
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV MINERU_MODEL_SOURCE=modelscope \
+    MINERU_MODEL_DIR=/opt/mineru-models
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates git curl libxcb1 libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --filter=blob:none "${MINERU_REPOSITORY}" /src/mineru \
+    && cd /src/mineru \
+    && git checkout --detach "${MINERU_COMMIT}"
+
+# The pinned upstream project supplies the CPU pipeline and its service
+# launcher. The adapter protocol is added by the Zhiheng parser worker story.
+RUN pip install --no-cache-dir "mineru @ file:///src/mineru"
+# MinerU's pipeline imports PyTorch lazily at request time.  Install the CPU
+# wheel explicitly because the slim base image does not pull optional ML
+# runtime dependencies from the upstream package metadata.
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir 'transformers==4.57.1' shapely six pyclipper
+RUN mkdir -p "${MINERU_MODEL_DIR}" \
+    && HOME="${MINERU_MODEL_DIR}" mineru-models-download --source "${MINERU_MODEL_SOURCE}" --model_type pipeline
+EXPOSE 9391
+HEALTHCHECK --interval=10s --timeout=2s --retries=3 --start-period=180s \
+    CMD curl -fsS http://127.0.0.1:9391/health || exit 1
+ENTRYPOINT ["mineru-api", "--host", "0.0.0.0", "--port", "9391"]

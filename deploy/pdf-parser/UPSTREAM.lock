@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "deepdoc": {
+    "repository": "https://github.com/infiniflow/ragflow.git",
+    "release": "v0.27.1",
+    "commit": "b9df87c4c75a5b0d35c90d15329fc0f6f91cb73e",
+    "license": "Apache-2.0",
+    "license_url": "https://github.com/infiniflow/ragflow/blob/b9df87c4c75a5b0d35c90d15329fc0f6f91cb73e/LICENSE",
+    "dockerfile": "Dockerfile_deepdoc_oss",
+    "service_port": 9390
+  },
+  "mineru": {
+    "repository": "https://github.com/opendatalab/MinerU.git",
+    "release": "mineru-3.4.5-released",
+    "commit": "fbb1257a555a3fde78ae5aaaa931e3b3f8fb2883",
+    "license": "Apache-2.0 with additional commercial and attribution terms",
+    "license_url": "https://github.com/opendatalab/MinerU/blob/fbb1257a555a3fde78ae5aaaa931e3b3f8fb2883/LICENSE.md",
+    "service_port": 9391
+  },
+  "build_outputs": {
+    "deepdoc_image_digest": "sha256:46dae337a87ba2878567e9ebbb2213ef45746715910d45d3688f31a78fbd3102",
+    "mineru_image_digest": "sha256:b6bc2d658ebc0c66af77d44880f9334068e7e7190f76299696c9e7292198c713",
+    "status": "locally-built; registry-publish-required"
+  }
+}

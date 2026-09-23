@@ -86,8 +86,11 @@ class EvaluationSubject:
             artifact_digest=artifact_digest(artifact_payload),
             baseline_artifact_payload=baseline_artifact_payload,
             release_id=release_id,
-            baseline_artifact_digest=(artifact_digest(baseline_artifact_payload)
-                                      if baseline_artifact_payload is not None else None),
+            baseline_artifact_digest=(
+                artifact_digest(baseline_artifact_payload)
+                if baseline_artifact_payload is not None
+                else None
+            ),
         )
 
 
@@ -132,9 +135,7 @@ class _CountingDenyTransport:
     def __init__(self) -> None:
         self.calls = 0
 
-    def complete(
-        self, *, route: object, payload: object
-    ) -> Never:
+    def complete(self, *, route: object, payload: object) -> Never:
         self.calls += 1
         raise PermissionError("protected test transport forbids network access")
 
@@ -188,31 +189,46 @@ class ProtectedFixedSuiteRunner:
         case = registered_case(case_id)
         if case_id == "safety-canary-insufficient-samples-001":
             facts, outcomes = execute_canary_case(
-                project_root=self._project_root, work_dir=work_dir / case_id,
-                candidate_id=subject.candidate_id, target_component=subject.target_component,
+                project_root=self._project_root,
+                work_dir=work_dir / case_id,
+                candidate_id=subject.candidate_id,
+                target_component=subject.target_component,
                 artifact_payload=subject.artifact_payload,
             )
             return _observed_case(
-                subject=subject, stage=stage, case_id=case_id, facts=facts, outcomes=outcomes,
+                subject=subject,
+                stage=stage,
+                case_id=case_id,
+                facts=facts,
+                outcomes=outcomes,
             )
         if case_id == "safety-delete-rollback-erase-001":
             facts, outcomes = execute_recovery_case(
-                project_root=self._project_root, work_dir=work_dir / case_id,
+                project_root=self._project_root,
+                work_dir=work_dir / case_id,
             )
             return _observed_case(
-                subject=subject, stage=stage, case_id=case_id, facts=facts, outcomes=outcomes,
+                subject=subject,
+                stage=stage,
+                case_id=case_id,
+                facts=facts,
+                outcomes=outcomes,
             )
         if case_id == "migration-answer-strategy-transfer-001":
             if subject.baseline_artifact_payload is None:
                 raise ValueError("migration execution requires the bound baseline artifact")
             if stage is G006ExecutionStage.SHADOW:
                 facts, observed = execute_knowledge_shadow(
-                    project_root=self._project_root, work_dir=work_dir / case_id,
+                    project_root=self._project_root,
+                    work_dir=work_dir / case_id,
                     baseline_artifact=subject.baseline_artifact_payload,
                     candidate_artifact=subject.artifact_payload,
                 )
                 return _observed_case(
-                    subject=subject, stage=stage, case_id=case_id, facts=facts,
+                    subject=subject,
+                    stage=stage,
+                    case_id=case_id,
+                    facts=facts,
                     outcomes={
                         "evolution.positive_or_nonnegative_transfer": (
                             observed["shadow.same_snapshot_input"]
@@ -231,25 +247,40 @@ class ProtectedFixedSuiteRunner:
                     },
                 )
             baseline_facts, baseline_outcomes = execute_knowledge_boundary(
-                project_root=self._project_root, work_dir=work_dir / case_id / "baseline",
-                artifact=subject.baseline_artifact_payload, scenario="migration",
+                project_root=self._project_root,
+                work_dir=work_dir / case_id / "baseline",
+                artifact=subject.baseline_artifact_payload,
+                scenario="migration",
             )
             candidate_facts, candidate_outcomes = execute_knowledge_boundary(
-                project_root=self._project_root, work_dir=work_dir / case_id / "candidate",
-                artifact=subject.artifact_payload, scenario="migration",
+                project_root=self._project_root,
+                work_dir=work_dir / case_id / "candidate",
+                artifact=subject.artifact_payload,
+                scenario="migration",
             )
-            quality_keys = ("rag.recall_at_10", "rag.citation_coverage",
-                            "rag.conflict_detected", "rag.stale_evidence_not_authoritative")
+            quality_keys = (
+                "rag.recall_at_10",
+                "rag.citation_coverage",
+                "rag.conflict_detected",
+                "rag.stale_evidence_not_authoritative",
+            )
             baseline_score = sum(baseline_outcomes[key] for key in quality_keys)
             candidate_score = sum(candidate_outcomes[key] for key in quality_keys)
             return _observed_case(
-                subject=subject, stage=stage, case_id=case_id,
-                facts={"baseline": baseline_facts, "candidate": candidate_facts,
-                       "baseline_artifact_digest": subject.baseline_artifact_digest,
-                       "baseline_score": baseline_score, "candidate_score": candidate_score},
+                subject=subject,
+                stage=stage,
+                case_id=case_id,
+                facts={
+                    "baseline": baseline_facts,
+                    "candidate": candidate_facts,
+                    "baseline_artifact_digest": subject.baseline_artifact_digest,
+                    "baseline_score": baseline_score,
+                    "candidate_score": candidate_score,
+                },
                 outcomes={
                     "evolution.positive_or_nonnegative_transfer": (
-                        candidate_score >= baseline_score and baseline_score == len(quality_keys)
+                        candidate_score >= baseline_score
+                        and baseline_score == len(quality_keys)
                         and candidate_facts.get("input_digest")
                         == baseline_facts.get("input_digest")
                     ),
@@ -263,18 +294,22 @@ class ProtectedFixedSuiteRunner:
             )
         if case_id == "boundary-rag-citation-conflict-001":
             facts, outcomes = execute_knowledge_boundary(
-                project_root=self._project_root, work_dir=work_dir / case_id,
+                project_root=self._project_root,
+                work_dir=work_dir / case_id,
                 artifact=subject.artifact_payload,
             )
             return _observed_case(
-                subject=subject, stage=stage, case_id=case_id, facts=facts, outcomes=outcomes,
+                subject=subject,
+                stage=stage,
+                case_id=case_id,
+                facts=facts,
+                outcomes=outcomes,
             )
         if case.case_id in {
-            "retention-structured-direct-lookup-001", "safety-candidate-false-activation-001"
+            "retention-structured-direct-lookup-001",
+            "safety-candidate-false-activation-001",
         }:
-            return self._run_memory_case(
-                subject, stage=stage, work_dir=work_dir, case_id=case_id
-            )
+            return self._run_memory_case(subject, stage=stage, work_dir=work_dir, case_id=case_id)
         if case.case_id == "safety-outbound-network-zero-001":
             return self._run_outbound_case(subject, stage=stage, work_dir=work_dir)
         return _not_implemented_case(
@@ -335,28 +370,46 @@ class ProtectedFixedSuiteRunner:
             repository = MemoryRepository()
             with factory.begin() as session:
                 confirmed = repository.commit_explicit_memory(
-                    session, MemoryValue("goal", "goal.fixed", {"text": "confirmed-probe"}),
+                    session,
+                    MemoryValue("goal", "goal.fixed", {"text": "confirmed-probe"}),
                     operation_key="fixed-retention-seed",
                 )
-                same_key_candidate_id = repository.propose_candidate(session, MemoryCandidateInput(
-                    candidate_type="inferred", memory_type="goal", state_key="goal.fixed",
-                    proposed_value={"text": "unconfirmed-sentinel"},
-                    rationale="protected synthetic fixture", source_kind="agent_inferred",
-                    confidence=0.7,
-                ))
-                repository.propose_candidate(session, MemoryCandidateInput(
-                    candidate_type="inferred", memory_type="profile",
-                    state_key="goal.unconfirmed",
-                    proposed_value={"text": "unconfirmed-profile-sentinel"},
-                    rationale="protected synthetic fixture", source_kind="agent_inferred",
-                    confidence=0.7,
-                ))
-                candidate_goal_id = repository.propose_candidate(session, MemoryCandidateInput(
-                    candidate_type="inferred", memory_type="goal", state_key="goal.pending",
-                    proposed_value={"text": "unconfirmed-goal-sentinel"},
-                    rationale="protected synthetic fixture", source_kind="agent_inferred",
-                    confidence=0.7,
-                ))
+                same_key_candidate_id = repository.propose_candidate(
+                    session,
+                    MemoryCandidateInput(
+                        candidate_type="inferred",
+                        memory_type="goal",
+                        state_key="goal.fixed",
+                        proposed_value={"text": "unconfirmed-sentinel"},
+                        rationale="protected synthetic fixture",
+                        source_kind="agent_inferred",
+                        confidence=0.7,
+                    ),
+                )
+                repository.propose_candidate(
+                    session,
+                    MemoryCandidateInput(
+                        candidate_type="inferred",
+                        memory_type="profile",
+                        state_key="goal.unconfirmed",
+                        proposed_value={"text": "unconfirmed-profile-sentinel"},
+                        rationale="protected synthetic fixture",
+                        source_kind="agent_inferred",
+                        confidence=0.7,
+                    ),
+                )
+                candidate_goal_id = repository.propose_candidate(
+                    session,
+                    MemoryCandidateInput(
+                        candidate_type="inferred",
+                        memory_type="goal",
+                        state_key="goal.pending",
+                        proposed_value={"text": "unconfirmed-goal-sentinel"},
+                        rationale="protected synthetic fixture",
+                        source_kind="agent_inferred",
+                        confidence=0.7,
+                    ),
+                )
             with factory.begin() as session:
                 rows = StructuredLookupService().lookup(
                     session, selector="memory.state_key", value="goal.fixed"
@@ -366,13 +419,15 @@ class ProtectedFixedSuiteRunner:
                 )
                 l0 = repository.l0_context(session)
                 l1 = repository.l1_context(session, prefix="goal.")
-                formal_count = session.execute(text(
-                    "SELECT count(*) FROM current_formal_memory"
-                )).scalar_one()
+                formal_count = session.execute(
+                    text("SELECT count(*) FROM current_formal_memory")
+                ).scalar_one()
             with factory() as session:
                 answer_probe = execute_memory_answer_probe(
-                    session, route_override=QueryRoute(route_override)
-                    if route_override is not None else None,
+                    session,
+                    route_override=QueryRoute(route_override)
+                    if route_override is not None
+                    else None,
                 )
             recommendation_facts: dict[str, Any] = {}
             recommendation_outcomes: dict[str, bool] = {}
@@ -382,30 +437,46 @@ class ProtectedFixedSuiteRunner:
                 with factory.begin() as session:
                     candidate_refs = []
                     for candidate_id in (same_key_candidate_id, candidate_goal_id):
-                        row = session.execute(text(
-                            "SELECT id, current_version_id, state_key FROM memory_candidates "
-                            "WHERE id = :id"
-                        ), {"id": candidate_id}).mappings().one()
-                        candidate_refs.append(PendingGoalCandidateRef(
-                            candidate_id=row["id"], candidate_version_id=row["current_version_id"],
-                            state_key=row["state_key"],
-                        ))
+                        row = (
+                            session.execute(
+                                text(
+                                    "SELECT id, current_version_id, state_key FROM memory_candidates "
+                                    "WHERE id = :id"
+                                ),
+                                {"id": candidate_id},
+                            )
+                            .mappings()
+                            .one()
+                        )
+                        candidate_refs.append(
+                            PendingGoalCandidateRef(
+                                candidate_id=row["id"],
+                                candidate_version_id=row["current_version_id"],
+                                state_key=row["state_key"],
+                            )
+                        )
                     assert confirmed.formal_memory_id is not None
                     assert confirmed.formal_version_id is not None
                     assert confirmed.generation is not None
                     recommendation_facts, recommendation_outcomes = (
                         execute_memory_recommendation_probe(
-                            session, formal_goal=FormalGoalRef(
+                            session,
+                            formal_goal=FormalGoalRef(
                                 formal_memory_id=confirmed.formal_memory_id,
                                 formal_version_id=confirmed.formal_version_id,
-                                state_key="goal.fixed", effective_generation=confirmed.generation,
-                            ), same_key_candidate=candidate_refs[0],
+                                state_key="goal.fixed",
+                                effective_generation=confirmed.generation,
+                            ),
+                            same_key_candidate=candidate_refs[0],
                             candidate_only_goal=candidate_refs[1],
                         )
                     )
                 generation_facts, generation_outcomes = execute_memory_generation_probe(
-                    factory, settings, route_override=QueryRoute(route_override)
-                    if route_override is not None else None,
+                    factory,
+                    settings,
+                    route_override=QueryRoute(route_override)
+                    if route_override is not None
+                    else None,
                 )
             confirmed_only = (
                 len(rows) == 1
@@ -444,7 +515,8 @@ class ProtectedFixedSuiteRunner:
                 and answer_probe["rag_entry_calls"] == 0
             ),
             "memory.confirmed_only": (
-                confirmed_only and answer_probe["formal_answer_rows"] == rows
+                confirmed_only
+                and answer_probe["formal_answer_rows"] == rows
                 and not answer_probe["candidate_answer_rows"]
             ),
         }
@@ -731,9 +803,7 @@ def _trajectory_events(case: ObservedFixedCase) -> Sequence[dict[str, Any]]:
             "event_type": "process",
             "created_at": created_at,
             "payload": {
-                "assertions": {
-                    assertion.name: assertion.passed for assertion in case.assertions
-                },
+                "assertions": {assertion.name: assertion.passed for assertion in case.assertions},
                 "case_id": case.case_id,
                 "set_name": case.set_name,
             },

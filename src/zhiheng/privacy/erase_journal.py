@@ -81,9 +81,7 @@ class ExternalEraseJournal:
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
-    def _next_intent(
-        self, *, request_id: str, target_type: str, target_id: str
-    ) -> dict[str, Any]:
+    def _next_intent(self, *, request_id: str, target_type: str, target_id: str) -> dict[str, Any]:
         records = self.load() if self._path.exists() else []
         if any(record.request_id == request_id for record in records):
             raise EraseJournalError("erase journal request ID already exists")
@@ -281,9 +279,7 @@ class ExternalEraseJournal:
             try:
                 line = line_bytes.decode("utf-8")
             except UnicodeDecodeError as exc:
-                raise EraseJournalError(
-                    f"erase journal line {line_no} is invalid UTF-8"
-                ) from exc
+                raise EraseJournalError(f"erase journal line {line_no} is invalid UTF-8") from exc
             if not line_bytes.endswith(b"\n"):
                 raise EraseJournalError(f"erase journal line {line_no} is incomplete")
             raw = line[:-1]
@@ -477,10 +473,7 @@ def _verify_locked_journal_inode(descriptor: int, path: Path) -> None:
         path_stat = path.stat()
     except OSError as exc:
         raise EraseJournalError("pending erase journal path cannot be verified") from exc
-    if (
-        descriptor_stat.st_dev != path_stat.st_dev
-        or descriptor_stat.st_ino != path_stat.st_ino
-    ):
+    if descriptor_stat.st_dev != path_stat.st_dev or descriptor_stat.st_ino != path_stat.st_ino:
         raise EraseJournalError("pending erase journal locked file no longer matches path")
 
 

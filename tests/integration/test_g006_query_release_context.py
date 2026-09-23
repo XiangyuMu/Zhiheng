@@ -242,7 +242,6 @@ def _insert_artifact(
     connection.commit()
 
 
-
 def _advance_to_canary(
     controller: ReleaseController,
     release_id: str,
@@ -736,27 +735,36 @@ def test_retrieval_runs_trajectory_and_behavior_follow_promotion_then_rollback(
 
     with session_scope(session_factory) as session:
         third = service.answer(session, "private raw query", idempotency_key="third")
-        rows = session.execute(
-            text(
-                """
+        rows = (
+            session.execute(
+                text(
+                    """
                 SELECT id, strategy_release_id
                 FROM retrieval_runs
                 ORDER BY rowid
                 """
+                )
             )
-        ).mappings().all()
-        scores = session.execute(
-            text(
-                """
+            .mappings()
+            .all()
+        )
+        scores = (
+            session.execute(
+                text(
+                    """
                 SELECT score_json
                 FROM retrieval_results
                 ORDER BY rowid
                 """
+                )
             )
-        ).scalars().all()
-        trajectory = session.execute(
-            text(
-                """
+            .scalars()
+            .all()
+        )
+        trajectory = (
+            session.execute(
+                text(
+                    """
                 SELECT tt.id, tt.evidence_refs_json, te.result_json,
                        te.process_json, te.quality_json
                 FROM task_trajectories tt
@@ -765,10 +773,12 @@ def test_retrieval_runs_trajectory_and_behavior_follow_promotion_then_rollback(
                   AND json_extract(te.process_json, '$.query_sha256') = :query_hash
                 ORDER BY tt.rowid
                 """
-            ),
-            {"task_family": TARGET_COMPONENT,
-             "query_hash": sha256_text("private raw query")},
-        ).mappings().all()
+                ),
+                {"task_family": TARGET_COMPONENT, "query_hash": sha256_text("private raw query")},
+            )
+            .mappings()
+            .all()
+        )
 
     assert isinstance(first, AnswerEnvelope)
     assert isinstance(second, AnswerEnvelope)
@@ -823,9 +833,7 @@ def test_model_generation_runs_outside_sqlite_transaction(
                 model_gateway=model,
                 budget=AgenticBudget(max_context_chunks=2),
             ),
-            trajectory_repository=TrajectoryRepository(
-                deployment_secret="test-deployment-secret"
-            ),
+            trajectory_repository=TrajectoryRepository(deployment_secret="test-deployment-secret"),
         )
         result = service.answer(session, "private transaction query")
 
@@ -885,16 +893,20 @@ def test_missing_release_artifact_returns_evidence_only_safe_mode_and_trajectory
     )
     with session_scope(session_factory) as session:
         result = service.answer(session, "private missing artifact query", idempotency_key="safe")
-        trajectory = session.execute(
-            text(
-                """
+        trajectory = (
+            session.execute(
+                text(
+                    """
                 SELECT te.result_json, te.process_json
                 FROM task_evaluations te
                 ORDER BY te.created_at DESC
                 LIMIT 1
                 """
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
 
     assert isinstance(result, AnswerEnvelope)
     assert result.stop_reason is StopReason.RELEASE_UNAVAILABLE
@@ -933,16 +945,20 @@ def test_corrupt_release_artifact_returns_safe_mode_without_calling_rag(
     )
     with session_scope(session_factory) as session:
         result = service.answer(session, "private corrupt artifact query", idempotency_key="safe")
-        trajectory = session.execute(
-            text(
-                """
+        trajectory = (
+            session.execute(
+                text(
+                    """
                 SELECT te.result_json, te.process_json
                 FROM task_evaluations te
                 ORDER BY te.created_at DESC
                 LIMIT 1
                 """
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
 
     assert isinstance(result, AnswerEnvelope)
     assert result.stop_reason is StopReason.RELEASE_UNAVAILABLE

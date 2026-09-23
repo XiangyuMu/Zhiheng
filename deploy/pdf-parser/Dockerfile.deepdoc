@@ -1,0 +1,54 @@
+ARG REGISTRY=docker.m.daocloud.io
+#
+# Build from the pinned RAGFlow DeepDoc OSS server:
+#   docker build -f deploy/pdf-parser/Dockerfile.deepdoc -t deepdoc_oss:local .
+#
+# The final registry digest is recorded by the release pipeline. This image
+# intentionally does not claim a digest before it has been built and scanned.
+FROM ${REGISTRY}/library/ubuntu:24.04 AS upstream
+
+ARG RAGFLOW_REPOSITORY=https://github.com/infiniflow/ragflow.git
+ARG RAGFLOW_COMMIT=b9df87c4c75a5b0d35c90d15329fc0f6f91cb73e
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --filter=blob:none "${RAGFLOW_REPOSITORY}" /src/ragflow \
+    && cd /src/ragflow \
+    && git checkout --detach "${RAGFLOW_COMMIT}"
+
+FROM ${REGISTRY}/library/ubuntu:24.04
+
+ENV PYTHONPATH=/app \
+    DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 python3.12-venv \
+    libglib2.0-0 libglx-mesa0 libgl1 libgomp1 libgdiplus \
+    curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN python3.12 -m venv /app/.venv
+
+COPY --from=upstream /src/ragflow/deepdoc/server/pyproject.toml /tmp/pyproject.toml
+RUN /app/.venv/bin/pip install --no-cache-dir \
+    litserve onnxruntime opencv-python-headless numpy pillow pyclipper \
+    python-multipart shapely six huggingface_hub
+
+COPY --from=upstream /src/ragflow/deepdoc/server/download_deps.py /tmp/download_deps.py
+RUN mkdir -p /app/rag/res/deepdoc \
+    && /app/.venv/bin/python /tmp/download_deps.py /app/rag/res/deepdoc
+
+RUN mkdir -p /app/deepdoc/vision /app/deepdoc/server/endpoints /app/deepdoc/server/adapters
+COPY --from=upstream /src/ragflow/deepdoc/vision/ /app/deepdoc/vision/
+COPY --from=upstream /src/ragflow/deepdoc/server/deepdoc_server.py /app/deepdoc/server/
+COPY --from=upstream /src/ragflow/deepdoc/server/endpoints/ /app/deepdoc/server/endpoints/
+COPY --from=upstream /src/ragflow/deepdoc/server/adapters/ /app/deepdoc/server/adapters/
+COPY --from=upstream /src/ragflow/deepdoc/server/docker_stubs.py /tmp/docker_stubs.py
+RUN /app/.venv/bin/python /tmp/docker_stubs.py
+
+EXPOSE 9390
+HEALTHCHECK --interval=10s --timeout=2s --retries=3 --start-period=180s \
+    CMD curl -fsS http://127.0.0.1:9390/health || exit 1
+ENTRYPOINT ["/app/.venv/bin/python", "/app/deepdoc/server/deepdoc_server.py", "--model-dir", "/app/rag/res/deepdoc"]

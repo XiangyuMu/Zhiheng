@@ -147,22 +147,26 @@ class MemoryExtractionJobExecutor:
         payload = job.payload
         extractor = self.extractor_factory() if self.extractor_factory else self.extractor
         with session_scope(session_factory) as session:
-            row = session.execute(
-                text(
-                    """
+            row = (
+                session.execute(
+                    text(
+                        """
                     SELECT id, conversation_id, owner_user_id, query, response_json
                     FROM answer_history
                     WHERE id = :history_id
                       AND conversation_id = :conversation_id
                       AND owner_user_id = :owner_user_id
                     """
-                ),
-                {
-                    "history_id": str(payload["history_id"]),
-                    "conversation_id": str(payload["conversation_id"]),
-                    "owner_user_id": str(payload["owner_user_id"]),
-                },
-            ).mappings().first()
+                    ),
+                    {
+                        "history_id": str(payload["history_id"]),
+                        "conversation_id": str(payload["conversation_id"]),
+                        "owner_user_id": str(payload["owner_user_id"]),
+                    },
+                )
+                .mappings()
+                .first()
+            )
             if row is None:
                 raise ValueError("conversation turn not found")
             response = _json_object(row["response_json"])
@@ -176,30 +180,79 @@ class MemoryExtractionJobExecutor:
             # intentionally conservative and keeps the original conversation
             # as the authoritative evidence source.
             query_text = str(row["query"])
-            if (
-                any(
-                    marker in query_text.lower()
-                    for marker in ("面试", "interview", "会议", "meeting")
-                )
-                and _event_memory_tables_available(session)
-            ):
+            if any(
+                marker in query_text.lower() for marker in ("面试", "interview", "会议", "meeting")
+            ) and _event_memory_tables_available(session):
                 title = "面试事件" if "面试" in query_text else "Interview event"
                 summary = (query_text + ("\n" + answer if answer else ""))[:4000]
                 event_id = new_id()
                 version_id = new_id()
-                session.execute(text("""
+                session.execute(
+                    text("""
                     INSERT OR IGNORE INTO event_memories
                       (id, owner_user_id, event_type, status, title, summary,
                        entities_json, source_conversation_id, source_history_id)
                     VALUES (:id, :owner, 'conversation_event', 'candidate', :title, :summary,
                             :entities, :conversation, :history)
-                """), {"id": event_id, "owner": str(row["owner_user_id"]),
-                       "title": title, "summary": summary, "entities": json.dumps({"topics": ["RAG"] if "rag" in query_text.lower() else []}),  # noqa: E501
-                       "conversation": str(row["conversation_id"]), "history": str(row["id"])})
-                actual = session.execute(text("SELECT id FROM event_memories WHERE source_history_id=:h AND title=:t"), {"h": str(row["id"]), "t": title}).scalar_one()  # noqa: E501
-                session.execute(text("INSERT OR IGNORE INTO event_memory_versions (id,event_memory_id,version_no,title,summary,payload_json) VALUES (:v,:e,1,:t,:s,:p)"), {"v": version_id, "e": str(actual), "t": title, "s": summary, "p": json.dumps({"query": query_text})})  # noqa: E501
-                session.execute(text("INSERT OR IGNORE INTO event_memory_evidence (id,event_memory_id,event_version_id,conversation_id,history_id,excerpt,start_offset,end_offset,support_type,quote_hash,query_text,response_json,raw_sha256) VALUES (:id,:e,:v,:c,:h,:x,0,:end,'origin',:hash,:query,:response,:raw_hash)"), {"id": f"{actual}:origin", "e": str(actual), "v": version_id, "c": str(row["conversation_id"]), "h": str(row["id"]), "x": summary, "end": len(summary), "hash": sha256_text(summary), "query": query_text, "response": str(row["response_json"]), "raw_hash": sha256_text(query_text + "\n" + str(row["response_json"]))})  # noqa: E501
-                session.execute(text("INSERT OR IGNORE INTO event_confirmation_requests (id,event_memory_id,event_version_id,status,risk_level,proposed_value_hash,expires_at) VALUES (:id,:event,:version,'pending','medium',:hash,:expires)"), {"id": f"event-request:{actual}", "event": str(actual), "version": version_id, "hash": sha256_text(summary), "expires": datetime.now(UTC).replace(microsecond=0) + timedelta(days=1)})  # noqa: E501
+                """),
+                    {
+                        "id": event_id,
+                        "owner": str(row["owner_user_id"]),
+                        "title": title,
+                        "summary": summary,
+                        "entities": json.dumps(
+                            {"topics": ["RAG"] if "rag" in query_text.lower() else []}
+                        ),  # noqa: E501
+                        "conversation": str(row["conversation_id"]),
+                        "history": str(row["id"]),
+                    },
+                )
+                actual = session.execute(
+                    text("SELECT id FROM event_memories WHERE source_history_id=:h AND title=:t"),
+                    {"h": str(row["id"]), "t": title},
+                ).scalar_one()  # noqa: E501
+                session.execute(
+                    text(
+                        "INSERT OR IGNORE INTO event_memory_versions (id,event_memory_id,version_no,title,summary,payload_json) VALUES (:v,:e,1,:t,:s,:p)"
+                    ),
+                    {
+                        "v": version_id,
+                        "e": str(actual),
+                        "t": title,
+                        "s": summary,
+                        "p": json.dumps({"query": query_text}),
+                    },
+                )  # noqa: E501
+                session.execute(
+                    text(
+                        "INSERT OR IGNORE INTO event_memory_evidence (id,event_memory_id,event_version_id,conversation_id,history_id,excerpt,start_offset,end_offset,support_type,quote_hash,query_text,response_json,raw_sha256) VALUES (:id,:e,:v,:c,:h,:x,0,:end,'origin',:hash,:query,:response,:raw_hash)"
+                    ),
+                    {
+                        "id": f"{actual}:origin",
+                        "e": str(actual),
+                        "v": version_id,
+                        "c": str(row["conversation_id"]),
+                        "h": str(row["id"]),
+                        "x": summary,
+                        "end": len(summary),
+                        "hash": sha256_text(summary),
+                        "query": query_text,
+                        "response": str(row["response_json"]),
+                        "raw_hash": sha256_text(query_text + "\n" + str(row["response_json"])),
+                    },
+                )  # noqa: E501
+                session.execute(
+                    text(
+                        "INSERT OR IGNORE INTO event_confirmation_requests (id,event_memory_id,event_version_id,status,risk_level,proposed_value_hash,expires_at) VALUES (:id,:event,:version,'pending','medium',:hash,:expires)"
+                    ),
+                    {
+                        "id": f"event-request:{actual}",
+                        "event": str(actual),
+                        "version": version_id,
+                        "hash": sha256_text(summary),
+                        "expires": datetime.now(UTC).replace(microsecond=0) + timedelta(days=1),
+                    },
+                )  # noqa: E501
             for item in extracted:
                 result = personal_updates.apply(
                     session,
@@ -304,18 +357,22 @@ def process_memory_extraction_jobs_once(
     limit: int = 10,
 ) -> int:
     with session_scope(session_factory) as session:
-        rows = session.execute(
-            text(
-                """
+        rows = (
+            session.execute(
+                text(
+                    """
                 SELECT id, payload_json, attempts
                 FROM jobs
                 WHERE job_type=:job_type AND status='pending'
                   AND available_at <= CURRENT_TIMESTAMP AND attempts < max_attempts
                 ORDER BY available_at, id LIMIT :limit
                 """
-            ),
-            {"job_type": MEMORY_EXTRACTION_JOB_TYPE, "limit": limit},
-        ).mappings().all()
+                ),
+                {"job_type": MEMORY_EXTRACTION_JOB_TYPE, "limit": limit},
+            )
+            .mappings()
+            .all()
+        )
         claimed: list[ClaimedMemoryExtractionJob] = []
         for row in rows:
             session.execute(

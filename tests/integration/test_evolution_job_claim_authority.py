@@ -105,27 +105,39 @@ def test_last_attempt_crash_is_dead_lettered_only_by_authorized_queue(tmp_path: 
     repository = JobRepository()
     with factory.begin() as session:
         repository.enqueue(
-            session, job_type=EvolutionJobType.REPLAY,
-            idempotency_key="synthetic-final-crash", payload={},
+            session,
+            job_type=EvolutionJobType.REPLAY,
+            idempotency_key="synthetic-final-crash",
+            payload={},
         )
         session.execute(text("UPDATE jobs SET max_attempts=1"))
         first = repository.claim_available(session, worker_id="publisher")[0]
         session.execute(text("UPDATE jobs SET lease_expires_at=datetime('now','-1 minute')"))
     with factory.begin() as session:
-        assert repository.claim_available(
-            session, worker_id="ordinary",
-            allowed_job_types=frozenset({EvolutionJobType.MAINTENANCE}),
-        ) == []
+        assert (
+            repository.claim_available(
+                session,
+                worker_id="ordinary",
+                allowed_job_types=frozenset({EvolutionJobType.MAINTENANCE}),
+            )
+            == []
+        )
         assert session.execute(text("SELECT status FROM jobs")).scalar_one() == "processing"
         for _ in range(2):
-            assert repository.claim_available(
-                session, worker_id="replacement-publisher",
-                allowed_job_types=frozenset({EvolutionJobType.REPLAY}),
-            ) == []
+            assert (
+                repository.claim_available(
+                    session,
+                    worker_id="replacement-publisher",
+                    allowed_job_types=frozenset({EvolutionJobType.REPLAY}),
+                )
+                == []
+            )
         assert session.execute(text("SELECT status FROM jobs")).scalar_one() == "dead"
-        assert tuple(session.execute(
-            text("SELECT status, error_class FROM job_attempts"),
-        ).one()) == ("failed", "LeaseExpired")
+        assert tuple(
+            session.execute(
+                text("SELECT status, error_class FROM job_attempts"),
+            ).one()
+        ) == ("failed", "LeaseExpired")
         assert session.execute(text("SELECT count(*) FROM dead_letters")).scalar_one() == 1
         assert repository.complete(session, first, result=JobResult("completed", {})) is False
 
@@ -133,7 +145,9 @@ def test_last_attempt_crash_is_dead_lettered_only_by_authorized_queue(tmp_path: 
 @pytest.mark.parametrize("operation", ["complete", "fail"])
 @pytest.mark.parametrize("attempt_kind", ["other_job", "missing", "finished"])
 def test_ack_requires_exact_open_attempt(
-    tmp_path: Path, operation: str, attempt_kind: str,
+    tmp_path: Path,
+    operation: str,
+    attempt_kind: str,
 ) -> None:
     _settings, factory, connection = _migrated(tmp_path)
     connection.close()
@@ -141,14 +155,19 @@ def test_ack_requires_exact_open_attempt(
     with factory.begin() as session:
         for index in range(2):
             repository.enqueue(
-                session, job_type=EvolutionJobType.MAINTENANCE,
-                idempotency_key=f"synthetic-attempt-{index}", payload={},
+                session,
+                job_type=EvolutionJobType.MAINTENANCE,
+                idempotency_key=f"synthetic-attempt-{index}",
+                payload={},
             )
         first, second = repository.claim_available(session, worker_id="same-worker")
         if attempt_kind == "finished":
             session.execute(
-                text("UPDATE job_attempts SET status='failed', finished_at=CURRENT_TIMESTAMP "
-                     "WHERE id=:attempt_id"), {"attempt_id": first.attempt_id},
+                text(
+                    "UPDATE job_attempts SET status='failed', finished_at=CURRENT_TIMESTAMP "
+                    "WHERE id=:attempt_id"
+                ),
+                {"attempt_id": first.attempt_id},
             )
         attempt_id = {
             "other_job": second.attempt_id,

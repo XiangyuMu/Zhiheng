@@ -57,8 +57,7 @@ class _FakeAdapter(SqliteVecAdapter):
         scored = []
         for rowid, embedding in self.rows[physical_index_ref]:
             distance = sum(
-                (left - right) ** 2
-                for left, right in zip(query_embedding, embedding, strict=True)
+                (left - right) ** 2 for left, right in zip(query_embedding, embedding, strict=True)
             )
             scored.append((rowid, distance))
         return sorted(scored, key=lambda item: item[1])[:limit]
@@ -95,17 +94,21 @@ def _text_for_title(title: str) -> str:
 
 
 def _ingest(session: Session, title: str, artifacts: StoredTextArtifacts) -> str:
-    return KnowledgeRepository().ingest_text(
-        session,
-        TextEvidenceInput(
-            title=title,
-            primary_domain_id="technology.ai",
-            text=_text_for_title(title),
-            source_metadata={"fixture": "synthetic"},
-        ),
-        user_authority=KnowledgeUserAuthority("synthetic-test-user"),
-        stored_artifacts=artifacts,
-    ).chunk_id
+    return (
+        KnowledgeRepository()
+        .ingest_text(
+            session,
+            TextEvidenceInput(
+                title=title,
+                primary_domain_id="technology.ai",
+                text=_text_for_title(title),
+                source_metadata={"fixture": "synthetic"},
+            ),
+            user_authority=KnowledgeUserAuthority("synthetic-test-user"),
+            stored_artifacts=artifacts,
+        )
+        .chunk_id
+    )
 
 
 def test_sqlite_vec_unavailable_fails_closed_without_scan(tmp_path: Path) -> None:
@@ -153,41 +156,56 @@ def test_active_generation_requires_exact_model_revision_dimension_and_purpose(
             )
             is None
         )
-        assert repository.search_active(
-            session,
-            [1.0, 0.0, 0.0],
-            model_id="BAAI/bge-m3",
-            model_revision="synthetic-revision",
-            dimension=3,
-        ) == []
+        assert (
+            repository.search_active(
+                session,
+                [1.0, 0.0, 0.0],
+                model_id="BAAI/bge-m3",
+                model_revision="synthetic-revision",
+                dimension=3,
+            )
+            == []
+        )
 
         repository.activate_generation(session, generation_id)
 
-        assert repository.active_generation_id(
-            session,
-            model_id="BAAI/bge-m3",
-            model_revision="synthetic-revision",
-            dimension=3,
-        ) == generation_id
-        assert repository.active_generation_id(
-            session,
-            model_id="BAAI/bge-m3",
-            model_revision="other",
-            dimension=3,
-        ) is None
-        assert repository.active_generation_id(
-            session,
-            model_id="BAAI/bge-m3",
-            model_revision="synthetic-revision",
-            dimension=2,
-        ) is None
-        assert repository.active_generation_id(
-            session,
-            model_id="BAAI/bge-m3",
-            model_revision="synthetic-revision",
-            dimension=3,
-            purpose="rerank",
-        ) is None
+        assert (
+            repository.active_generation_id(
+                session,
+                model_id="BAAI/bge-m3",
+                model_revision="synthetic-revision",
+                dimension=3,
+            )
+            == generation_id
+        )
+        assert (
+            repository.active_generation_id(
+                session,
+                model_id="BAAI/bge-m3",
+                model_revision="other",
+                dimension=3,
+            )
+            is None
+        )
+        assert (
+            repository.active_generation_id(
+                session,
+                model_id="BAAI/bge-m3",
+                model_revision="synthetic-revision",
+                dimension=2,
+            )
+            is None
+        )
+        assert (
+            repository.active_generation_id(
+                session,
+                model_id="BAAI/bge-m3",
+                model_revision="synthetic-revision",
+                dimension=3,
+                purpose="rerank",
+            )
+            is None
+        )
 
         hits = repository.search_query(
             session,

@@ -1,6 +1,6 @@
 services:
   caddy:
-    image: caddy:2.10-alpine
+    image: docker.m.daocloud.io/library/caddy:2.10-alpine
     environment:
       ZHIHENG_SITE_ADDRESS: ${ZHIHENG_SITE_ADDRESS:-http://localhost}
     volumes:
@@ -54,15 +54,74 @@ services:
       ZHIHENG_ERASE_JOURNAL_PATH: /data/erase-journal.jsonl
       ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH: /data/knowledge-object-store
       ZHIHENG_WORKER_ROLE: publisher
+      ZHIHENG_PDF_DEEPDOC_URL: http://deepdoc-worker:9390
+      ZHIHENG_PDF_MINERU_URL: http://mineru-worker:9391
+      ZHIHENG_PDF_DEEPDOC_TOKEN_FILE: /run/secrets/deepdoc_service_token
+      ZHIHENG_PDF_MINERU_TOKEN_FILE: /run/secrets/mineru_service_token
     volumes:
       - zhiheng-data:/data
+    secrets:
+      - deepdoc_service_token
+      - mineru_service_token
     command: ["zhiheng-worker", "--role", "publisher"]
     restart: unless-stopped
     depends_on:
       api:
         condition: service_healthy
+  deepdoc-worker:
+    profiles: ["pdf"]
+    image: deepdoc_oss:local
+    build:
+      context: ..
+      dockerfile: deploy/pdf-parser/Dockerfile.deepdoc
+    expose:
+      - "9390"
+    environment:
+      DEEPDOC_SERVICE_TOKEN_FILE: /run/secrets/deepdoc_service_token
+    secrets:
+      - deepdoc_service_token
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=2g,noexec,nosuid,nodev
+    pids_limit: 256
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8G
+          pids: 256
+    restart: unless-stopped
+  mineru-worker:
+    profiles: ["pdf"]
+    image: mineru:local
+    build:
+      context: ..
+      dockerfile: deploy/pdf-parser/Dockerfile.mineru
+    expose:
+      - "9391"
+    environment:
+      MINERU_SERVICE_TOKEN_FILE: /run/secrets/mineru_service_token
+    secrets:
+      - mineru_service_token
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=2g,noexec,nosuid,nodev
+    pids_limit: 256
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8G
+          pids: 256
+    restart: unless-stopped
   ollama:
-    image: ollama/ollama:0.11.10
+    image: docker.m.daocloud.io/ollama/ollama:0.11.10
     profiles: ["local-model"]
     network_mode: "service:api"
     volumes:
@@ -76,3 +135,8 @@ volumes:
   caddy-data:
   caddy-config:
   ollama-data:
+secrets:
+  deepdoc_service_token:
+    external: true
+  mineru_service_token:
+    external: true

@@ -71,7 +71,9 @@ class QueryAnswerService:
         query_hash = sha256_text(query)
         release = self._resolve_release(session, preview=release_preview)
         decision = self._router.route(
-            query, selector=selector, intent=intent,
+            query,
+            selector=selector,
+            intent=intent,
             route_override=release.behavior.route_override if release.available else None,
         )
         session.commit()
@@ -104,7 +106,9 @@ class QueryAnswerService:
                 )
             else:
                 memory_context = self._memory_context_service.load(
-                    session, query_hash=query_hash, topic_prefix=memory_topic_prefix,
+                    session,
+                    query_hash=query_hash,
+                    topic_prefix=memory_topic_prefix,
                 )
                 session.commit()
                 result = self._rag.answer(
@@ -250,9 +254,11 @@ class QueryAnswerService:
                     ),
                     "retrieval_run_ids": list(retrieval_run_ids),
                     "memory_context_digest": result.memory_context_digest
-                    if isinstance(result, AnswerEnvelope) else None,
+                    if isinstance(result, AnswerEnvelope)
+                    else None,
                     "personalization_refs": [asdict(ref) for ref in result.personalization_refs]
-                    if isinstance(result, AnswerEnvelope) else [],
+                    if isinstance(result, AnswerEnvelope)
+                    else [],
                     "release_degraded_reasons": list(release.degraded_reasons),
                     "behavior": {
                         "route_override": release.behavior.route_override.value
@@ -395,9 +401,10 @@ def _trajectory_events(
 
 
 def _load_behavior_config(session: Session, context: ReleaseContext) -> ReleaseBehaviorConfig:
-    row = session.execute(
-        text(
-            """
+    row = (
+        session.execute(
+            text(
+                """
             SELECT artifact_json
             FROM evolution_artifacts
             WHERE binding_digest = :binding_digest
@@ -407,12 +414,15 @@ def _load_behavior_config(session: Session, context: ReleaseContext) -> ReleaseB
             ORDER BY created_at DESC, id DESC
             LIMIT 1
             """
-        ),
-        {
-            "binding_digest": context.binding_digest,
-            "artifact_digest": context.binding.approved_artifact_digest,
-        },
-    ).mappings().first()
+            ),
+            {
+                "binding_digest": context.binding_digest,
+                "artifact_digest": context.binding.approved_artifact_digest,
+            },
+        )
+        .mappings()
+        .first()
+    )
     if row is None:
         raise ValueError("release artifact missing")
     artifact = parse_artifact_json(row["artifact_json"])

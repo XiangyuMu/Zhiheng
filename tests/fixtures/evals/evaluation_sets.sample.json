@@ -1,5 +1,28 @@
 {
   "schema_version": "step0.eval_sets.v1",
+  "evaluation_contract": {
+    "schema_version": "evaluation_contract.v1",
+    "required_fields": [
+      "fixture_set_digest",
+      "input_set_digest",
+      "policy_threshold_digest",
+      "runner_environment_digest",
+      "generated_at",
+      "providers",
+      "case_outcomes",
+      "aggregate_metrics",
+      "status",
+      "blocked_reasons"
+    ],
+    "blocking_case_statuses": [
+      "blocked",
+      "skipped",
+      "timeout",
+      "unavailable"
+    ],
+    "provider_identifiers_only": true,
+    "release_requires_contract_and_input_digests": true
+  },
   "fixture_policy": {
     "synthetic_or_sanitized_only": true,
     "no_real_personal_data": true,

@@ -37,31 +37,39 @@ def _ingest(
     text_value: str,
     artifacts: StoredTextArtifacts,
 ) -> str:
-    return KnowledgeRepository().ingest_text(
-        session,
-        TextEvidenceInput(
-            title=title,
-            primary_domain_id="technology.ai",
-            text=text_value,
-            source_metadata={"fixture": "g005-rebuild-citation-hash"},
-            summary="synthetic summary",
-        ),
-        user_authority=KnowledgeUserAuthority("synthetic-test-user"),
-        stored_artifacts=artifacts,
-    ).chunk_id
+    return (
+        KnowledgeRepository()
+        .ingest_text(
+            session,
+            TextEvidenceInput(
+                title=title,
+                primary_domain_id="technology.ai",
+                text=text_value,
+                source_metadata={"fixture": "g005-rebuild-citation-hash"},
+                summary="synthetic summary",
+            ),
+            user_authority=KnowledgeUserAuthority("synthetic-test-user"),
+            stored_artifacts=artifacts,
+        )
+        .chunk_id
+    )
 
 
 def _candidate_from_chunk(session: Session, chunk_id: str) -> RetrievalCandidate:
-    row = session.execute(
-        text(
-            """
+    row = (
+        session.execute(
+            text(
+                """
             SELECT source_type, source_id, source_version_id, confirmation_generation
             FROM chunks
             WHERE id = :chunk_id
             """
-        ),
-        {"chunk_id": chunk_id},
-    ).mappings().one()
+            ),
+            {"chunk_id": chunk_id},
+        )
+        .mappings()
+        .one()
+    )
     return RetrievalCandidate(
         source_type=str(row["source_type"]),
         source_id=str(row["source_id"]),
@@ -129,16 +137,20 @@ def test_rebuild_fts_index_uses_only_exact_current_serving_chunks(tmp_path: Path
             ),
             {"chunk_id": erased},
         )
-        stale_row = session.execute(
-            text(
-                """
+        stale_row = (
+            session.execute(
+                text(
+                    """
                 SELECT c.source_id, c.content_version_id
                 FROM chunks c
                 WHERE c.id = :chunk_id
                 """
-            ),
-            {"chunk_id": stale},
-        ).mappings().one()
+                ),
+                {"chunk_id": stale},
+            )
+            .mappings()
+            .one()
+        )
         new_version_id = new_id()
         session.execute(
             text(
@@ -218,16 +230,20 @@ def test_citations_hash_exact_offset_quote_and_fail_closed_on_tamper(tmp_path: P
 
     with session_scope(session_factory) as session:
         chunk_id = _ingest(session, "subspan", "中文知识图谱", artifacts)
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT source_version_id, content_version_id
                 FROM chunks
                 WHERE id = :chunk_id
                 """
-            ),
-            {"chunk_id": chunk_id},
-        ).mappings().one()
+                ),
+                {"chunk_id": chunk_id},
+            )
+            .mappings()
+            .one()
+        )
         span_id = new_id()
         session.execute(
             text(

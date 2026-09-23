@@ -6,6 +6,15 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from zhiheng.evaluation.contracts import (
+    EVALUATION_CONTRACT_SCHEMA,
+    bind_release_contract,
+    build_evaluation_contract,
+    build_regression_report,
+    validate_evaluation_contract,
+    validate_regression_report,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "evals"
 
@@ -63,10 +72,186 @@ def load_json(name: str) -> dict[str, Any]:
 
 
 class EvaluationContractTests(unittest.TestCase):
+    def test_full_regression_report_is_complete_sanitized_and_digest_bound(self) -> None:
+        contract = build_evaluation_contract(
+            fixture_set_digest="sha256:" + "1" * 64,
+            input_set_digest="sha256:" + "2" * 64,
+            policy_threshold_digest="sha256:" + "3" * 64,
+            runner_environment_digest="sha256:" + "4" * 64,
+            providers=[
+                {
+                    "provider_id": "protected-local",
+                    "model_id": "synthetic",
+                    "availability": "available",
+                }
+            ],
+            case_outcomes=[{"case_id": "full-1", "status": "passed", "passed": True}],
+            aggregate_metrics={
+                "candidate_false_activation": 0,
+                "privacy_leak_count": 0,
+                "external_action_count": 0,
+            },
+        )
+        sections = {
+            name: {"passed": 1, "failed": 0}
+            for name in (
+                "retrieval",
+                "citations",
+                "candidate_isolation",
+                "privacy",
+                "unsupported_claims",
+                "external_actions",
+            )
+        }
+        report = build_regression_report(
+            contract,
+            report_id="regression-2026-09-09",
+            section_metrics=sections,
+        )
+        self.assertTrue(report["sanitized"])
+        self.assertIn("report_digest", report)
+        validate_regression_report(
+            report,
+            expected_contract_digest=contract["contract_digest"],
+            require_passing=True,
+        )
+        tampered = dict(report)
+        tampered["sections"] = dict(report["sections"])
+        tampered["sections"]["privacy"] = {"api_key": "sk-test-secret"}
+        tampered.pop("report_digest")
+        with self.assertRaises(ValueError):
+            validate_regression_report(tampered)
+
+    def test_canonical_evaluation_contract_has_immutable_evidence_and_status_gate(self) -> None:
+        contract = build_evaluation_contract(
+            fixture_set_digest="sha256:" + "1" * 64,
+            input_set_digest="sha256:" + "2" * 64,
+            policy_threshold_digest="sha256:" + "3" * 64,
+            runner_environment_digest="sha256:" + "4" * 64,
+            providers=[
+                {
+                    "provider_id": "protected-local",
+                    "model_id": "synthetic",
+                    "availability": "available",
+                }
+            ],
+            case_outcomes=[{"case_id": "synthetic-1", "status": "passed", "passed": True}],
+            aggregate_metrics={
+                "candidate_false_activation": 0,
+                "privacy_leak_count": 0,
+                "external_action_count": 0,
+            },
+            generated_at="2026-09-09T00:00:00+00:00",
+        )
+        self.assertEqual(contract["schema_version"], EVALUATION_CONTRACT_SCHEMA)
+        validate_evaluation_contract(contract, require_passing=True)
+
+        blocked = dict(contract)
+        blocked["case_outcomes"] = [
+            {
+                "case_id": "synthetic-1",
+                "status": "timeout",
+                "passed": False,
+                "reason": "wall_clock_budget_exceeded",
+            }
+        ]
+        blocked["status"] = "blocked"
+        blocked["blocked_reasons"] = ["timeout"]
+        blocked.pop("contract_digest")
+        with self.assertRaises(ValueError):
+            validate_evaluation_contract(blocked, require_passing=True)
+
+    def test_release_binding_carries_contract_and_input_digests(self) -> None:
+        contract = build_evaluation_contract(
+            fixture_set_digest="sha256:" + "1" * 64,
+            input_set_digest="sha256:" + "2" * 64,
+            policy_threshold_digest="sha256:" + "3" * 64,
+            runner_environment_digest="sha256:" + "4" * 64,
+            providers=[
+                {
+                    "provider_id": "protected-local",
+                    "model_id": "synthetic",
+                    "availability": "available",
+                }
+            ],
+            case_outcomes=[{"case_id": "synthetic-1", "status": "passed", "passed": True}],
+            aggregate_metrics={
+                "candidate_false_activation": 0,
+                "privacy_leak_count": 0,
+                "external_action_count": 0,
+            },
+            generated_at="2026-09-09T00:00:00+00:00",
+        )
+        binding = load_json("release_binding.sample.json")
+        bound = bind_release_contract(
+            contract=contract,
+            binding=binding,
+            report_digest="sha256:" + "5" * 64,
+        )
+        self.assertEqual(bound["schema_version"], EVALUATION_CONTRACT_SCHEMA)
+        self.assertEqual(bound["input_set_digest"], contract["input_set_digest"])
+        self.assertRegex(bound["binding_digest"], r"^sha256:[0-9a-f]{64}$")
+
+    def test_unavailable_provider_and_secret_fields_fail_closed(self) -> None:
+        unavailable = build_evaluation_contract(
+            fixture_set_digest="sha256:" + "1" * 64,
+            input_set_digest="sha256:" + "2" * 64,
+            policy_threshold_digest="sha256:" + "3" * 64,
+            runner_environment_digest="sha256:" + "4" * 64,
+            providers=[
+                {
+                    "provider_id": "external",
+                    "model_id": "synthetic",
+                    "availability": "unavailable",
+                }
+            ],
+            case_outcomes=[
+                {
+                    "case_id": "synthetic-1",
+                    "status": "unavailable",
+                    "passed": False,
+                    "reason": "provider_unavailable",
+                }
+            ],
+            aggregate_metrics={
+                "candidate_false_activation": 0,
+                "privacy_leak_count": 0,
+                "external_action_count": 0,
+            },
+        )
+        with self.assertRaises(ValueError):
+            validate_evaluation_contract(unavailable, require_passing=True)
+
+        valid = build_evaluation_contract(
+            fixture_set_digest="sha256:" + "1" * 64,
+            input_set_digest="sha256:" + "2" * 64,
+            policy_threshold_digest="sha256:" + "3" * 64,
+            runner_environment_digest="sha256:" + "4" * 64,
+            providers=[
+                {
+                    "provider_id": "protected-local",
+                    "model_id": "synthetic",
+                    "availability": "available",
+                }
+            ],
+            case_outcomes=[{"case_id": "synthetic-1", "status": "passed", "passed": True}],
+            aggregate_metrics={
+                "candidate_false_activation": 0,
+                "privacy_leak_count": 0,
+                "external_action_count": 0,
+            },
+        )
+        valid["providers"][0]["api_key"] = "redacted"
+        valid.pop("contract_digest")
+        with self.assertRaises(ValueError):
+            validate_evaluation_contract(valid)
+
     def test_fixed_eval_sets_exist_and_are_schema_complete(self) -> None:
         data = load_json("evaluation_sets.sample.json")
 
         self.assertEqual(data["schema_version"], "step0.eval_sets.v1")
+        self.assertEqual(data["evaluation_contract"]["schema_version"], EVALUATION_CONTRACT_SCHEMA)
+        self.assertTrue(data["evaluation_contract"]["release_requires_contract_and_input_digests"])
         self.assertTrue(data["fixture_policy"]["synthetic_or_sanitized_only"])
         self.assertTrue(data["fixture_policy"]["no_real_personal_data"])
 

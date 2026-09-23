@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 import json
 from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -43,6 +44,18 @@ class MemoryValuePayload(BaseModel):
     sensitivity_level: str = Field(default="private", max_length=32)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    time_sensitivity: str = Field(default="persistent", max_length=32)
+    confidence_explanation: dict[str, Any] | None = None
+
+    @field_validator("valid_to")
+    @classmethod
+    def valid_to_after_from(cls, value: datetime | None, info: Any) -> datetime | None:
+        valid_from = info.data.get("valid_from")
+        if value is not None and valid_from is not None and valid_from > value:
+            raise ValueError("valid_from must be earlier than or equal to valid_to")
+        return value
 
 
 class CandidatePayload(BaseModel):
@@ -57,6 +70,11 @@ class CandidatePayload(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     sensitivity_level: str = Field(default="private", max_length=32)
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    time_sensitivity: str = Field(default="persistent", max_length=32)
+    confidence_explanation: dict[str, Any] | None = None
+    extracted_at: datetime | None = None
 
     @field_validator("source_kind")
     @classmethod
@@ -65,6 +83,14 @@ class CandidatePayload(BaseModel):
             raise ValueError(
                 "candidate source must be extracted or inferred, not direct user input"
             )
+        return value
+
+    @field_validator("valid_to")
+    @classmethod
+    def valid_to_after_from(cls, value: datetime | None, info: Any) -> datetime | None:
+        valid_from = info.data.get("valid_from")
+        if value is not None and valid_from is not None and valid_from > value:
+            raise ValueError("valid_from must be earlier than or equal to valid_to")
         return value
 
 
@@ -245,6 +271,50 @@ def list_trash(session: SessionDep, _user_id: AuthDep, limit: int = 100) -> Item
     return ItemsResponse(items=_list_trash(session, limit=_limit(limit)))
 
 
+@router.get("/v1/memory/conflicts", response_model=ItemsResponse)
+def list_conflicts(
+    session: SessionDep, _user_id: AuthDep, status: str = "pending", limit: int = 100
+) -> ItemsResponse:
+    return ItemsResponse(
+        items=repository.list_conflicts(session, status=status, limit=_limit(limit))
+    )
+
+
+@router.get("/v1/memory/expiry", response_model=ItemsResponse)
+def list_expiry(
+    session: SessionDep,
+    _user_id: AuthDep,
+    state: Literal["all", "expiring", "expired"] = "all",
+    within_days: int = 7,
+    limit: int = 100,
+) -> ItemsResponse:
+    return ItemsResponse(
+        items=repository.list_expiry(
+            session, state=state, within_days=max(0, within_days), limit=_limit(limit)
+        )
+    )
+
+
+@router.get("/v1/memory/timeline", response_model=ItemsResponse)
+def memory_timeline(
+    session: SessionDep,
+    _user_id: AuthDep,
+    formal_memory_id: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = 200,
+) -> ItemsResponse:
+    return ItemsResponse(
+        items=repository.timeline(
+            session,
+            formal_memory_id=formal_memory_id,
+            since=since,
+            until=until,
+            limit=_limit(limit),
+        )
+    )
+
+
 @router.get("/v1/memory/context/l0")
 def l0_context(session: SessionDep, _user_id: AuthDep) -> dict[str, dict[str, Any]]:
     return repository.l0_context(session)
@@ -253,6 +323,41 @@ def l0_context(session: SessionDep, _user_id: AuthDep) -> dict[str, dict[str, An
 @router.get("/v1/memory/context/l1")
 def l1_context(session: SessionDep, _user_id: AuthDep, prefix: str) -> dict[str, dict[str, Any]]:
     return repository.l1_context(session, prefix=prefix)
+
+
+@router.get("/v1/memory/profile-preview")
+def profile_preview(session: SessionDep, _user_id: AuthDep) -> dict[str, Any]:
+    """Return a read-only preview of the currently serving formal profile.
+
+    Candidate rows are intentionally represented only by a count. Their values
+    must never cross this formal-profile boundary before confirmation.
+    """
+    formal_items = _list_formal(session, limit=500)
+    candidate_count = int(
+        session.execute(
+            text(
+                """
+                SELECT count(*)
+                FROM memory_candidates
+                WHERE status IN ('pending_confirmation', 'edited')
+                """
+            )
+        ).scalar_one()
+    )
+    payload = {
+        "status": "formal_only",
+        "formal_count": len(formal_items),
+        "candidate_count": candidate_count,
+        "l0": repository.l0_context(session),
+        "items": formal_items,
+        "timeline": repository.timeline(session, limit=20),
+        "expiry_reminders": repository.list_expiry(session, state="expiring", limit=20),
+        "conflict_count": len(repository.list_conflicts(session, status="pending", limit=500)),
+    }
+    return {
+        **payload,
+        "digest": sha256_json(payload),
+    }
 
 
 @router.post("/v1/memory/formal", response_model=MutationResponse)
@@ -271,6 +376,10 @@ def create_formal(
             value=payload.value,
             sensitivity_level=payload.sensitivity_level,
             confidence=payload.confidence,
+            valid_from=payload.valid_from,
+            valid_to=payload.valid_to,
+            time_sensitivity=payload.time_sensitivity,
+            confidence_explanation=payload.confidence_explanation,
         ),
         operation_key=f"api:formal:create:{idempotency_key}",
         evidence_refs=payload.evidence_refs,
@@ -312,6 +421,11 @@ def create_candidate(
             confidence=payload.confidence,
             sensitivity_level=payload.sensitivity_level,
             evidence_refs=payload.evidence_refs,
+            valid_from=payload.valid_from,
+            valid_to=payload.valid_to,
+            time_sensitivity=payload.time_sensitivity,
+            confidence_explanation=payload.confidence_explanation,
+            extracted_at=payload.extracted_at,
         ),
     )
     request_id = repository.request_confirmation(session, candidate_id=candidate_id)
@@ -812,9 +926,10 @@ def _list_trash(session: Session, *, limit: int) -> list[dict[str, Any]]:
 
 
 def _latest_pending_request_id(session: Session, candidate_id: str) -> str | None:
-    row = session.execute(
-        text(
-            """
+    row = (
+        session.execute(
+            text(
+                """
             SELECT id
             FROM memory_confirmation_requests
             WHERE candidate_id = :candidate_id
@@ -822,17 +937,24 @@ def _latest_pending_request_id(session: Session, candidate_id: str) -> str | Non
             ORDER BY created_at DESC
             LIMIT 1
             """
-        ),
-        {"candidate_id": candidate_id},
-    ).mappings().first()
+            ),
+            {"candidate_id": candidate_id},
+        )
+        .mappings()
+        .first()
+    )
     return None if row is None else str(row["id"])
 
 
 def _candidate_etag(session: Session, candidate_id: str) -> str | None:
-    row = session.execute(
-        text("SELECT id, current_version_id, status FROM memory_candidates WHERE id = :id"),
-        {"id": candidate_id},
-    ).mappings().first()
+    row = (
+        session.execute(
+            text("SELECT id, current_version_id, status FROM memory_candidates WHERE id = :id"),
+            {"id": candidate_id},
+        )
+        .mappings()
+        .first()
+    )
     return None if row is None else _candidate_etag_value(row)
 
 
@@ -843,16 +965,20 @@ def _formal_etag(session: Session, formal_memory_id: str) -> str | None:
 def _operation_receipt(
     session: Session, operation_key: str, *, request_hash: str
 ) -> RowMapping | None:
-    row = session.execute(
-        text(
-            """
+    row = (
+        session.execute(
+            text(
+                """
             SELECT id, result_json, status, request_hash
             FROM memory_operation_receipts
             WHERE operation_key = :operation_key
             """
-        ),
-        {"operation_key": operation_key},
-    ).mappings().first()
+            ),
+            {"operation_key": operation_key},
+        )
+        .mappings()
+        .first()
+    )
     if row is None:
         return None
     if row["request_hash"] != request_hash:
@@ -929,9 +1055,7 @@ def _complete_operation_receipt(
     )
 
 
-def _complete_api_mutation(
-    session: Session, receipt_id: str, response: MutationResponse
-) -> None:
+def _complete_api_mutation(session: Session, receipt_id: str, response: MutationResponse) -> None:
     if response.result is None:
         raise ValueError("mutation receipt requires a result")
     _complete_operation_receipt(
@@ -964,6 +1088,9 @@ def _json_result(value: object) -> dict[str, Any] | list[dict[str, Any]] | None:
 def _candidate_row(row: RowMapping) -> dict[str, Any]:
     item = dict(row)
     item["value"] = _json_dict(item.pop("value_json"))
+    item["confidence_explanation"] = (
+        _json_dict(item["confidence_explanation"]) if item.get("confidence_explanation") else None
+    )
     item["reason"] = item.get("change_reason")
     item["etag"] = _candidate_etag_value(item)
     item["version_id"] = str(item["current_version_id"])
@@ -973,6 +1100,9 @@ def _candidate_row(row: RowMapping) -> dict[str, Any]:
 def _formal_row(row: RowMapping) -> dict[str, Any]:
     item = dict(row)
     item["value"] = _json_dict(item.pop("value_json"))
+    item["confidence_explanation"] = (
+        _json_dict(item["confidence_explanation"]) if item.get("confidence_explanation") else None
+    )
     item["etag"] = _formal_etag_value(item)
     item["version_id"] = str(item["current_version_id"])
     item["confirmation_generation"] = item["current_generation"]
@@ -1010,6 +1140,26 @@ def _formal_etag_value(item: RowMapping | dict[str, Any]) -> str:
     return formal_memory_etag(item)
 
 
+def _expiry_state(value: object) -> str:
+    if value is None:
+        return "none"
+    try:
+        raw = (
+            value
+            if isinstance(value, datetime)
+            else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        )
+        when = raw if raw.tzinfo is not None else raw.replace(tzinfo=UTC)
+        now = datetime.now(UTC)
+        if when <= now:
+            return "expired"
+        if when <= now.replace(microsecond=0) + timedelta(days=7):
+            return "expiring"
+    except (TypeError, ValueError):
+        return "unknown"
+    return "active"
+
+
 def _decorate_memory_items(
     session: Session,
     items: list[dict[str, Any]],
@@ -1041,6 +1191,22 @@ def _decorate_memory_items(
             },
         ).mappings()
         item["version_evidence_refs"] = [dict(ref) for ref in refs]
+        if target_type == "memory_candidate":
+            evidence = session.execute(
+                text(
+                    """
+                    SELECT id, conversation_id, message_id, message_start, message_end,
+                           excerpt, support_type, extracted_at
+                    FROM memory_candidate_evidence
+                    WHERE candidate_id = :candidate_id
+                      AND candidate_version_id = :version_id
+                    ORDER BY extracted_at, id
+                    """
+                ),
+                {"candidate_id": target_id, "version_id": version_id},
+            ).mappings()
+            item["evidence"] = [dict(ref) for ref in evidence]
+        item["expiry_state"] = _expiry_state(item.get("valid_to"))
         if target_type == "memory_candidate":
             item["hypothetical_impact"] = (
                 f"确认后可能影响与 {item['state_key']} 相关的回答、检索规划和推荐。"

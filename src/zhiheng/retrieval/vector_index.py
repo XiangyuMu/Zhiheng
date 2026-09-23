@@ -485,18 +485,22 @@ class VectorIndexRepository:
         )
 
     def _generation(self, session: Session, generation_id: str) -> EmbeddingGeneration:
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT
                   id, model_id, model_revision, dimension, normalize, index_status, purpose,
                   physical_index_ref
                 FROM embedding_generations
                 WHERE id = :generation_id
                 """
-            ),
-            {"generation_id": generation_id},
-        ).mappings().one()
+                ),
+                {"generation_id": generation_id},
+            )
+            .mappings()
+            .one()
+        )
         return self._to_generation(row)
 
     def _active_generation(
@@ -508,9 +512,10 @@ class VectorIndexRepository:
         dimension: int,
         purpose: str,
     ) -> EmbeddingGeneration | None:
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT
                   id, model_id, model_revision, dimension, normalize, index_status, purpose,
                   physical_index_ref
@@ -521,14 +526,17 @@ class VectorIndexRepository:
                   AND purpose = :purpose
                   AND index_status = 'active'
                 """
-            ),
-            {
-                "model_id": model_id,
-                "model_revision": model_revision,
-                "dimension": dimension,
-                "purpose": purpose,
-            },
-        ).mappings().first()
+                ),
+                {
+                    "model_id": model_id,
+                    "model_revision": model_revision,
+                    "dimension": dimension,
+                    "purpose": purpose,
+                },
+            )
+            .mappings()
+            .first()
+        )
         return None if row is None else self._to_generation(row)
 
     @staticmethod

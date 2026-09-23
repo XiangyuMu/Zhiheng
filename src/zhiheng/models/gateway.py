@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from sqlalchemy import text
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, sessionmaker
 
 from zhiheng.core.config import Settings
-from zhiheng.core.ids import new_id, sha256_text
+from zhiheng.core.ids import new_id, sha256_json, sha256_text
+from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
 from zhiheng.models._transports import (
     ModelTransport,
     OllamaGenerateTransport,
@@ -20,7 +25,10 @@ from zhiheng.models._transports import (
     OpenAIResponsesTransport,
     TransportResponse,
     TransportRoute,
+    _ApprovedImagePart,
     _ApprovedOutboundPayload,
+    _ApprovedTextPart,
+    probe_provider_connectivity,
 )
 from zhiheng.privacy.gateway import (
     OutboundPayloadRequest,
@@ -30,7 +38,68 @@ from zhiheng.privacy.gateway import (
 )
 from zhiheng.secrets import EnvironmentSecretStore
 
-_ALLOWED_PROVIDER_KINDS = {"ollama", "openai", "openai-compatible"}
+_ALLOWED_PROVIDER_KINDS = {"ollama", "openai", "deepseek", "openai-compatible"}
+_MAX_OUTBOUND_IMAGE_BYTES = 20 * 1024 * 1024
+_ALLOWED_IMAGE_MEDIA_TYPES = {"image/gif", "image/jpeg", "image/png", "image/webp"}
+
+
+def probe_model_provider_connectivity(
+    *,
+    endpoint_url: str,
+    provider_kind: str,
+    secret_ref: str | None,
+    timeout: float = 5.0,
+) -> tuple[str, str, str]:
+    """Gateway-facing wrapper for the private transport health probe."""
+    return probe_provider_connectivity(
+        endpoint_url=endpoint_url,
+        provider_kind=provider_kind,
+        secret_ref=secret_ref,
+        timeout=timeout,
+    )
+
+
+@dataclass(frozen=True)
+class TextPart:
+    text: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.text, str):
+            raise TypeError("text content part must contain a string")
+
+
+@dataclass(frozen=True)
+class ImagePart:
+    artifact_uri: str
+    sha256: str
+    media_type: str
+    detail: str = "auto"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.artifact_uri, str) or not self.artifact_uri.strip():
+            raise ValueError("image artifact_uri must be a non-empty URI")
+        if any(character.isspace() or ord(character) < 0x20 for character in self.artifact_uri):
+            raise ValueError("image artifact_uri must not contain whitespace or control characters")
+        parsed_uri = urlparse(self.artifact_uri)
+        if not parsed_uri.scheme:
+            raise ValueError("image artifact_uri must include a URI scheme")
+
+        if not isinstance(self.sha256, str):
+            raise TypeError("image sha256 must be a string")
+        digest = self.sha256.removeprefix("sha256:")
+        if len(digest) != 64 or any(
+            character not in "0123456789abcdefABCDEF" for character in digest
+        ):
+            raise ValueError("image sha256 must be a 64-character hexadecimal digest")
+        if not isinstance(self.media_type, str) or not self.media_type.startswith("image/"):
+            raise ValueError("image media_type must start with image/")
+        if not self.detail:
+            raise ValueError("image detail must be non-empty")
+
+
+ModelContentPart = TextPart | ImagePart
+# Kept as a compatibility alias for code that imported the earlier name.
+ContentPart = ModelContentPart
 
 
 @dataclass(frozen=True)
@@ -39,9 +108,15 @@ class ModelRequest:
     provider_id: str
     model_id: str
     payload: str
+    parts: tuple[ModelContentPart, ...] = ()
     approval_id: str | None = None
     approval_ttl: timedelta = timedelta(minutes=5)
     requires_local: bool = False
+
+    def __post_init__(self) -> None:
+        for part in self.parts:
+            if not isinstance(part, (TextPart, ImagePart)):
+                raise TypeError("model request parts must be TextPart or ImagePart")
 
 
 @dataclass(frozen=True)
@@ -111,6 +186,13 @@ class ModelGateway:
             raise PermissionError("source policy requires an approved local model")
         transport = self._transport_for(route.provider_kind)
         privacy = self._privacy_pipeline.prepare_for_model(request.payload)
+        approved_parts = self._prepare_parts_for_network(request.parts)
+        # Bind prepared content identity into the approval/audit hash without
+        # writing image bytes to privacy snapshots or logs.
+        privacy = replace(
+            privacy,
+            final_payload_hash=_bound_payload_hash(privacy.final_payload_hash, approved_parts),
+        )
         decision = authorize_outbound_payload(
             OutboundPayloadRequest(
                 provider_id=route.provider_id,
@@ -120,7 +202,7 @@ class ModelGateway:
             ),
             external_models_enabled=(
                 self._settings.external_models_enabled
-                if route.provider_kind in {"openai", "openai-compatible"}
+                if route.provider_kind in {"openai", "deepseek", "openai-compatible"}
                 else True
             ),
         )
@@ -139,21 +221,23 @@ class ModelGateway:
             privacy,
         )
 
+        started = time.monotonic()
         try:
             response = transport.complete(
                 route=_transport_route(dispatch_route),
                 payload=_ApprovedOutboundPayload(
                     text=privacy.final_payload,
+                    parts=approved_parts,
                     payload_hash=privacy.final_payload_hash,
                     approval_id=approval_id,
                     audit_id=audit_id,
                 ),
             )
         except Exception as exc:
-            self._mark_failed(audit_id, exc)
+            self._mark_failed(audit_id, exc, int((time.monotonic() - started) * 1000))
             raise
 
-        self._mark_succeeded(audit_id, response)
+        self._mark_succeeded(audit_id, response, int((time.monotonic() - started) * 1000))
         return ModelResponse(
             text=response.text,
             response_hash=response.response_hash,
@@ -162,17 +246,23 @@ class ModelGateway:
 
     def _read_route(self, request: ModelRequest) -> _ProviderRoute:
         with self._session_factory() as session:
-            row = session.execute(
-                text(
-                    """
-                    SELECT id, provider_kind, enabled, policy_json, secret_ref,
-                           model_allowlist_json, endpoint_url, endpoint_origin, policy_revision
+            row = (
+                session.execute(
+                    text(
+                        """
+                    SELECT id, provider_kind, enabled, archived, policy_json, secret_ref,
+                           model_allowlist_json, text_model_allowlist_json,
+                           multimodal_model_allowlist_json, endpoint_url, endpoint_origin,
+                           policy_revision
                     FROM model_provider_configs
                     WHERE id = :provider_id
                     """
-                ),
-                {"provider_id": request.provider_id},
-            ).mappings().one_or_none()
+                    ),
+                    {"provider_id": request.provider_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
         if row is None:
             raise PermissionError("provider is not configured")
         return _route_from_provider_row(row, request.model_id, self._settings)
@@ -330,9 +420,10 @@ class ModelGateway:
         privacy: PrivacyPipelineResult,
         now: datetime,
     ) -> None:
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT provider_id, model_id, policy_revision, final_payload_hash,
                        endpoint_origin, status, expires_at, consumed_at,
                        route_fingerprint, pipeline_assessment, task_id,
@@ -340,9 +431,12 @@ class ModelGateway:
                 FROM outbound_payload_approvals
                 WHERE id = :approval_id
                 """
-            ),
-            {"approval_id": approval_id},
-        ).mappings().one_or_none()
+                ),
+                {"approval_id": approval_id},
+            )
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise PermissionError("approval is not configured")
         if row["task_id"] != task_id:
@@ -411,16 +505,20 @@ class ModelGateway:
         approval_id: str,
         privacy: PrivacyPipelineResult,
     ) -> None:
-        rows = session.execute(
-            text(
-                """
+        rows = (
+            session.execute(
+                text(
+                    """
                 SELECT id, phase, status, payload_hash
                 FROM privacy_gateway_snapshots
                 WHERE approval_id = :approval_id
                 """
-            ),
-            {"approval_id": approval_id},
-        ).mappings().all()
+                ),
+                {"approval_id": approval_id},
+            )
+            .mappings()
+            .all()
+        )
         expected: dict[str, tuple[str, str]] = {
             "minimize": ("complete", privacy.minimized_payload_hash),
             "classify": (privacy.classification_status, privacy.classification_payload_hash),
@@ -448,17 +546,23 @@ class ModelGateway:
         privacy: PrivacyPipelineResult,
     ) -> _ProviderRoute:
         with self._session_factory() as session:
-            row = session.execute(
-                text(
-                    """
-                    SELECT id, provider_kind, enabled, policy_json, secret_ref,
-                           model_allowlist_json, endpoint_url, endpoint_origin, policy_revision
+            row = (
+                session.execute(
+                    text(
+                        """
+                    SELECT id, provider_kind, enabled, archived, policy_json, secret_ref,
+                           model_allowlist_json, text_model_allowlist_json,
+                           multimodal_model_allowlist_json, endpoint_url, endpoint_origin,
+                           policy_revision
                     FROM model_provider_configs
                     WHERE id = :provider_id
                     """
-                ),
-                {"provider_id": route.provider_id},
-            ).mappings().one_or_none()
+                    ),
+                    {"provider_id": route.provider_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
             if row is None:
                 session.rollback()
                 raise PermissionError("provider is not configured")
@@ -537,21 +641,26 @@ class ModelGateway:
             session.commit()
         return current_route
 
-    def _mark_succeeded(self, audit_id: str, response: TransportResponse) -> None:
+    def _mark_succeeded(self, audit_id: str, response: TransportResponse, duration_ms: int) -> None:
         with self._session_factory() as session:
             session.execute(
                 text(
                     """
                     UPDATE model_call_audits
-                    SET status = 'succeeded', response_hash = :response_hash
+                    SET status = 'succeeded', response_hash = :response_hash,
+                        duration_ms = :duration_ms, diagnostic_code = 'ok'
                     WHERE id = :audit_id
                     """
                 ),
-                {"audit_id": audit_id, "response_hash": response.response_hash},
+                {
+                    "audit_id": audit_id,
+                    "response_hash": response.response_hash,
+                    "duration_ms": duration_ms,
+                },
             )
             session.commit()
 
-    def _mark_failed(self, audit_id: str, exc: Exception) -> None:
+    def _mark_failed(self, audit_id: str, exc: Exception, duration_ms: int) -> None:
         with self._session_factory() as session:
             session.execute(
                 text(
@@ -559,7 +668,8 @@ class ModelGateway:
                     UPDATE model_call_audits
                     SET status = 'failed',
                         error_class = :error_class,
-                        error_message = :error_message
+                        error_message = :error_message,
+                        duration_ms = :duration_ms, diagnostic_code = :diagnostic_code
                     WHERE id = :audit_id
                     """
                 ),
@@ -567,28 +677,62 @@ class ModelGateway:
                     "audit_id": audit_id,
                     "error_class": exc.__class__.__name__,
                     "error_message": "provider_call_failed",
+                    "duration_ms": duration_ms,
+                    "diagnostic_code": _diagnostic_code(exc),
                 },
             )
             session.commit()
 
     def _transport_for(self, provider_kind: str) -> ModelTransport:
+        if provider_kind == "deepseek":
+            provider_kind = "openai-compatible"
         transport = self._transports.get(provider_kind)
         if transport is None:
             raise PermissionError("model transport is not configured")
         return transport
+
+    def _prepare_parts_for_network(
+        self,
+        parts: tuple[ModelContentPart, ...],
+    ) -> tuple[_ApprovedTextPart | _ApprovedImagePart, ...]:
+        approved_parts: list[_ApprovedTextPart | _ApprovedImagePart] = []
+        for part in parts:
+            if isinstance(part, TextPart):
+                privacy = self._privacy_pipeline.prepare_for_model(part.text)
+                if not privacy.approved_for_network:
+                    raise PermissionError(privacy.reason)
+                approved_parts.append(_ApprovedTextPart(text=privacy.final_payload))
+                continue
+
+            body = _read_verified_image_bytes(part, self._settings)
+            encoded = base64.b64encode(body).decode("ascii")
+            approved_parts.append(
+                _ApprovedImagePart(
+                    data_url=f"data:{part.media_type};base64,{encoded}",
+                    media_type=part.media_type,
+                    sha256=part.sha256.removeprefix("sha256:").lower(),
+                    detail=part.detail,
+                )
+            )
+        return tuple(approved_parts)
 
 
 def _route_from_provider_row(row: Any, model_id: str, settings: Settings) -> _ProviderRoute:
     provider_kind = str(row["provider_kind"])
     if provider_kind not in _ALLOWED_PROVIDER_KINDS:
         raise PermissionError("provider kind is not allowed")
+    if bool(row.get("archived", False)):
+        raise PermissionError("provider is archived")
     if not bool(row["enabled"]):
         raise PermissionError("provider is not enabled")
 
     policy = _json_object(row["policy_json"])
-    allowed_models = _json_list(row["model_allowlist_json"]) or _json_list(
-        policy.get("allowed_models")
-    )
+    allowed_models = _json_list(row.get("model_allowlist_json"))
+    allowed_models.extend(_json_list(row.get("text_model_allowlist_json")))
+    allowed_models.extend(_json_list(row.get("multimodal_model_allowlist_json")))
+    if not allowed_models:
+        allowed_models = _json_list(policy.get("allowed_models"))
+    allowed_models = list(dict.fromkeys(allowed_models))
     if model_id not in allowed_models:
         raise PermissionError("model is not allowlisted for provider")
 
@@ -601,8 +745,18 @@ def _route_from_provider_row(row: Any, model_id: str, settings: Settings) -> _Pr
     if derived_origin != endpoint_origin:
         raise PermissionError("provider endpoint origin does not match endpoint_url")
 
-    scheme = urlparse(endpoint_url).scheme
-    if provider_kind in {"openai", "openai-compatible"} and scheme != "https":
+    parsed_endpoint = urlparse(endpoint_url)
+    if (
+        parsed_endpoint.scheme not in {"http", "https"}
+        or parsed_endpoint.hostname is None
+        or parsed_endpoint.username is not None
+        or parsed_endpoint.password is not None
+        or parsed_endpoint.query
+        or parsed_endpoint.fragment
+    ):
+        raise PermissionError("provider endpoint URL is not allowed")
+    scheme = parsed_endpoint.scheme
+    if provider_kind in {"openai", "deepseek", "openai-compatible"} and scheme != "https":
         raise PermissionError("openai-compatible provider requires https endpoint")
     if provider_kind == "openai" and (
         endpoint_url.rstrip("/") != "https://api.openai.com/v1"
@@ -655,6 +809,108 @@ def _transport_route(route: _ProviderRoute) -> TransportRoute:
         policy_revision=route.policy_revision,
         secret_ref=route.secret_ref,
     )
+
+
+def _diagnostic_code(exc: Exception) -> str:
+    message = str(exc).lower()
+    class_name = exc.__class__.__name__.lower()
+    if "secret" in message and ("reference" in message or "empty" in message):
+        return "secret_unavailable"
+    if isinstance(exc, PermissionError):
+        return "policy_rejected"
+    if "401" in message or "403" in message or "auth" in message:
+        return "authentication_failed"
+    if "404" in message or "model" in message and "not found" in message:
+        return "model_not_found"
+    if "429" in message or "rate" in message:
+        return "rate_limited"
+    if "timeout" in message or "timeout" in class_name:
+        return "timeout"
+    if "model" in message and "allow" in message:
+        return "model_unavailable"
+    if "tls" in message or "ssl" in message or "certificate" in message:
+        return "tls_error"
+    if (
+        "connect" in message
+        or "dns" in message
+        or "connect" in class_name
+        or "gaierror" in class_name
+    ):
+        return (
+            "dns_error"
+            if any(token in message for token in ("dns", "gaierror", "nodename"))
+            else "network_error"
+        )
+    if isinstance(exc, (KeyError, TypeError, ValueError)) or any(
+        marker in message for marker in ("json", "response schema", "response format")
+    ):
+        return "response_format_error"
+    return "provider_error"
+
+
+def _bound_payload_hash(
+    payload_hash: str,
+    parts: tuple[_ApprovedTextPart | _ApprovedImagePart, ...],
+) -> str:
+    """Bind typed content identity to approval without logging content or bytes."""
+    if not parts:
+        return payload_hash
+    canonical_parts: list[dict[str, str]] = []
+    for part in parts:
+        if isinstance(part, _ApprovedTextPart):
+            canonical_parts.append({"type": "text", "text": part.text})
+        else:
+            canonical_parts.append(
+                {
+                    "type": "image",
+                    "sha256": part.sha256,
+                    "media_type": part.media_type,
+                    "detail": part.detail,
+                }
+            )
+    return sha256_json({"payload_hash": payload_hash, "parts": canonical_parts})
+
+
+def _read_verified_image_bytes(part: ImagePart, settings: Settings) -> bytes:
+    if part.media_type not in _ALLOWED_IMAGE_MEDIA_TYPES:
+        raise PermissionError("image media_type is not supported for outbound model transport")
+    path = _resolve_local_artifact_path(part.artifact_uri, settings)
+    body = path.read_bytes()
+    if not body:
+        raise PermissionError("image artifact is empty")
+    if len(body) > _MAX_OUTBOUND_IMAGE_BYTES:
+        raise PermissionError("image artifact exceeds outbound size limit")
+    expected_hash = part.sha256.removeprefix("sha256:").lower()
+    if hashlib.sha256(body).hexdigest() != expected_hash:
+        raise PermissionError("image artifact hash mismatch")
+    if not _image_bytes_match_media_type(body, part.media_type):
+        raise PermissionError("image artifact media_type mismatch")
+    return body
+
+
+def _resolve_local_artifact_path(artifact_uri: str, settings: Settings) -> Path:
+    parsed = urlparse(artifact_uri)
+    if parsed.scheme != "file" or parsed.netloc or parsed.query or parsed.fragment:
+        raise PermissionError("unsupported image artifact source")
+    root = knowledge_object_store_for_settings(settings).root
+    path = Path(unquote(parsed.path)).resolve()
+    if not path.is_relative_to(root):
+        raise PermissionError("image artifact is outside configured object store")
+    if not path.is_file():
+        raise PermissionError("image artifact is not available")
+    return path
+
+
+def _image_bytes_match_media_type(body: bytes, media_type: str) -> bool:
+    if media_type == "image/png":
+        return body.startswith(b"\x89PNG\r\n\x1a\n")
+    if media_type == "image/jpeg":
+        return body.startswith(b"\xff\xd8\xff")
+    if media_type == "image/gif":
+        return body.startswith((b"GIF87a", b"GIF89a"))
+    if media_type == "image/webp":
+        return body.startswith(b"RIFF") and body[8:12] == b"WEBP"
+    return False
 
 
 def _json_object(value: Any) -> dict[str, Any]:

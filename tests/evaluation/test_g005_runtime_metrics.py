@@ -26,9 +26,9 @@ def test_g005_runtime_retrieval_metrics_meet_acceptance_gates(tmp_path: Path) ->
     )
     assert result.metrics.exact_lookup_accuracy >= 0.95, failure_report
     assert result.metrics.recall_at_10 >= 0.90, failure_report
-    assert (
-        result.metrics.hybrid_recall_at_10 >= result.metrics.vector_only_recall_at_10
-    ), failure_report
+    assert result.metrics.hybrid_recall_at_10 >= result.metrics.vector_only_recall_at_10, (
+        failure_report
+    )
     assert result.metrics.fact_critical_citation_coverage == 1.0, failure_report
     assert result.metrics.unauthorized_source_leak_count == 0, failure_report
     assert result.metrics.candidate_false_activation_count == 0, failure_report

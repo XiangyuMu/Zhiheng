@@ -29,16 +29,19 @@ def _append_interrupted(
     crash_point: str,
 ) -> None:
     if crash_point == "after_pending":
+
         def fail_append(*_args: Any, **_kwargs: Any) -> None:
             raise OSError("synthetic crash after pending witness")
 
         monkeypatch.setattr(journal, "_append_record_locked", fail_append)
     elif crash_point == "after_journal":
+
         def fail_head(*_args: Any, **_kwargs: Any) -> None:
             raise OSError("synthetic crash after journal append")
 
         monkeypatch.setattr(journal, "_write_head", fail_head)
     elif crash_point == "after_head":
+
         def fail_remove() -> None:
             raise OSError("synthetic crash after head publish")
 
@@ -293,7 +296,9 @@ def test_signed_prefix_truncation_without_pending_still_fails_closed(tmp_path: P
         (
             "tampered_pending",
             lambda path, witness: _pending_path(path).write_text(
-                _pending_path(path).read_text(encoding="utf-8").replace(
+                _pending_path(path)
+                .read_text(encoding="utf-8")
+                .replace(
                     "request-after_pending",
                     "request-tampered",
                 ),

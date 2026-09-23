@@ -22,11 +22,18 @@ class _CandidateRouter(QueryRouter):
         self._override = override
 
     def route(
-        self, query: str, *, selector: str | None = None, intent: str | None = None,
+        self,
+        query: str,
+        *,
+        selector: str | None = None,
+        intent: str | None = None,
         route_override: QueryRoute | None = None,
     ) -> RouteDecision:
         return super().route(
-            query, selector=selector, intent=intent, route_override=self._override,
+            query,
+            selector=selector,
+            intent=intent,
+            route_override=self._override,
         )
 
 
@@ -40,7 +47,11 @@ class _CountingRagBoundary(BoundedAgenticRagService):
         self.calls = 0
 
     def answer(
-        self, session: Session, query: str, *, route: QueryRoute,
+        self,
+        session: Session,
+        query: str,
+        *,
+        route: QueryRoute,
         release_context: ReleaseContext | None = None,
         behavior: ReleaseBehaviorConfig | None = None,
         memory_context: MemoryContextSnapshot | None = None,
@@ -50,11 +61,14 @@ class _CountingRagBoundary(BoundedAgenticRagService):
 
 
 def execute_memory_answer_probe(
-    session: Session, *, route_override: QueryRoute | None,
+    session: Session,
+    *,
+    route_override: QueryRoute | None,
 ) -> dict[str, Any]:
     rag = _CountingRagBoundary()
     service = QueryAnswerService(
-        router=_CandidateRouter(route_override), structured_lookup=StructuredLookupService(),
+        router=_CandidateRouter(route_override),
+        structured_lookup=StructuredLookupService(),
         rag=rag,
     )
     responses: list[StructuredLookupResult] = []

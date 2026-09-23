@@ -60,6 +60,10 @@ class PrivacyEraseService:
                     target_type=str(target_type),
                     target_id=str(target_id),
                 )
+            elif target_type == "event_memory":
+                self.execute_event_erase(
+                    session, request_id=str(request_id), event_id=str(target_id)
+                )
             else:
                 raise ValueError(f"unsupported erase target in ledger: {target_type}")
         return len(rows)
@@ -81,6 +85,10 @@ class PrivacyEraseService:
                     request_id=record.request_id,
                     target_type=record.target_type,
                     target_id=record.target_id,
+                )
+            elif record.target_type == "event_memory":
+                self.execute_event_erase(
+                    session, request_id=record.request_id, event_id=record.target_id
                 )
             else:
                 raise ValueError(f"unsupported erase target in journal: {record.target_type}")
@@ -760,6 +768,7 @@ class PrivacyEraseService:
             ),
             {"request_id": request_id},
         )
+
         session.execute(
             text(
                 """
@@ -796,6 +805,68 @@ class PrivacyEraseService:
                 SET status = 'completed', completed_at = CURRENT_TIMESTAMP
                 WHERE id = :request_id
                 """
+            ),
+            {"request_id": request_id},
+        )
+
+    def execute_event_erase(self, session: Session, *, request_id: str, event_id: str) -> None:
+        intent = session.execute(
+            text("""
+          SELECT 1 FROM privacy_erase_ledger
+          WHERE erase_request_id=:request_id AND target_type='event_memory'
+            AND target_id=:event_id AND phase='intent' AND status='pending'
+        """),
+            {"request_id": request_id, "event_id": event_id},
+        ).first()
+        if intent is None:
+            raise ValueError("event erase requires a pending write-ahead intent")
+        session.execute(
+            text(
+                "UPDATE chunks SET status='privacy_erased' WHERE source_type='event_memory' AND source_id=:id"
+            ),
+            {"id": event_id},
+        )
+        session.execute(
+            text("DELETE FROM event_memory_evidence WHERE event_memory_id=:id"), {"id": event_id}
+        )
+        session.execute(
+            text(
+                "UPDATE event_memory_versions SET title='',summary='',payload_json='{}' WHERE event_memory_id=:id"
+            ),
+            {"id": event_id},
+        )
+        session.execute(
+            text(
+                "UPDATE event_memories SET status='soft_deleted',title='',summary='',entities_json='{}',updated_at=CURRENT_TIMESTAMP WHERE id=:id"
+            ),
+            {"id": event_id},
+        )
+        session.execute(
+            text(
+                "UPDATE event_confirmation_requests SET status='superseded' WHERE event_memory_id=:id"
+            ),
+            {"id": event_id},
+        )
+        session.execute(
+            text(
+                "UPDATE privacy_erase_ledger SET status='completed',completed_at=CURRENT_TIMESTAMP WHERE erase_request_id=:request_id AND phase='intent'"
+            ),
+            {"request_id": request_id},
+        )
+        session.execute(
+            text(
+                "INSERT INTO privacy_erase_ledger (id,erase_request_id,target_type,target_id,phase,status,before_ref_hash,completed_at) VALUES (:id,:request_id,'event_memory',:event,'authoritative_rows_erased','completed',:hash,CURRENT_TIMESTAMP)"
+            ),
+            {
+                "id": new_id(),
+                "request_id": request_id,
+                "event": event_id,
+                "hash": sha256_json({"event_id": event_id, "phase": "authoritative_rows_erased"}),
+            },
+        )
+        session.execute(
+            text(
+                "UPDATE privacy_erase_requests SET status='completed',completed_at=CURRENT_TIMESTAMP WHERE id=:request_id"
             ),
             {"request_id": request_id},
         )
@@ -867,15 +938,21 @@ class PrivacyEraseService:
     def _erase_derived_results(self, session: Session, target_id: str) -> None:
         # Answer/decision receipts are derived caches, not immutable evidence.
         # Keep operation keys so erasure never turns a retry into a fresh action.
-        session.execute(text(
-            "UPDATE memory_operation_receipts SET result_json = '{}', status = 'privacy_erased' "
-            "WHERE instr(result_json, :target_id) > 0 AND status <> 'privacy_erased'"
-        ), {"target_id": target_id})
-        session.execute(text(
-            "UPDATE decision_support_runs SET recommendation_json = '{}', review_json = '{}', "
-            "status = 'privacy_erased' WHERE status <> 'privacy_erased' AND "
-            "(instr(recommendation_json, :target_id) > 0 OR instr(review_json, :target_id) > 0)"
-        ), {"target_id": target_id})
+        session.execute(
+            text(
+                "UPDATE memory_operation_receipts SET result_json = '{}', status = 'privacy_erased' "
+                "WHERE instr(result_json, :target_id) > 0 AND status <> 'privacy_erased'"
+            ),
+            {"target_id": target_id},
+        )
+        session.execute(
+            text(
+                "UPDATE decision_support_runs SET recommendation_json = '{}', review_json = '{}', "
+                "status = 'privacy_erased' WHERE status <> 'privacy_erased' AND "
+                "(instr(recommendation_json, :target_id) > 0 OR instr(review_json, :target_id) > 0)"
+            ),
+            {"target_id": target_id},
+        )
 
     def _erase_formal_memory(self, session: Session, formal_memory_id: str) -> None:
         self._erase_derived_results(session, formal_memory_id)

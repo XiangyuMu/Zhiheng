@@ -8,6 +8,12 @@ umask 077
 : "${ZHIHENG_ERASE_JOURNAL_PATH:?set ZHIHENG_ERASE_JOURNAL_PATH}"
 : "${ZHIHENG_SECRET_KEY:?set ZHIHENG_SECRET_KEY}"
 
+python_bin=${ZHIHENG_PYTHON:-python}
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if ! "$python_bin" -c 'import alembic' >/dev/null 2>&1 && [ -x "$repo_dir/.venv/bin/python" ]; then
+  python_bin="$repo_dir/.venv/bin/python"
+fi
+
 for sidecar in "$ZHIHENG_DATABASE_PATH-wal" "$ZHIHENG_DATABASE_PATH-shm" "$ZHIHENG_DATABASE_PATH-journal"; do
   if test -e "$sidecar"; then
     printf '%s\n' 'restore requires stopped database clients and checkpointed SQLite sidecars' >&2
@@ -28,9 +34,9 @@ openssl enc -d -aes-256-cbc -pbkdf2 -in "$ZHIHENG_BACKUP_PATH" \
   -out "$tmp" -pass env:ZHIHENG_BACKUP_PASSWORD
 sqlite3 "$tmp" "PRAGMA integrity_check;" | grep -qx ok
 export ZHIHENG_DATABASE_URL="sqlite:///$tmp"
-python scripts/upgrade_database.py "$tmp"
+"$python_bin" scripts/upgrade_database.py "$tmp"
 export ZHIHENG_REPLAY_EXTERNAL_ERASE_JOURNAL=1
-python scripts/replay_erase_ledger.py
+"$python_bin" scripts/replay_erase_ledger.py
 sqlite3 "$tmp" "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE; VACUUM;" > /dev/null
 sqlite3 "$tmp" "PRAGMA integrity_check;" | grep -qx ok
 for sidecar in "$ZHIHENG_DATABASE_PATH-wal" "$ZHIHENG_DATABASE_PATH-shm" "$ZHIHENG_DATABASE_PATH-journal"; do

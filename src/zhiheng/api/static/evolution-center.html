@@ -3,61 +3,111 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>持续进化中心</title>
+    <title>知衡系统改进</title>
     <link rel="stylesheet" href="/evolution-center.css" />
   </head>
   <body>
-    <main class="shell">
-      <section class="toolbar">
-        <div>
-          <p class="eyebrow">Zhiheng</p>
-          <h1>持续进化中心</h1>
+    <a class="skip-link" href="#releases">跳到系统改进列表</a>
+    <div class="workspace">
+      <aside class="sidebar" aria-label="工作空间导航">
+        <a class="brand" href="/knowledge-agent#research">
+          <span class="brand-mark" aria-hidden="true">知</span>
+          <span>知衡<small>研究与知识</small></span>
+        </a>
+        <nav class="nav-group" aria-label="研究">
+          <p class="nav-label">工作空间</p>
+          <a class="nav-link" href="/knowledge-agent#research"><span class="nav-icon" aria-hidden="true">◌</span>研究问答</a>
+          <a class="nav-link" href="/knowledge-agent#library"><span class="nav-icon" aria-hidden="true">▤</span>资料库</a>
+        </nav>
+        <nav class="nav-group" aria-label="工具">
+          <p class="nav-label">更多工具</p>
+          <a class="nav-link" href="/knowledge-agent#decisions"><span class="nav-icon" aria-hidden="true">⇄</span>方案比较</a>
+          <a class="nav-link" href="/memory-center"><span class="nav-icon" aria-hidden="true">◎</span>个人上下文</a>
+        </nav>
+        <div class="sidebar-footer">
+          <p class="sidebar-note">回到原文，<br />让知识有据可循。</p>
+          <a class="nav-link" href="/knowledge-agent#settings"><span class="nav-icon" aria-hidden="true">⚙</span>设置</a>
+          <a class="nav-link" href="/evolution-center" aria-current="page"><span class="nav-icon" aria-hidden="true">↗</span>系统改进</a>
         </div>
-        <button id="refresh" type="button">刷新</button>
-      </section>
-
-      <section class="grid metrics" id="metrics"></section>
-
-      <section class="grid">
-        <article>
-          <header>
-            <h2>发布阶段</h2>
-            <span id="release-count">0</span>
-          </header>
-          <div id="releases" class="list"></div>
-        </article>
-        <article>
-          <header>
-            <h2>提案证据</h2>
-            <span id="proposal-count">0</span>
-          </header>
-          <div id="proposals" class="list"></div>
-        </article>
-      </section>
-
-      <section class="grid">
-        <article>
-          <header>
-            <h2>任务轨迹</h2>
-            <span id="trajectory-count">0</span>
-          </header>
-          <div id="trajectories" class="list"></div>
-        </article>
-        <article>
-          <header>
-            <h2>评测集合</h2>
-            <span>4</span>
-          </header>
-          <div id="sets" class="sets"></div>
-        </article>
-      </section>
-
-      <aside id="detail" class="detail">
-        <h2>详情</h2>
-        <pre id="detail-body">选择一条记录查看脱敏投影。</pre>
       </aside>
-      <p id="toast" class="toast" hidden></p>
-    </main>
+
+      <div class="workspace-body">
+        <header class="topbar">
+          <p class="topbar-path">设置 <span aria-hidden="true">/</span> <strong>系统改进</strong></p>
+          <button id="refresh" type="button" class="secondary">刷新</button>
+        </header>
+
+        <main class="page-content">
+          <section class="page-heading" aria-labelledby="page-title">
+            <p class="eyebrow">次级管理页</p>
+            <h1 id="page-title">系统改进</h1>
+            <p>查看发布阶段、改进提案、任务轨迹和评测集合。这里呈现系统状态，不执行发布、回滚或权限操作。</p>
+          </section>
+
+          <section class="grid metrics" id="metrics" aria-label="系统指标"></section>
+
+          <section class="management-grid">
+            <article class="panel">
+              <header>
+                <div>
+                  <p class="eyebrow">Release</p>
+                  <h2>发布阶段</h2>
+                </div>
+                <span id="release-count" class="count-pill">0</span>
+              </header>
+              <div id="releases" class="list" role="list"></div>
+            </article>
+            <article class="panel">
+              <header>
+                <div>
+                  <p class="eyebrow">Proposal</p>
+                  <h2>提案证据</h2>
+                </div>
+                <span id="proposal-count" class="count-pill">0</span>
+              </header>
+              <div id="proposals" class="list" role="list"></div>
+            </article>
+          </section>
+
+          <section class="management-grid">
+            <article class="panel">
+              <header>
+                <div>
+                  <p class="eyebrow">Trajectory</p>
+                  <h2>任务轨迹</h2>
+                </div>
+                <span id="trajectory-count" class="count-pill">0</span>
+              </header>
+              <div id="trajectories" class="list" role="list"></div>
+            </article>
+            <article class="panel">
+              <header>
+                <div>
+                  <p class="eyebrow">Evaluation</p>
+                  <h2>评测集合</h2>
+                </div>
+                <span class="count-pill">4</span>
+              </header>
+              <div id="sets" class="sets"></div>
+            </article>
+          </section>
+
+          <aside id="detail" class="detail panel" aria-labelledby="detail-title">
+            <div class="detail-heading">
+              <div>
+                <p class="eyebrow">详情</p>
+                <h2 id="detail-title">未选择记录</h2>
+              </div>
+              <span id="detail-kind" class="count-pill">read-only</span>
+            </div>
+            <div id="detail-body" class="detail-body">
+              <p class="muted">选择发布、提案或轨迹记录，查看脱敏后的可读字段。</p>
+            </div>
+          </aside>
+        </main>
+      </div>
+    </div>
+    <p id="toast" class="toast" role="status" aria-live="polite" hidden></p>
     <script src="/evolution-center.js"></script>
   </body>
 </html>

@@ -95,7 +95,6 @@ def _user_approval_payload(actor_id: str = "user-approver-a") -> dict[str, objec
     }
 
 
-
 def _advance_to_canary(controller: ReleaseController, release_id: str) -> None:
     advance_to_canary_with_execution(controller, release_id)
 
@@ -186,14 +185,17 @@ def test_promotion_job_recovers_after_crash_without_double_publishing(tmp_path: 
             )
         )
 
-    assert process_jobs_once(
-        session_factory,
-        EvolutionJobExecutor(
-            settings,
-            publisher_context=command_context_for_role("publisher-a", EvolutionRole.PUBLISHER),
-        ),
-        worker_id="worker-b",
-    ) == 1
+    assert (
+        process_jobs_once(
+            session_factory,
+            EvolutionJobExecutor(
+                settings,
+                publisher_context=command_context_for_role("publisher-a", EvolutionRole.PUBLISHER),
+            ),
+            worker_id="worker-b",
+        )
+        == 1
+    )
     recovered_head = ReleaseController.from_db(connection).load_default_head(TARGET_COMPONENT)
     assert recovered_head is not None
     assert recovered_head.release_id == prepared_id
@@ -204,10 +206,14 @@ def test_promotion_job_recovers_after_crash_without_double_publishing(tmp_path: 
     assert _stable_transition_count(connection, prepared_id) == 1
 
     with session_scope(session_factory) as session:
-        row = session.execute(
-            text("SELECT status, attempts FROM jobs WHERE idempotency_key = :key"),
-            {"key": "promote-candidate-crash"},
-        ).mappings().one()
+        row = (
+            session.execute(
+                text("SELECT status, attempts FROM jobs WHERE idempotency_key = :key"),
+                {"key": "promote-candidate-crash"},
+            )
+            .mappings()
+            .one()
+        )
         attempts = session.execute(text("SELECT count(*) FROM job_attempts")).scalar_one()
 
     assert row["status"] == "completed"
@@ -232,14 +238,17 @@ def test_promotion_job_rejects_payload_self_reported_publisher(tmp_path: Path) -
             },
         )
 
-    assert process_jobs_once(
-        session_factory,
-        EvolutionJobExecutor(
-            settings,
-            publisher_context=command_context_for_role("publisher-a", EvolutionRole.PUBLISHER),
-        ),
-        worker_id="publisher-a",
-    ) == 0
+    assert (
+        process_jobs_once(
+            session_factory,
+            EvolutionJobExecutor(
+                settings,
+                publisher_context=command_context_for_role("publisher-a", EvolutionRole.PUBLISHER),
+            ),
+            worker_id="publisher-a",
+        )
+        == 0
+    )
 
     controller = ReleaseController.from_db(connection)
     prepared = controller.load_release(prepared_id)
@@ -282,22 +291,28 @@ def test_same_promotion_idempotency_key_replays_to_single_job(tmp_path: Path) ->
             },
         )
 
-    assert process_jobs_once(
-        session_factory,
-        EvolutionJobExecutor(
-            settings,
-            publisher_context=command_context_for_role("publisher-a", EvolutionRole.PUBLISHER),
-        ),
-        worker_id="worker-a",
-    ) == 1
-    assert process_jobs_once(
-        session_factory,
-        EvolutionJobExecutor(
-            settings,
-            publisher_context=command_context_for_role("publisher-a", EvolutionRole.PUBLISHER),
-        ),
-        worker_id="worker-a",
-    ) == 0
+    assert (
+        process_jobs_once(
+            session_factory,
+            EvolutionJobExecutor(
+                settings,
+                publisher_context=command_context_for_role("publisher-a", EvolutionRole.PUBLISHER),
+            ),
+            worker_id="worker-a",
+        )
+        == 1
+    )
+    assert (
+        process_jobs_once(
+            session_factory,
+            EvolutionJobExecutor(
+                settings,
+                publisher_context=command_context_for_role("publisher-a", EvolutionRole.PUBLISHER),
+            ),
+            worker_id="worker-a",
+        )
+        == 0
+    )
     assert _stable_transition_count(connection, prepared_id) == 1
 
     with session_scope(session_factory) as session:
@@ -359,15 +374,19 @@ def test_maintenance_job_cannot_mutate_stable_head(tmp_path: Path) -> None:
     )
 
     with session_scope(session_factory) as session:
-        artifacts = session.execute(
-            text(
-                """
+        artifacts = (
+            session.execute(
+                text(
+                    """
                 SELECT artifact_kind, status, artifact_json
                 FROM evolution_artifacts
                 ORDER BY artifact_kind
                 """
+                )
             )
-    ).mappings().all()
+            .mappings()
+            .all()
+        )
         job_status = session.execute(
             text("SELECT status FROM jobs WHERE idempotency_key = 'maintenance-safety'")
         ).scalar_one()
@@ -527,11 +546,23 @@ def test_stage_jobs_execute_bound_strategy_and_persist_signed_runs(
         assert process["stage"] == "shadow"
         assert process["release_id"] == prepared.release_id
         assert "source_trajectory_id" not in process
-    canary_result = executor.execute(ClaimedJob(
-        id="job-canary", job_type=EvolutionJobType.CANARY, idempotency_key="job-canary",
-        payload={"release_id": prepared.release_id}, attempts=1,
-    ))
+    canary_result = executor.execute(
+        ClaimedJob(
+            id="job-canary",
+            job_type=EvolutionJobType.CANARY,
+            idempotency_key="job-canary",
+            payload={"release_id": prepared.release_id},
+            attempts=1,
+        )
+    )
     assert canary_result.detail["state"] == "canary"
-    assert len({replay_result.detail["execution_run_id"],
+    assert (
+        len(
+            {
+                replay_result.detail["execution_run_id"],
                 evaluation_result.detail["execution_run_id"],
-                canary_result.detail["execution_run_id"]}) == 3
+                canary_result.detail["execution_run_id"],
+            }
+        )
+        == 3
+    )

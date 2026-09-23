@@ -29,9 +29,7 @@ def normalize_claim(value: str) -> str:
 def _tokens(value: str) -> set[str]:
     normalized = normalize_claim(value).lower()
     return {
-        token
-        for token in _TOKEN_RE.findall(normalized)
-        if token not in {"的", "了", "是", "可"}
+        token for token in _TOKEN_RE.findall(normalized) if token not in {"的", "了", "是", "可"}
     }
 
 
@@ -78,9 +76,8 @@ def relation_kind(new_payload: dict[str, Any], old_payload: dict[str, Any]) -> s
         return None
     if not premise_match:
         return "conditional_coexistence"
-    if (
-        _explicit_contradiction(new_claim, old_claim)
-        or (_polarity(new_claim) != _polarity(old_claim) and overlap >= 0.45)
+    if _explicit_contradiction(new_claim, old_claim) or (
+        _polarity(new_claim) != _polarity(old_claim) and overlap >= 0.45
     ):
         return "conflict"
     if new_tokens < old_tokens or old_tokens < new_tokens:

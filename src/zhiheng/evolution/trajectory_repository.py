@@ -242,18 +242,22 @@ class TrajectoryRepository:
         session: Session,
         idempotency_key_digest: str,
     ) -> TrajectoryRecordV1 | None:
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT id, task_family, agent_version, knowledge_version, environment_version,
                        status, evidence_refs_json
                 FROM task_trajectories
                 WHERE json_extract(evidence_refs_json, '$.idempotency_key_sha256') = :digest
                 LIMIT 1
                 """
-            ),
-            {"digest": idempotency_key_digest},
-        ).mappings().first()
+                ),
+                {"digest": idempotency_key_digest},
+            )
+            .mappings()
+            .first()
+        )
         if row is None:
             return None
         return self._record_from_row(session, row)
@@ -261,27 +265,32 @@ class TrajectoryRepository:
     def _load_by_trajectory_id(
         self, session: Session, trajectory_id: str
     ) -> TrajectoryRecordV1 | None:
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                 SELECT id, task_family, agent_version, knowledge_version, environment_version,
                        status, evidence_refs_json
                 FROM task_trajectories
                 WHERE id = :trajectory_id
                 LIMIT 1
                 """
-            ),
-            {"trajectory_id": trajectory_id},
-        ).mappings().first()
+                ),
+                {"trajectory_id": trajectory_id},
+            )
+            .mappings()
+            .first()
+        )
         if row is None:
             return None
         return self._record_from_row(session, row)
 
     def _record_from_row(self, session: Session, row: Any) -> TrajectoryRecordV1:
         evidence_refs = _json_object(row["evidence_refs_json"])
-        evaluation_row = session.execute(
-            text(
-                """
+        evaluation_row = (
+            session.execute(
+                text(
+                    """
                 SELECT result_json, process_json, quality_json, failure_tags_json,
                        confidence, learning_eligible
                 FROM task_evaluations
@@ -289,9 +298,12 @@ class TrajectoryRepository:
                 ORDER BY created_at ASC, id ASC
                 LIMIT 1
                 """
-            ),
-            {"trajectory_id": row["id"]},
-        ).mappings().first()
+                ),
+                {"trajectory_id": row["id"]},
+            )
+            .mappings()
+            .first()
+        )
         if evaluation_row is None:
             raise ValueError("trajectory record is missing evaluation row")
         evidence_state = TrajectoryEvidenceState(str(row["status"]))
@@ -303,9 +315,7 @@ class TrajectoryRepository:
                 "agent_version": row["agent_version"],
                 "knowledge_version": row["knowledge_version"],
                 "environment_version": row["environment_version"],
-                "created_at": str(
-                    evidence_refs.get("created_at", "1970-01-01T00:00:00Z")
-                ),
+                "created_at": str(evidence_refs.get("created_at", "1970-01-01T00:00:00Z")),
                 "result": _json_object(evaluation_row["result_json"]),
                 "process": _json_object(evaluation_row["process_json"]),
                 "quality": _json_object(evaluation_row["quality_json"]),

@@ -222,9 +222,7 @@ def test_g006_rejects_unredacted_payload_and_incomplete_evidence() -> None:
 def test_g006_registered_fixed_cases_cover_approved_fixture() -> None:
     fixture = json.loads(APPROVED_EVAL_FIXTURE_PATH.read_text(encoding="utf-8"))
     fixture_case_ids = {
-        case["case_id"]
-        for cases in fixture["fixed_sets"].values()
-        for case in cases
+        case["case_id"] for cases in fixture["fixed_sets"].values() for case in cases
     }
     registry_case_ids = {case.case_id for case in REGISTERED_FIXED_CASES}
 

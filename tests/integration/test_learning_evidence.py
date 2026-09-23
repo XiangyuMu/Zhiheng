@@ -24,7 +24,9 @@ from zhiheng.query.contracts import GeneratedAnswer
 
 
 def _sources(
-    tmp_path: Path, *, repeat_counter_query: bool = False,
+    tmp_path: Path,
+    *,
+    repeat_counter_query: bool = False,
 ) -> tuple[sessionmaker[Session], dict[str, Any]]:
     client, factory = _client(tmp_path)
     csrf = _login(client)
@@ -33,10 +35,15 @@ def _sources(
     artifacts = stored_text_artifacts(tmp_path, counter_text)
     with factory.begin() as session:
         KnowledgeRepository().ingest_text(
-            session, TextEvidenceInput(
-                title="隐私恢复规则", primary_domain_id="technology.ai", text=counter_text,
-                source_metadata={"fixture": "synthetic"}, summary="删除后恢复的保护场景",
-            ), user_authority=KnowledgeUserAuthority("synthetic-test-user"),
+            session,
+            TextEvidenceInput(
+                title="隐私恢复规则",
+                primary_domain_id="technology.ai",
+                text=counter_text,
+                source_metadata={"fixture": "synthetic"},
+                summary="删除后恢复的保护场景",
+            ),
+            user_authority=KnowledgeUserAuthority("synthetic-test-user"),
             stored_artifacts=artifacts,
         )
     assert isinstance(client.app, FastAPI)
@@ -55,7 +62,8 @@ def _sources(
         if index == 4 and not repeat_counter_query:
             query = "隐私删除后恢复旧备份时应该先做什么"
         response = client.post(
-            "/v1/answers", json={"query": query},
+            "/v1/answers",
+            json={"query": query},
             headers=_headers(csrf, f"synthetic-learning-{index}"),
         )
         assert response.status_code == 200, response.text
@@ -68,15 +76,19 @@ def _sources(
             ids.append(str(added.pop()))
             known = current
     with factory() as session:
-        process = json.loads(session.execute(
-            text("SELECT process_json FROM task_evaluations WHERE id=:id"), {"id": ids[-1]},
-        ).scalar_one())
+        process = json.loads(
+            session.execute(
+                text("SELECT process_json FROM task_evaluations WHERE id=:id"),
+                {"id": ids[-1]},
+            ).scalar_one()
+        )
     return factory, {
         "baseline_release_id": process["release_id"],
         "baseline_binding_digest": process["binding_digest"],
         "baseline_artifact_digest": process["artifact_digest"],
         "trigger_evaluation_ids": tuple(ids[:3]),
-        "support_evaluation_ids": (ids[3],), "counter_evaluation_ids": (ids[4],),
+        "support_evaluation_ids": (ids[3],),
+        "counter_evaluation_ids": (ids[4],),
     }
 
 
@@ -97,16 +109,24 @@ def test_real_failed_answers_are_diagnostic_not_release_eligible(tmp_path: Path)
             _, record = loader.load(session, ref.evaluation_id)
             assert record.envelope.learning_eligible is False
             assert record.envelope.confidence == 0
-        reverse = {**arguments, "trigger_evaluation_ids": tuple(
-            reversed(arguments["trigger_evaluation_ids"]),
-        )}
+        reverse = {
+            **arguments,
+            "trigger_evaluation_ids": tuple(
+                reversed(arguments["trigger_evaluation_ids"]),
+            ),
+        }
         assert loader.build_graph(session, **reverse).canonical_digest() == graph.canonical_digest()
         assert "中文全文检索" not in json.dumps(graph.canonical_payload(), ensure_ascii=False)
         after = session.execute(text("SELECT count(*) FROM evolution_proposals")).scalar_one()
         assert after == before
-        assert loader.verify_graph(
-            session, json.loads(json.dumps(graph.canonical_payload())), graph.canonical_digest(),
-        ) == graph
+        assert (
+            loader.verify_graph(
+                session,
+                json.loads(json.dumps(graph.canonical_payload())),
+                graph.canonical_digest(),
+            )
+            == graph
+        )
 
 
 def test_counter_cannot_repeat_query_under_another_trajectory(tmp_path: Path) -> None:
@@ -117,7 +137,8 @@ def test_counter_cannot_repeat_query_under_another_trajectory(tmp_path: Path) ->
 
 @pytest.mark.parametrize("recompute_digest", [False, True])
 def test_source_graph_reloads_evidence_instead_of_trusting_metadata(
-    tmp_path: Path, recompute_digest: bool,
+    tmp_path: Path,
+    recompute_digest: bool,
 ) -> None:
     factory, arguments = _sources(tmp_path)
     loader = _loader()
@@ -131,7 +152,8 @@ def test_source_graph_reloads_evidence_instead_of_trusting_metadata(
 
 
 @pytest.mark.parametrize(
-    "mutation", ["overlap", "missing_support", "missing_counter", "diagnostic"],
+    "mutation",
+    ["overlap", "missing_support", "missing_counter", "diagnostic"],
 )
 def test_graph_refuses_missing_or_reclassified_evidence(tmp_path: Path, mutation: str) -> None:
     factory, arguments = _sources(tmp_path)
@@ -150,9 +172,17 @@ def test_graph_refuses_missing_or_reclassified_evidence(tmp_path: Path, mutation
         _loader().build_graph(session, **arguments)
 
 
-@pytest.mark.parametrize("mutation", [
-    "erased", "degraded", "uncertain", "privacy_denied", "canary", "release_degraded",
-])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "erased",
+        "degraded",
+        "uncertain",
+        "privacy_denied",
+        "canary",
+        "release_degraded",
+    ],
+)
 def test_policy_refuses_unusable_observations(tmp_path: Path, mutation: str) -> None:
     factory, arguments = _sources(tmp_path)
     with factory() as session:

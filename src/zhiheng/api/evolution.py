@@ -94,9 +94,7 @@ class OutboxEvolutionCommandPort:
                 "event_type": event_type,
                 "aggregate_type": aggregate_type,
                 "aggregate_id": aggregate_id,
-                "payload_json": json_text(
-                    {"idempotency_key": idempotency_key, **dict(payload)}
-                ),
+                "payload_json": json_text({"idempotency_key": idempotency_key, **dict(payload)}),
             },
         )
         created = int(session.execute(text("SELECT changes()")).scalar_one()) == 1
@@ -386,9 +384,10 @@ def proposal_evaluation_request(
     # Evaluation is only meaningful for a frozen, authenticated proposer origin.
     # Legacy candidates deliberately fail closed here; the worker repeats the
     # stronger source reload before executing anything.
-    origin_rows = session.execute(
-        text(
-            """
+    origin_rows = (
+        session.execute(
+            text(
+                """
             SELECT pse.event_json, pse.actor_id, ep.proposer_id
             FROM proposal_state_events pse
             JOIN evolution_proposals ep ON ep.id = pse.proposal_id
@@ -396,23 +395,33 @@ def proposal_evaluation_request(
               AND pse.previous_state = '' AND pse.next_state = 'candidate'
               AND pse.actor_role = 'proposer'
             """
-        ), {"proposal_id": proposal_id},
-    ).mappings().all()
+            ),
+            {"proposal_id": proposal_id},
+        )
+        .mappings()
+        .all()
+    )
     if len(origin_rows) != 1:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                            detail="proposal requires one frozen proposer origin")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="proposal requires one frozen proposer origin",
+        )
     origin = _json_dict(origin_rows[0]["event_json"])
     source_graph = origin.get("source_graph")
     source_digest = origin.get("source_graph_digest")
     if not isinstance(source_graph, dict) or not isinstance(source_digest, str):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                            detail="proposal requires a frozen source graph")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="proposal requires a frozen source graph"
+        )
     if origin_rows[0]["actor_id"] != origin_rows[0]["proposer_id"]:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                            detail="proposal proposer origin is not authoritative")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="proposal proposer origin is not authoritative",
+        )
     if f"sha256:{sha256_json(source_graph)}" != source_digest:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                            detail="proposal source graph digest mismatch")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="proposal source graph digest mismatch"
+        )
     try:
         verify_persisted_proposal_source_graph(
             session.connection().connection,
@@ -420,8 +429,10 @@ def proposal_evaluation_request(
             deployment_secret=request.app.state.settings.secret_key.get_secret_value(),
         )
     except (ValueError, KeyError) as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
-                            detail="proposal source graph failed authoritative reload") from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="proposal source graph failed authoritative reload",
+        ) from exc
     _require_etag(if_match, proposal["etag"])
     return _queue_command(
         session,
@@ -674,16 +685,20 @@ def _summary(session: Session) -> dict[str, Any]:
             session.execute(text("SELECT count(*) FROM jobs WHERE status = 'pending'")).scalar_one()
         ),
     }
-    stable = session.execute(
-        text(
-            """
+    stable = (
+        session.execute(
+            text(
+                """
             SELECT id, target_component, state, updated_at
             FROM serving_strategy_releases
             ORDER BY updated_at DESC, id DESC
             LIMIT 10
             """
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
     return {
         "counts": counts,
         "stable_heads": [_plain_row(cast(Any, row)) for row in stable],
@@ -691,9 +706,10 @@ def _summary(session: Session) -> dict[str, Any]:
 
 
 def _list_trajectories(session: Session, *, limit: int) -> list[dict[str, Any]]:
-    rows = session.execute(
-        text(
-            """
+    rows = (
+        session.execute(
+            text(
+                """
             SELECT tt.id, tt.task_family, tt.agent_version, tt.knowledge_version,
                    tt.environment_version, tt.status, tt.evidence_refs_json,
                    tt.created_at, tt.updated_at, te.result_json, te.process_json,
@@ -704,9 +720,12 @@ def _list_trajectories(session: Session, *, limit: int) -> list[dict[str, Any]]:
             ORDER BY tt.created_at DESC, tt.id DESC
             LIMIT :limit
             """
-        ),
-        {"limit": limit},
-    ).mappings().all()
+            ),
+            {"limit": limit},
+        )
+        .mappings()
+        .all()
+    )
     return [
         {
             "id": str(row["id"]),
@@ -734,33 +753,41 @@ def _list_trajectories(session: Session, *, limit: int) -> list[dict[str, Any]]:
 
 
 def _list_proposals(session: Session, *, limit: int) -> list[dict[str, Any]]:
-    rows = session.execute(
-        text(
-            """
+    rows = (
+        session.execute(
+            text(
+                """
             SELECT id, target_component, state, risk_level, minimal_diff_json,
                    support_refs_json, counter_refs_json, proposer_id, created_at, updated_at
             FROM evolution_proposals
             ORDER BY updated_at DESC, id DESC
             LIMIT :limit
             """
-        ),
-        {"limit": limit},
-    ).mappings().all()
+            ),
+            {"limit": limit},
+        )
+        .mappings()
+        .all()
+    )
     return [_proposal_payload(cast(Any, row)) for row in rows]
 
 
 def _proposal_detail(session: Session, proposal_id: str) -> dict[str, Any]:
-    row = session.execute(
-        text(
-            """
+    row = (
+        session.execute(
+            text(
+                """
             SELECT id, target_component, state, risk_level, minimal_diff_json,
                    support_refs_json, counter_refs_json, proposer_id, created_at, updated_at
             FROM evolution_proposals
             WHERE id = :proposal_id
             """
-        ),
-        {"proposal_id": proposal_id},
-    ).mappings().first()
+            ),
+            {"proposal_id": proposal_id},
+        )
+        .mappings()
+        .first()
+    )
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="proposal not found")
     payload = _proposal_payload(cast(Any, row))
@@ -783,7 +810,9 @@ def _proposal_detail(session: Session, proposal_id: str) -> dict[str, Any]:
                 """
             ),
             {"proposal_id": proposal_id},
-        ).mappings().all()
+        )
+        .mappings()
+        .all()
     ]
     payload["review_reports"] = [
         {
@@ -802,7 +831,9 @@ def _proposal_detail(session: Session, proposal_id: str) -> dict[str, Any]:
                 """
             ),
             {"proposal_id": proposal_id},
-        ).mappings().all()
+        )
+        .mappings()
+        .all()
     ]
     payload["etag"] = _etag(payload)
     return payload
@@ -826,9 +857,10 @@ def _proposal_payload(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _list_releases(session: Session, *, limit: int) -> list[dict[str, Any]]:
-    rows = session.execute(
-        text(
-            """
+    rows = (
+        session.execute(
+            text(
+                """
             SELECT sr.id, sr.target_component, sr.state, sr.risk_level,
                    sr.canary_scope_json, sr.rollback_target_release_id, sr.activated_at,
                    sr.created_at, sr.updated_at, srh.binding_digest,
@@ -838,16 +870,20 @@ def _list_releases(session: Session, *, limit: int) -> list[dict[str, Any]]:
             ORDER BY sr.updated_at DESC, sr.id DESC
             LIMIT :limit
             """
-        ),
-        {"limit": limit},
-    ).mappings().all()
+            ),
+            {"limit": limit},
+        )
+        .mappings()
+        .all()
+    )
     return [_release_payload(cast(Any, row)) for row in rows]
 
 
 def _release_detail(session: Session, release_id: str) -> dict[str, Any]:
-    row = session.execute(
-        text(
-            """
+    row = (
+        session.execute(
+            text(
+                """
             SELECT sr.id, sr.target_component, sr.state, sr.risk_level,
                    sr.canary_scope_json, sr.rollback_target_release_id, sr.activated_at,
                    sr.created_at, sr.updated_at, srh.binding_digest,
@@ -856,9 +892,12 @@ def _release_detail(session: Session, release_id: str) -> dict[str, Any]:
             LEFT JOIN strategy_release_heads srh ON srh.release_id = sr.id
             WHERE sr.id = :release_id
             """
-        ),
-        {"release_id": release_id},
-    ).mappings().first()
+            ),
+            {"release_id": release_id},
+        )
+        .mappings()
+        .first()
+    )
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="release not found")
     payload = _release_payload(cast(Any, row))
@@ -885,7 +924,9 @@ def _release_detail(session: Session, release_id: str) -> dict[str, Any]:
                 """
             ),
             {"release_id": release_id},
-        ).mappings().all()
+        )
+        .mappings()
+        .all()
     ]
     payload["canary"] = {
         "scope": _sanitize_json(row["canary_scope_json"]),
@@ -909,7 +950,9 @@ def _release_detail(session: Session, release_id: str) -> dict[str, Any]:
                     """
                 ),
                 {"release_id": release_id},
-            ).mappings().all()
+            )
+            .mappings()
+            .all()
         ],
     }
     payload["etag"] = _etag(payload)

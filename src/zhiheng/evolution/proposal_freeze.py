@@ -29,7 +29,8 @@ def verify_persisted_proposal_source_graph(
     """
     raw = cast(sqlite3.Connection, getattr(connection, "driver_connection", connection))
     ReleaseController.from_db(
-        raw, deployment_secret=deployment_secret,
+        raw,
+        deployment_secret=deployment_secret,
     ).load_proposal_source_graph(proposal_id)
 
 
@@ -84,7 +85,8 @@ class StrategyProposalService:
             if not isinstance(failure_tag, str) or not failure_tag:
                 raise ValueError("draft requires a persisted failure tag")
             controller = ReleaseController.from_db(
-                self._connection, deployment_secret=self._deployment_secret,
+                self._connection,
+                deployment_secret=self._deployment_secret,
             )
             baseline = controller.load_default_head("retrieval.answer_strategy")
             if baseline is None:
@@ -99,16 +101,22 @@ class StrategyProposalService:
             artifact = default_release_artifact()
             validate_strategy_artifact(artifact)
             from zhiheng.evolution.contracts import ReleaseBindingV1
+
             binding = ReleaseBindingV1(
-                candidate_id=draft_id, target_component="retrieval.answer_strategy",
+                candidate_id=draft_id,
+                target_component="retrieval.answer_strategy",
                 source_evaluation_ids=("boundary", "migration", "retention", "safety"),
-                source_evidence_refs=(draft_id,), validation_report_ref="pending",
-                reviewer_decision_ref="pending", approved_artifact_digest=artifact_digest(artifact),
+                source_evidence_refs=(draft_id,),
+                validation_report_ref="pending",
+                reviewer_decision_ref="pending",
+                approved_artifact_digest=artifact_digest(artifact),
                 rollback_target_id=baseline.release_id,
             )
             proposal = controller.create_release_proposal(
-                binding=binding, proposer_context=proposer_context,
-                artifact_payload=artifact, source_graph=graph,
+                binding=binding,
+                proposer_context=proposer_context,
+                artifact_payload=artifact,
+                source_graph=graph,
             )
             self._connection.execute(
                 """UPDATE proposal_state_events

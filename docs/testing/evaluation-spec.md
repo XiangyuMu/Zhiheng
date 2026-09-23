@@ -6,6 +6,24 @@ This document defines the Step 0 evaluation contract for the self-evolving perso
 
 Step 0 contract tests may validate only schemas, fixtures, and documentation consistency. They must not fabricate functional success for memory writes, retrieval, deletion, privacy erase, model calls, or evolution promotion.
 
+## Canonical `evaluation_contract.v1`
+
+Fixtures, protected runs, validation reports, review evidence and release
+records use the same canonical contract. The contract binds:
+
+- `fixture_set_digest` and `input_set_digest`;
+- `policy_threshold_digest` and `runner_environment_digest`;
+- an ISO-8601 `generated_at` timestamp;
+- provider/model identifiers only, never API keys or payloads;
+- every case outcome and aggregate metrics;
+- an explicit aggregate `status`: `passed`, `failed`, or `blocked`.
+
+`blocked`, `skipped`, `timeout`, and `unavailable` case outcomes are never
+implicitly successful. An unavailable provider is recorded as blocked/failed
+evidence and cannot pass a release gate. A release must persist the contract
+digest, input-set digest, report digest, and the exact eight-field release
+binding; changing any of them invalidates the binding.
+
 ## Required Evaluation Sets
 
 Every evolution validation run must declare four fixed sets:

@@ -164,7 +164,7 @@ def test_bootstrap_stable_release_is_idempotent_for_trusted_baseline(
                 WHERE target_component = ? AND state = 'stable'
                 """,
                 (TARGET_COMPONENT,),
-        ).fetchone()[0]
+            ).fetchone()[0]
             == 1
         )
 
@@ -200,10 +200,8 @@ def _json_row(connection: sqlite3.Connection, sql: str, params: tuple[Any, ...])
 
 def _serving_release_ids(connection: sqlite3.Connection) -> list[str]:
     return [
-        row[0]
-        for row in connection.execute("SELECT id FROM serving_strategy_releases ORDER BY id")
+        row[0] for row in connection.execute("SELECT id FROM serving_strategy_releases ORDER BY id")
     ]
-
 
 
 def _advance_to_canary(
@@ -348,11 +346,13 @@ def test_release_lifecycle_promotes_candidate_with_binding_and_audit_contract(
         finally:
             connection.set_trace_callback(None)
         begin_indexes = [
-            index for index, statement in enumerate(traced_sql)
+            index
+            for index, statement in enumerate(traced_sql)
             if statement.upper() == "BEGIN IMMEDIATE"
         ]
         canary_read_indexes = [
-            index for index, statement in enumerate(traced_sql)
+            index
+            for index, statement in enumerate(traced_sql)
             if (
                 "FROM task_trajectories tt JOIN task_evaluations te" in statement
                 and "json_extract(tt.evidence_refs_json" in statement
@@ -376,9 +376,9 @@ def test_release_lifecycle_promotes_candidate_with_binding_and_audit_contract(
             ReleaseState.CANARY,
             ReleaseState.STABLE,
         ]
-        assert {
-            audit.actor_role for audit in promoted.transition_audit[1:]
-        } == {EvolutionRole.PUBLISHER}
+        assert {audit.actor_role for audit in promoted.transition_audit[1:]} == {
+            EvolutionRole.PUBLISHER
+        }
 
         canary_row = connection.execute(
             """
@@ -486,9 +486,7 @@ def test_release_controller_rejects_contract_violations_before_publishing(
                 validation_report_ref=valid_binding.validation_report_ref,
                 canary_samples=5,
                 trajectory_ids=(),
-                validator_context=command_context_for_role(
-                    "validator-a", EvolutionRole.VALIDATOR
-                ),
+                validator_context=command_context_for_role("validator-a", EvolutionRole.VALIDATOR),
             )
 
         with pytest.raises(LookupError, match="release not found"):

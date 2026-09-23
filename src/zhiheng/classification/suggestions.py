@@ -127,8 +127,7 @@ class ModelClassificationProvider:
         response = self.gateway.complete(
             ModelRequest(
                 task_id=(
-                    f"{self.task_prefix}:"
-                    f"{sha256_json({'title': title, 'content': text_content})}"
+                    f"{self.task_prefix}:{sha256_json({'title': title, 'content': text_content})}"
                 ),
                 provider_id=self.provider_id,
                 model_id=self.model_id,
@@ -197,9 +196,10 @@ class ClassificationSuggestionService:
         owner_user_id: str,
         provider: ClassificationSuggestionProvider | None = None,
     ) -> list[ClassificationSuggestion]:
-        knowledge = session.execute(
-            text(
-                """
+        knowledge = (
+            session.execute(
+                text(
+                    """
                 SELECT ko.id, ko.title, ko.owner_user_id, eo.media_type,
                        coalesce(ko.summary, '') AS summary,
                        coalesce((SELECT group_concat(sc.raw_text, char(10))
@@ -211,9 +211,12 @@ class ClassificationSuggestionService:
                 LEFT JOIN evidence_objects eo ON eo.id = cv.evidence_object_id
                 WHERE ko.id = :id AND ko.lifecycle_status <> 'privacy_erased'
                 """
-            ),
-            {"id": knowledge_object_id},
-        ).mappings().first()
+                ),
+                {"id": knowledge_object_id},
+            )
+            .mappings()
+            .first()
+        )
         if knowledge is None:
             raise ValueError("knowledge object not found")
         if knowledge["owner_user_id"] not in {None, owner_user_id}:
@@ -292,9 +295,10 @@ class ClassificationSuggestionService:
                     "explanation": candidate.explanation,
                 },
             )
-            row = session.execute(
-                text(
-                    """
+            row = (
+                session.execute(
+                    text(
+                        """
                     SELECT id, knowledge_object_id, owner_user_id, candidate_json,
                            confidence, explanation, status
                     FROM classification_suggestions
@@ -304,13 +308,16 @@ class ClassificationSuggestionService:
                       AND status = 'pending'
                     ORDER BY created_at DESC LIMIT 1
                     """
-                ),
-                {
-                    "knowledge_object_id": knowledge_object_id,
-                    "owner_user_id": owner_user_id,
-                    "candidate_node_id": candidate.node_id,
-                },
-            ).mappings().first()
+                    ),
+                    {
+                        "knowledge_object_id": knowledge_object_id,
+                        "owner_user_id": owner_user_id,
+                        "candidate_node_id": candidate.node_id,
+                    },
+                )
+                .mappings()
+                .first()
+            )
             if row:
                 result.append(_suggestion_from_row(cast(Mapping[str, Any], row)))
         return result
@@ -426,17 +433,21 @@ class ClassificationSuggestionService:
     def _owned_suggestion(
         session: Session, suggestion_id: str, owner_user_id: str
     ) -> dict[str, Any]:
-        row = session.execute(
-            text(
-                """
+        row = (
+            session.execute(
+                text(
+                    """
                     SELECT id, knowledge_object_id, owner_user_id, candidate_json,
                        confidence, explanation, status
                 FROM classification_suggestions
                 WHERE id = :id AND owner_user_id = :owner
                 """
-            ),
-            {"id": suggestion_id, "owner": owner_user_id},
-        ).mappings().first()
+                ),
+                {"id": suggestion_id, "owner": owner_user_id},
+            )
+            .mappings()
+            .first()
+        )
         if row is None:
             raise ValueError("classification suggestion not found")
         return dict(row)

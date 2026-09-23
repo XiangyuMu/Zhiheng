@@ -37,8 +37,10 @@ except ImportError:  # Optional PDF parser dependencies are outside the MVP runt
     KNOWLEDGE_PARSE_PDF_JOB_TYPE = "knowledge.parse_pdf"
     PdfParseJobExecutor = object
     PdfParseJobResult = object
+
     def configured_pdf_parse_executor(*args: object, **kwargs: object) -> None:
         return None
+
 
 __all__ = [
     "KnowledgeIndexJobExecutor",
