@@ -173,6 +173,16 @@ def main() -> int:
     evidence["elapsed_seconds"] = round(time.monotonic() - start, 3)
     evidence["exit_code"] = process.returncode
     evidence["clean_after"] = not bool(git(repo, "status", "--porcelain", "--untracked-files=all"))
+    log_text = (output / "pytest.log").read_text(encoding="utf-8", errors="replace")
+    evidence["log_tail"] = log_text[-8000:]
+    collected_marker = "collected "
+    collected_start = log_text.rfind(collected_marker)
+    if collected_start >= 0:
+        collected_line = log_text[collected_start:].splitlines()[0]
+        try:
+            evidence["collected_tests"] = int(collected_line.split()[1])
+        except (IndexError, ValueError):
+            evidence["collected_tests"] = None
     try:
         evidence.update(parse_report(junit))
     except (OSError, ET.ParseError, ValueError) as error:
