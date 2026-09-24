@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import uuid
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -138,6 +140,25 @@ def test_active_generation_requires_exact_model_revision_dimension_and_purpose(
 
     with session_scope(session_factory) as session:
         chunk_id = _ingest(session, "精确匹配", artifacts)
+        source_id = str(
+            session.execute(
+                text("SELECT source_id FROM chunks WHERE id = :chunk_id"),
+                {"chunk_id": chunk_id},
+            ).scalar_one()
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO jobs (id, job_type, idempotency_key, payload_json, status)
+                VALUES (:id, 'knowledge.index', :key, :payload, 'completed')
+                """
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "key": f"vector-test:{source_id}",
+                "payload": json.dumps({"knowledge_object_id": source_id}),
+            },
+        )
         generation_id = repository.create_generation(
             session,
             model_id="BAAI/bge-m3",

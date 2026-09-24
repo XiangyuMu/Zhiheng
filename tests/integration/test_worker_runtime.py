@@ -34,6 +34,7 @@ def test_run_once_propagates_database_failures(
         raise _db_error()
 
     monkeypatch.setattr(worker_main, "process_worker_once", fail)
+    monkeypatch.setattr(worker_main, "_recover_configured_erase_journal", lambda _settings: None)
 
     with pytest.raises(OperationalError):
         worker_main.run_once(_settings())
