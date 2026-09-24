@@ -84,6 +84,15 @@ def _case_outcome(case: ET.Element) -> tuple[str, dict[str, str] | None]:
     return "passed", None
 
 
+def _matches_required(node: str, filename: str) -> bool:
+    return (
+        node == filename
+        or node.endswith("/" + filename)
+        or node.endswith("/" + filename + "::")
+        or ("/" + filename + "::") in node
+    )
+
+
 def _report_totals(root: ET.Element) -> dict[str, int | None]:
     if root.get("tests") is not None:
         suites = [root]
@@ -127,11 +136,16 @@ def parse_report(path: Path) -> dict[str, Any]:
     groups: dict[str, Any] = {}
     for node in failed:
         family = next((name for name, filename in REQUIRED.items() if filename in node), "unknown")
-        group = groups.setdefault(family, {"root_cause": "unconfirmed", "nodes": []})
+        detail = next((item for item in failure_details if item["node"] == node), None)
+        category = "collection_error" if detail and detail["kind"] == "error" else "test_failure"
+        group = groups.setdefault(
+            family,
+            {"root_cause": "unconfirmed", "observed_category": category, "nodes": []},
+        )
         group["nodes"].append(node)
     required: dict[str, Any] = {}
     for family, filename in REQUIRED.items():
-        selected = [case for case in cases if filename + "::" in case["node"]]
+        selected = [case for case in cases if _matches_required(case["node"], filename)]
         statuses = {case["status"] for case in selected}
         status = (
             "missing"
@@ -346,6 +360,7 @@ def main() -> int:
         and evidence.get("test_count", 0) > 0
         and evidence.get("report_complete") is True
         and evidence.get("collected_tests") == evidence.get("test_count")
+        and evidence.get("incremental_outcomes", {}).get("malformed_count", 0) == 0
         and not evidence.get("failed_nodes")
         and evidence["clean_after"]
         and all(

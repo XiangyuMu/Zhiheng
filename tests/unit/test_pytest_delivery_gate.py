@@ -61,6 +61,29 @@ def test_report_preserves_collection_errors(tmp_path: Path) -> None:
     assert result["report_complete"] is True
 
 
+def test_collection_error_counts_for_required_module(tmp_path: Path) -> None:
+    module = load_gate_module()
+    report = tmp_path / "report.xml"
+    report.write_text(
+        """<testsuites tests="1" failures="0" errors="1" skipped="0">
+        <testsuite tests="1" failures="0" errors="1" skipped="0">
+        <testcase name="tests/integration/test_answer_replay_authority.py">
+        <error message="import failed">trace</error>
+        </testcase></testsuite></testsuites>"""
+    )
+    result = module.parse_report(report)
+    assert result["required_evidence"]["privacy"]["status"] == "failed"
+
+
+def test_malformed_incremental_event_is_reported(tmp_path: Path) -> None:
+    module = load_gate_module()
+    outcomes = tmp_path / "outcomes.jsonl"
+    outcomes.write_text('{"event":"test_report"}\n{"truncated"\n')
+    result = module.load_incremental_outcomes(outcomes)
+    assert result["event_count"] == 1
+    assert result["malformed_count"] == 1
+
+
 def test_gate_rejects_nonfinite_timeout(tmp_path: Path) -> None:
     result = subprocess.run(
         [

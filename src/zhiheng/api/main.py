@@ -139,8 +139,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or get_settings()
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        startup_recovery_barrier(app_settings, session_factory)
-        initialize_retrieval_services(app, app_settings)
+        if not getattr(app.state, "startup_barrier_complete", False):
+            startup_recovery_barrier(app_settings, session_factory)
+            initialize_retrieval_services(app, app_settings)
+            app.state.startup_barrier_complete = True
         yield
 
     app = FastAPI(title="Zhiheng API", version=__version__, lifespan=lifespan)
@@ -155,6 +157,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is not None:
         startup_recovery_barrier(app_settings, session_factory)
         initialize_retrieval_services(app, app_settings)
+        app.state.startup_barrier_complete = True
     install_import_task_routes(app)
     from zhiheng.api.events import install_event_routes
 
