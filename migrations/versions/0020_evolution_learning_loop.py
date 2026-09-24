@@ -25,7 +25,9 @@ def upgrade() -> None:
         sa.Column("learning_eligible", sa.Boolean(), nullable=False),
         sa.Column("evidence_refs_json", sa.JSON(), nullable=False),
         sa.Column("details_json", sa.JSON(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.ForeignKeyConstraint(["trajectory_id"], ["task_trajectories.id"]),
         sa.ForeignKeyConstraint(["evaluation_id"], ["task_evaluations.id"]),
         sa.UniqueConstraint("signal_key", name="uq_trajectory_learning_signals_key"),
@@ -55,8 +57,12 @@ def upgrade() -> None:
         sa.Column("evidence_refs_json", sa.JSON(), nullable=False),
         sa.Column("status", sa.String(length=32), nullable=False, server_default="open"),
         sa.Column("proposal_id", sa.String(length=36), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.UniqueConstraint("cluster_key", name="uq_knowledge_gap_clusters_key"),
         sa.CheckConstraint("occurrence_count >= 0", name="ck_knowledge_gap_clusters_count"),
         sa.CheckConstraint(

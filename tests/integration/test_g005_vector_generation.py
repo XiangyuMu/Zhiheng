@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from tests.knowledge_helpers import stored_text_artifacts
 from zhiheng.core.config import Settings
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
+from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import StoredTextArtifacts
 from zhiheng.retrieval.vector_index import VectorIndexRepository
@@ -32,21 +33,19 @@ def _ingest(
     text_value: str,
     artifacts: StoredTextArtifacts,
 ) -> str:
-    return (
-        KnowledgeRepository()
-        .ingest_text(
-            session,
-            TextEvidenceInput(
-                title=title,
-                primary_domain_id="technology.ai",
-                text=text_value,
-                source_metadata={"fixture": "synthetic"},
-            ),
-            user_authority=KnowledgeUserAuthority("synthetic-test-user"),
-            stored_artifacts=artifacts,
-        )
-        .chunk_id
+    ingested = KnowledgeRepository().ingest_text(
+        session,
+        TextEvidenceInput(
+            title=title,
+            primary_domain_id="technology.ai",
+            text=text_value,
+            source_metadata={"fixture": "synthetic"},
+        ),
+        user_authority=KnowledgeUserAuthority("synthetic-test-user"),
+        stored_artifacts=artifacts,
     )
+    mark_formal_knowledge_indexed(session, ingested.knowledge_object_id)
+    return ingested.chunk_id
 
 
 def test_sqlite_vec_dependency_is_available_for_g005_vector_retrieval() -> None:

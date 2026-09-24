@@ -19,8 +19,12 @@ def upgrade() -> None:
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("owner_user_id", sa.String(36), nullable=False),
         sa.Column("title", sa.String(200), nullable=True),
-        sa.Column("created_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
+        ),
         sa.Column("archived_at", sa.DateTime(), nullable=True),
         sa.ForeignKeyConstraint(["owner_user_id"], ["auth_users.id"]),
     )
@@ -40,7 +44,9 @@ def upgrade() -> None:
         sa.Column("route", sa.String(32), nullable=False),
         sa.Column("stop_reason", sa.String(64), nullable=False),
         sa.Column("is_favorite", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("created_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
+        ),
         sa.ForeignKeyConstraint(["conversation_id"], ["answer_conversations.id"]),
         sa.ForeignKeyConstraint(["owner_user_id"], ["auth_users.id"]),
         sa.UniqueConstraint("conversation_id", "turn_index"),

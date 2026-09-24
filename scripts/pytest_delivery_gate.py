@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""Run the complete pytest suite in a clean checkout and retain delivery evidence."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import importlib.metadata
+import json
+import os
+import platform
+import signal
+import subprocess
+import sys
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Any
+
+REQUIRED = {
+    "privacy": "test_answer_replay_authority.py",
+    "g006_fixed_suite": "test_g006_runner.py",
+    "release_validation": "test_release_stage_gates.py",
+    "lifecycle": "test_g006_release_lifecycle.py",
+    "promotion_rollback": "test_g006_promotion_rollback.py",
+    "worker_recovery": "test_g006_worker_recovery.py",
+    "restic_restore": "test_restic_restore_install.py",
+}
+
+
+def parse_report(path: Path) -> dict[str, Any]:
+    """Extract observed outcomes; filename groups are not root-cause diagnoses."""
+    cases: list[dict[str, Any]] = []
+    for case in ET.parse(path).iter("testcase"):
+        classname = case.get("classname", "")
+        parts = classname.split(".")
+        boundary = next(
+            (i for i, part in enumerate(parts) if part.startswith("test_")), len(parts) - 1
+        )
+        filename = "/".join(parts[: boundary + 1]) + ".py"
+        node = "::".join([filename, *parts[boundary + 1 :], case.get("name", "")])
+        failure = case.find("failure")
+        error = case.find("error")
+        skipped = case.find("skipped")
+        status = "failed" if failure is not None or error is not None else "passed"
+        if skipped is not None:
+            status = "skipped"
+        cases.append(
+            {
+                "node": node,
+                "status": status,
+                "seconds": float(case.get("time", "0")),
+                "reason": skipped.get("message", "") if skipped is not None else "",
+            }
+        )
+    failed = [case["node"] for case in cases if case["status"] == "failed"]
+    groups: dict[str, Any] = {}
+    for node in failed:
+        family = next((name for name, filename in REQUIRED.items() if filename in node), "unknown")
+        group = groups.setdefault(family, {"root_cause": "unconfirmed", "nodes": []})
+        group["nodes"].append(node)
+    required: dict[str, Any] = {}
+    for family, filename in REQUIRED.items():
+        selected = [case for case in cases if filename + "::" in case["node"]]
+        statuses = {case["status"] for case in selected}
+        status = (
+            "missing"
+            if not selected
+            else "failed"
+            if "failed" in statuses
+            else "skipped"
+            if "skipped" in statuses
+            else "passed"
+        )
+        required[family] = {"status": status, "cases": selected}
+    return {
+        "test_count": len(cases),
+        "first_failure": failed[0] if failed else None,
+        "first_failure_order": "JUnit document order",
+        "failed_nodes": failed,
+        "skips": [case for case in cases if case["status"] == "skipped"],
+        "failure_groups": groups,
+        "required_evidence": required,
+        "slowest": sorted(cases, key=lambda case: case["seconds"], reverse=True)[:30],
+    }
+
+
+def git(repo: Path, *args: str) -> str:
+    return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+
+
+def terminate_group(process: subprocess.Popen[bytes]) -> None:
+    """Reap the pytest leader and kill remaining children, including external tools."""
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGTERM)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=5)
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGKILL)
+    process.wait()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, default=Path.cwd())
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--timeout", type=float, default=7200, help="Full-suite seconds (default 7200)"
+    )
+    args = parser.parse_args()
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
+    repo = Path(git(args.repo, "rev-parse", "--show-toplevel")).resolve()
+    output = args.output.resolve()
+    if output == repo or repo in output.parents:
+        parser.error("--output must be outside the checkout")
+    if git(repo, "status", "--porcelain", "--untracked-files=all"):
+        parser.error("delivery evidence requires a clean tracked and untracked working tree")
+    output.mkdir(parents=True, exist_ok=False)
+    junit = output / "pytest.xml"
+    command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-o",
+        "addopts=",
+        "--override-ini",
+        "testpaths=tests",
+        "--junitxml=" + str(junit),
+        "--durations=30",
+        "-ra",
+    ]
+    # Environment selection flags cannot silently turn this into a partial suite.
+    env = os.environ.copy()
+    env.pop("PYTEST_ADDOPTS", None)
+    versions = {}
+    for package in ("pytest", "sqlalchemy", "pydantic"):
+        try:
+            versions[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            versions[package] = "unavailable"
+    try:
+        versions["restic"] = subprocess.check_output(
+            ["restic", "version"], text=True, timeout=5, stderr=subprocess.DEVNULL
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        versions["restic"] = "unavailable"
+    evidence: dict[str, Any] = {
+        "sha": git(repo, "rev-parse", "HEAD"),
+        "command": command,
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "versions": versions,
+        "timeout_seconds": args.timeout,
+        "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "clean_before": True,
+        "status": "failed",
+        "termination": "completed",
+    }
+    start = time.monotonic()
+    with (output / "pytest.log").open("wb") as log:
+        process = subprocess.Popen(
+            command, cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
+        )
+        try:
+            process.wait(timeout=args.timeout)
+        except subprocess.TimeoutExpired:
+            evidence["termination"] = "timeout"
+            terminate_group(process)
+        except KeyboardInterrupt:
+            evidence["termination"] = "interrupted"
+            terminate_group(process)
+    evidence["elapsed_seconds"] = round(time.monotonic() - start, 3)
+    evidence["exit_code"] = process.returncode
+    evidence["clean_after"] = not bool(git(repo, "status", "--porcelain", "--untracked-files=all"))
+    try:
+        evidence.update(parse_report(junit))
+    except (OSError, ET.ParseError, ValueError) as error:
+        evidence["report_error"] = type(error).__name__
+    if (
+        evidence["termination"] == "completed"
+        and process.returncode == 0
+        and evidence.get("test_count", 0) > 0
+        and not evidence.get("failed_nodes")
+        and evidence["clean_after"]
+        and all(
+            item["status"] == "passed" for item in evidence.get("required_evidence", {}).values()
+        )
+        and "report_error" not in evidence
+    ):
+        evidence["status"] = "passed"
+    (output / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n")
+    print(json.dumps({"status": evidence["status"], "evidence": str(output / "evidence.json")}))
+    return 0 if evidence["status"] == "passed" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

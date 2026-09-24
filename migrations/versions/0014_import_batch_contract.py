@@ -43,8 +43,12 @@ def upgrade() -> None:
         sa.Column("retry_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("completed_at", sa.DateTime(), nullable=True),
         sa.Column("version_id", sa.String(36), nullable=True),
-        sa.Column("created_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False
+        ),
     )
     for column in item_columns:
         op.add_column("import_batch_items", column)

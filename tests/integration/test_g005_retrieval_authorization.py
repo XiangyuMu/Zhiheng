@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from tests.knowledge_helpers import stored_text_artifacts
 from zhiheng.core.config import Settings
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
+from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import StoredTextArtifacts
 from zhiheng.retrieval import (
@@ -56,6 +57,7 @@ def _ingest(
         user_authority=KnowledgeUserAuthority("synthetic-test-user"),
         stored_artifacts=artifacts,
     )
+    mark_formal_knowledge_indexed(session, ingested.knowledge_object_id)
     return ingested.chunk_id
 
 

@@ -1,10 +1,14 @@
 """Harden event serving lineage and owner authorization."""
+
 from collections.abc import Sequence
+
 from alembic import op
+
 revision = "0028_event_serving_authority"
 down_revision: str | Sequence[str] | None = "0027_event_history_cascade"
 branch_labels = None
 depends_on = None
+
 
 def upgrade() -> None:
     op.execute("DROP VIEW IF EXISTS serving_chunks")
@@ -23,6 +27,7 @@ def upgrade() -> None:
       WHERE c.status='ready' AND c.visibility_scope='formal'
         AND h.owner_user_id=e.owner_user_id AND ev.history_id=h.id
     """)
+
 
 def downgrade() -> None:
     op.execute("DROP VIEW IF EXISTS serving_chunks")

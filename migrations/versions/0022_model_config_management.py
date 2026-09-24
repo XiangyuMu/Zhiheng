@@ -16,18 +16,30 @@ depends_on = None
 def upgrade() -> None:
     op.add_column(
         "model_provider_configs",
-        sa.Column("text_model_allowlist_json", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
+        sa.Column(
+            "text_model_allowlist_json", sa.JSON(), nullable=False, server_default=sa.text("'[]'")
+        ),
     )
     op.add_column(
         "model_provider_configs",
-        sa.Column("multimodal_model_allowlist_json", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
+        sa.Column(
+            "multimodal_model_allowlist_json",
+            sa.JSON(),
+            nullable=False,
+            server_default=sa.text("'[]'"),
+        ),
     )
     op.add_column(
         "model_provider_configs",
         sa.Column("archived", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
-    op.add_column("model_provider_configs", sa.Column("health_status", sa.String(32), nullable=False, server_default="unknown"))
-    op.add_column("model_provider_configs", sa.Column("health_checked_at", sa.DateTime(timezone=True)))
+    op.add_column(
+        "model_provider_configs",
+        sa.Column("health_status", sa.String(32), nullable=False, server_default="unknown"),
+    )
+    op.add_column(
+        "model_provider_configs", sa.Column("health_checked_at", sa.DateTime(timezone=True))
+    )
     op.add_column("model_provider_configs", sa.Column("health_error", sa.Text()))
     op.add_column("model_call_audits", sa.Column("duration_ms", sa.Integer()))
     op.add_column("model_call_audits", sa.Column("diagnostic_code", sa.String(64)))
@@ -40,7 +52,9 @@ def upgrade() -> None:
         sa.Column("multimodal_provider_id", sa.String(36)),
         sa.Column("multimodal_model_id", sa.String(256)),
         sa.Column("etag", sa.String(128), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.ForeignKeyConstraint(["text_provider_id"], ["model_provider_configs.id"]),
         sa.ForeignKeyConstraint(["multimodal_provider_id"], ["model_provider_configs.id"]),
     )
@@ -53,11 +67,19 @@ def upgrade() -> None:
         sa.Column("diagnostic_code", sa.String(64)),
         sa.Column("diagnostic_message", sa.Text()),
         sa.Column("duration_ms", sa.Integer()),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.ForeignKeyConstraint(["provider_id"], ["model_provider_configs.id"]),
     )
-    op.create_index("ix_model_connectivity_audits_created", "model_connectivity_audits", ["created_at"])
-    op.create_index("ix_model_provider_configs_health", "model_provider_configs", ["health_status", "health_checked_at"])
+    op.create_index(
+        "ix_model_connectivity_audits_created", "model_connectivity_audits", ["created_at"]
+    )
+    op.create_index(
+        "ix_model_provider_configs_health",
+        "model_provider_configs",
+        ["health_status", "health_checked_at"],
+    )
 
     # The original allowlist trigger predates DeepSeek support. Replace it while
     # retaining the same fail-closed endpoint/revision checks.

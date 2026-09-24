@@ -14,14 +14,22 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("memory_candidates", sa.Column("confidence_explanation", sa.Text(), nullable=True))
-    op.add_column("memory_candidates", sa.Column("valid_from", sa.DateTime(timezone=True), nullable=True))
-    op.add_column("memory_candidates", sa.Column("valid_to", sa.DateTime(timezone=True), nullable=True))
+    op.add_column(
+        "memory_candidates", sa.Column("confidence_explanation", sa.Text(), nullable=True)
+    )
+    op.add_column(
+        "memory_candidates", sa.Column("valid_from", sa.DateTime(timezone=True), nullable=True)
+    )
+    op.add_column(
+        "memory_candidates", sa.Column("valid_to", sa.DateTime(timezone=True), nullable=True)
+    )
     op.add_column(
         "memory_candidates",
         sa.Column("time_sensitivity", sa.String(32), nullable=False, server_default="persistent"),
     )
-    op.add_column("memory_candidates", sa.Column("extracted_at", sa.DateTime(timezone=True), nullable=True))
+    op.add_column(
+        "memory_candidates", sa.Column("extracted_at", sa.DateTime(timezone=True), nullable=True)
+    )
     op.add_column("formal_memories", sa.Column("confidence_explanation", sa.Text(), nullable=True))
     op.add_column(
         "formal_memories",
@@ -39,12 +47,20 @@ def upgrade() -> None:
         sa.Column("message_end", sa.Integer(), nullable=True),
         sa.Column("excerpt", sa.Text(), nullable=True),
         sa.Column("support_type", sa.String(32), nullable=False, server_default="supporting"),
-        sa.Column("extracted_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "extracted_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.ForeignKeyConstraint(["candidate_id"], ["memory_candidates.id"]),
         sa.ForeignKeyConstraint(["candidate_version_id"], ["memory_candidate_versions.id"]),
-        sa.CheckConstraint("message_start IS NULL OR message_start >= 0", name="ck_memory_candidate_evidence_start"),
-        sa.CheckConstraint("message_end IS NULL OR message_end >= 0", name="ck_memory_candidate_evidence_end"),
+        sa.CheckConstraint(
+            "message_start IS NULL OR message_start >= 0", name="ck_memory_candidate_evidence_start"
+        ),
+        sa.CheckConstraint(
+            "message_end IS NULL OR message_end >= 0", name="ck_memory_candidate_evidence_end"
+        ),
         sa.CheckConstraint(
             "support_type in ('supporting', 'contradicting', 'context')",
             name="ck_memory_candidate_evidence_support",
@@ -77,7 +93,9 @@ def upgrade() -> None:
         sa.Column("formal_confidence", sa.Float(), nullable=True),
         sa.Column("resolution", sa.Text(), nullable=True),
         sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.ForeignKeyConstraint(["candidate_id"], ["memory_candidates.id"]),
         sa.ForeignKeyConstraint(["candidate_version_id"], ["memory_candidate_versions.id"]),
         sa.ForeignKeyConstraint(["formal_memory_id"], ["formal_memories.id"]),
@@ -106,7 +124,9 @@ def upgrade() -> None:
         sa.Column("remind_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("status", sa.String(32), nullable=False, server_default="pending"),
         sa.Column("kind", sa.String(32), nullable=False, server_default="expiring"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.Column("sent_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
             "target_type in ('memory_candidate', 'formal_memory')",
@@ -153,7 +173,9 @@ def downgrade() -> None:
     op.drop_index("ix_memory_conflicts_candidate", table_name="memory_conflicts")
     op.drop_index("ix_memory_conflicts_state_status", table_name="memory_conflicts")
     op.drop_table("memory_conflicts")
-    op.drop_index("ix_memory_candidate_evidence_conversation", table_name="memory_candidate_evidence")
+    op.drop_index(
+        "ix_memory_candidate_evidence_conversation", table_name="memory_candidate_evidence"
+    )
     op.drop_index("ix_memory_candidate_evidence_candidate", table_name="memory_candidate_evidence")
     op.drop_table("memory_candidate_evidence")
     op.drop_column("formal_memories", "time_sensitivity")

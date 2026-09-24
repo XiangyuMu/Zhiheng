@@ -278,8 +278,9 @@ class _RecordingRag:
         release_context: ReleaseContext | None = None,
         behavior: ReleaseBehaviorConfig | None = None,
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[dict[str, str]] | None = None,
     ) -> AnswerEnvelope:
-        del memory_context
+        del memory_context, conversation_context
         self.calls.append((release_context, behavior or ReleaseBehaviorConfig()))
         return AnswerEnvelope(
             answer="ok",

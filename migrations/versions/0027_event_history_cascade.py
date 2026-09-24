@@ -1,11 +1,14 @@
 """Invalidate event evidence atomically when its source history is deleted."""
+
 from collections.abc import Sequence
+
 from alembic import op
 
 revision = "0027_event_history_cascade"
 down_revision: str | Sequence[str] | None = "0026_event_raw_evidence"
 branch_labels = None
 depends_on = None
+
 
 def upgrade() -> None:
     op.execute("""
@@ -25,6 +28,7 @@ def upgrade() -> None:
           WHERE event_memory_id IN (SELECT id FROM event_memories WHERE source_history_id=OLD.id);
       END
     """)
+
 
 def downgrade() -> None:
     op.execute("DROP TRIGGER IF EXISTS trg_answer_history_event_erase")

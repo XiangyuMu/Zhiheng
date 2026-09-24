@@ -63,6 +63,10 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 "src/zhiheng/privacy/erase.py" = ["E501"]
 "src/zhiheng/retrieval/authorization.py" = ["E501"]
 "tests/integration/test_answer_replay_authority.py" = ["E501"]
+# Migration SQL is kept as readable statements even when a line exceeds the
+# Python formatting width; import order and syntax remain linted.
+"migrations/versions/*.py" = ["E501"]
+"src/zhiheng/jobs/knowledge_indexing.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

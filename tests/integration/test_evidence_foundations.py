@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from tests.knowledge_helpers import stored_text_artifacts
 from zhiheng.core.config import Settings
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
+from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import StoredTextArtifacts
 from zhiheng.privacy.erase import PrivacyEraseService
@@ -71,6 +72,7 @@ def test_ingest_text_creates_authoritative_rows_fts_and_outbox(tmp_path: Path) -
             user_authority=KnowledgeUserAuthority("synthetic-test-user"),
             stored_artifacts=artifacts,
         )
+        mark_formal_knowledge_indexed(session, ingested.knowledge_object_id)
         hits = repository.search_formal_fts(session, "中文 检索")
         outbox_count = session.execute(
             text("SELECT count(*) FROM outbox_events WHERE status = 'pending'")
@@ -91,6 +93,7 @@ def test_soft_delete_removes_knowledge_from_serving_search(tmp_path: Path) -> No
 
     with session_scope(session_factory) as session:
         knowledge_object_id = _ingest_demo_knowledge(session, artifacts)
+        mark_formal_knowledge_indexed(session, knowledge_object_id)
         assert repository.search_formal_fts(session, "中文 检索")
         repository.soft_delete_knowledge(session, knowledge_object_id)
         hits_after_delete = repository.search_formal_fts(session, "中文 检索")
@@ -193,6 +196,7 @@ def test_privacy_erase_requires_write_ahead_ledger_and_removes_serving_rows(
 
     with session_scope(session_factory) as session:
         knowledge_object_id = _ingest_demo_knowledge(session, artifacts)
+        mark_formal_knowledge_indexed(session, knowledge_object_id)
         with pytest.raises(ValueError, match="write-ahead intent"):
             erase_service.execute_knowledge_erase(
                 session,

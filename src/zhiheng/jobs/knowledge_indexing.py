@@ -20,6 +20,7 @@ from zhiheng.retrieval.embeddings import BgeM3QueryEmbedder, QueryEmbeddingUnava
 from zhiheng.retrieval.vector_index import VectorIndexRepository
 
 KNOWLEDGE_INDEX_JOB_TYPE = "knowledge.index"
+EVENT_INDEX_JOB_TYPE = "event.index"
 KNOWLEDGE_PARSE_PDF_JOB_TYPE = "knowledge.parse_pdf"
 KNOWLEDGE_JOB_TYPES = (KNOWLEDGE_INDEX_JOB_TYPE, KNOWLEDGE_PARSE_PDF_JOB_TYPE)
 
@@ -48,9 +49,7 @@ class ClaimedKnowledgeJob:
 
 
 class KnowledgeJobExecutorPort(Protocol):
-    def execute(
-        self, session_factory: sessionmaker[Session], job: ClaimedKnowledgeJob
-    ) -> Any: ...
+    def execute(self, session_factory: sessionmaker[Session], job: ClaimedKnowledgeJob) -> Any: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,7 +196,7 @@ class KnowledgeJobRepository:
                 SELECT id, job_type, idempotency_key, payload_json, attempts
                 FROM jobs
                 WHERE available_at <= CURRENT_TIMESTAMP
-                  AND job_type IN (:index_job_type, :parse_job_type)
+                  AND job_type IN (:index_job_type, :event_job_type, :parse_job_type)
                   AND (
                     status = 'pending'
                     OR (
@@ -213,6 +212,7 @@ class KnowledgeJobRepository:
                 ),
                 {
                     "index_job_type": KNOWLEDGE_INDEX_JOB_TYPE,
+                    "event_job_type": EVENT_INDEX_JOB_TYPE,
                     "parse_job_type": KNOWLEDGE_PARSE_PDF_JOB_TYPE,
                     "limit": limit,
                 },
@@ -235,7 +235,7 @@ class KnowledgeJobRepository:
                         attempts = attempts + 1,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = :job_id
-                      AND job_type IN (:index_job_type, :parse_job_type)
+                      AND job_type IN (:index_job_type, :event_job_type, :parse_job_type)
                       AND available_at <= CURRENT_TIMESTAMP
                       AND (
                         status = 'pending'
@@ -251,6 +251,7 @@ class KnowledgeJobRepository:
                 {
                     "job_id": row["id"],
                     "index_job_type": KNOWLEDGE_INDEX_JOB_TYPE,
+                    "event_job_type": EVENT_INDEX_JOB_TYPE,
                     "parse_job_type": KNOWLEDGE_PARSE_PDF_JOB_TYPE,
                     "worker_id": worker_id,
                     "lease_delta": f"+{lease_seconds} seconds",
@@ -469,7 +470,7 @@ class KnowledgeJobRepository:
                 WHERE id IN (
                     SELECT id FROM jobs
                     WHERE available_at <= CURRENT_TIMESTAMP
-                      AND job_type IN (:index_job_type, :parse_job_type)
+                      AND job_type IN (:index_job_type, :event_job_type, :parse_job_type)
                       AND status = 'processing'
                       AND lease_expires_at IS NOT NULL
                       AND lease_expires_at <= CURRENT_TIMESTAMP
@@ -481,6 +482,7 @@ class KnowledgeJobRepository:
                 ),
                 {
                     "index_job_type": KNOWLEDGE_INDEX_JOB_TYPE,
+                    "event_job_type": EVENT_INDEX_JOB_TYPE,
                     "parse_job_type": KNOWLEDGE_PARSE_PDF_JOB_TYPE,
                     "limit": limit,
                 },
@@ -587,11 +589,13 @@ class KnowledgeIndexJobExecutor:
         session_factory: sessionmaker[Session],
         job: ClaimedKnowledgeJob,
     ) -> KnowledgeIndexResult:
-        if job.job_type != KNOWLEDGE_INDEX_JOB_TYPE:
+        if job.job_type not in {KNOWLEDGE_INDEX_JOB_TYPE, EVENT_INDEX_JOB_TYPE}:
             raise ValueError(f"unsupported knowledge job type: {job.job_type}")
 
         with session_scope(session_factory) as session:
             self._require_current_job_lease(session, job)
+            if job.job_type == EVENT_INDEX_JOB_TYPE:
+                self._materialize_event_chunk(session, job)
             fts_indexed = KnowledgeRepository().rebuild_fts_index(session)
             serving_chunks = self._serving_chunks(session)
 
@@ -632,6 +636,53 @@ class KnowledgeIndexJobExecutor:
             fts_indexed=fts_indexed,
             vector_indexed=vector_indexed,
             generation_id=generation_id,
+        )
+
+    @staticmethod
+    def _materialize_event_chunk(session: Session, job: ClaimedKnowledgeJob) -> None:
+        event_id = str(job.payload.get("event_id") or "")
+        version_id = str(job.payload.get("version_id") or "")
+        generation = int(job.payload.get("generation") or 0)
+        row = (
+            session.execute(
+                text("""
+            SELECT e.id, v.id AS version_id, e.title, ev.excerpt, ev.quote_hash
+            FROM event_memories e
+            JOIN event_memory_versions v ON v.id=:version_id AND v.event_memory_id=e.id
+            JOIN event_memory_evidence ev ON ev.event_version_id=v.id
+            WHERE e.id=:event_id AND e.status='formal_current'
+              AND e.confirmation_generation=:generation
+            ORDER BY ev.id LIMIT 1
+        """),
+                {"event_id": event_id, "version_id": version_id, "generation": generation},
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            raise ValueError("event memory is no longer formally searchable")
+        text_value = str(row["excerpt"])
+        session.execute(
+            text("""
+            INSERT OR IGNORE INTO chunks
+              (id, source_type, source_id, source_version_id, chunk_no, title,
+               text, raw_text, segmented_text, span_start, span_end, quote_hash,
+               visibility_scope, confirmation_generation, status)
+            VALUES (:id, 'event_memory', :source_id, :version_id, 0, :title,
+                    :text, :text, :segmented, 0, :span_end, :quote_hash,
+                    'formal', :generation, 'ready')
+        """),
+            {
+                "id": f"event-chunk:{event_id}:{version_id}:{generation}",
+                "source_id": event_id,
+                "version_id": version_id,
+                "title": row["title"],
+                "text": text_value,
+                "segmented": text_value,
+                "span_end": len(text_value),
+                "quote_hash": row["quote_hash"],
+                "generation": generation,
+            },
         )
 
     @staticmethod
@@ -685,7 +736,7 @@ class KnowledgeIndexJobExecutor:
                 FROM jobs j
                 JOIN job_attempts ja ON ja.id = :attempt_id AND ja.job_id = j.id
                 WHERE j.id = :job_id
-                  AND j.job_type = :job_type
+                  AND j.job_type IN (:job_type, :event_job_type)
                   AND j.status = 'processing'
                   AND j.attempts = :attempts
                   AND j.lease_owner = :owner
@@ -698,6 +749,7 @@ class KnowledgeIndexJobExecutor:
             {
                 "job_id": job.id,
                 "job_type": KNOWLEDGE_INDEX_JOB_TYPE,
+                "event_job_type": EVENT_INDEX_JOB_TYPE,
                 "attempt_id": job.attempt_id,
                 "attempts": job.attempts,
                 "owner": job.lease_owner,

@@ -1,11 +1,14 @@
 """Expose formally published events through the shared serving index."""
+
 from collections.abc import Sequence
+
 from alembic import op
 
 revision = "0024_event_serving_chunks"
 down_revision: str | Sequence[str] | None = "0023_event_memory"
 branch_labels = None
 depends_on = None
+
 
 def upgrade() -> None:
     op.execute("DROP VIEW IF EXISTS serving_chunks")
@@ -28,6 +31,9 @@ def upgrade() -> None:
         AND ev.history_id=h.id
     """)
 
+
 def downgrade() -> None:
     op.execute("DROP VIEW IF EXISTS serving_chunks")
-    op.execute("""CREATE VIEW serving_chunks AS SELECT c.* FROM chunks c JOIN current_formal_knowledge k ON k.id=c.source_id AND k.current_version_id=c.source_version_id AND k.confirmation_generation=c.confirmation_generation WHERE c.source_type='knowledge_object' AND c.status='ready' AND c.visibility_scope='formal'""")
+    op.execute(
+        """CREATE VIEW serving_chunks AS SELECT c.* FROM chunks c JOIN current_formal_knowledge k ON k.id=c.source_id AND k.current_version_id=c.source_version_id AND k.confirmation_generation=c.confirmation_generation WHERE c.source_type='knowledge_object' AND c.status='ready' AND c.visibility_scope='formal'"""
+    )

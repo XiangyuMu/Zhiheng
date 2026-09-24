@@ -36,7 +36,9 @@ class CitationContextRepository:
                 text(
                     """
                 SELECT s.title, s.text, s.span_start, s.span_end,
-                       ko.object_kind, eo.media_type
+                       ko.object_kind, eo.media_type,
+                       NULL AS history_id, NULL AS conversation_id,
+                       NULL AS evidence_excerpt, NULL AS evidence_quote_hash
                 FROM serving_chunks s
                 JOIN current_formal_knowledge cfk
                   ON cfk.id=s.source_id AND cfk.current_version_id=s.source_version_id
@@ -46,6 +48,17 @@ class CitationContextRepository:
                 JOIN evidence_objects eo
                   ON eo.id=cv.evidence_object_id AND eo.status='active'
                 WHERE s.source_type=:source_type AND s.source_id=:source_id
+                  AND s.source_version_id=:source_version_id AND s.id=:chunk_id
+                UNION ALL
+                SELECT s.title, s.text, s.span_start, s.span_end,
+                       'event_memory' AS object_kind, 'text/plain' AS media_type,
+                       ev.history_id, ev.conversation_id,
+                       ev.excerpt AS evidence_excerpt, ev.quote_hash AS evidence_quote_hash
+                FROM serving_chunks s
+                JOIN event_memories e ON e.id=s.source_id AND e.status='formal_current'
+                JOIN event_memory_versions v ON v.id=s.source_version_id AND v.event_memory_id=e.id
+                JOIN event_memory_evidence ev ON ev.event_version_id=v.id
+                WHERE s.source_type='event_memory' AND s.source_id=:source_id
                   AND s.source_version_id=:source_version_id AND s.id=:chunk_id
                 """
                 ),

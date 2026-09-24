@@ -25,8 +25,12 @@ def upgrade() -> None:
         sa.Column("batch_size", sa.Integer(), nullable=False, server_default="100"),
         sa.Column("stats_json", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column("error_message", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.CheckConstraint(
             "status in ('planned', 'leased', 'running', 'completed', 'failed')",
             name="ck_maintenance_runs_status",
@@ -48,10 +52,14 @@ def upgrade() -> None:
         sa.Column("reason", sa.Text(), nullable=False),
         sa.Column("previous_state_json", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
         sa.Column("state", sa.String(32), nullable=False, server_default="pending"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.Column("applied_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["run_id"], ["maintenance_runs.id"]),
-        sa.UniqueConstraint("run_id", "target_type", "target_id", "action", name="uq_maintenance_action"),
+        sa.UniqueConstraint(
+            "run_id", "target_type", "target_id", "action", name="uq_maintenance_action"
+        ),
         sa.CheckConstraint(
             "target_type in ('memory_candidate', 'derived_index', 'evolution_artifact')",
             name="ck_maintenance_action_target",

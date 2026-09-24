@@ -16,6 +16,7 @@ from zhiheng.api.main import create_app
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import sha256_text
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
+from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
 from zhiheng.knowledge import (
     ExternalKnowledgeCandidateInput,
     KnowledgeRepository,
@@ -206,6 +207,7 @@ def test_external_confirmation_binds_expected_content_before_formal_serving(
             expected_content_sha256=sha256_text(text_value),
             user_authority=KnowledgeUserAuthority("synthetic-user"),
         )
+        mark_formal_knowledge_indexed(session, candidate.knowledge_object_id)
         hits = repository.search_formal_fts(session, "用户 确认")
         event_types = set(session.execute(text("SELECT event_type FROM outbox_events")).scalars())
         decision = (
