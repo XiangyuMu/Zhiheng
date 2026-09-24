@@ -467,3 +467,74 @@ def test_restore_timeout_terminates_transport_children(tmp_path: Path) -> None:
     time.sleep(2.1)
     assert not marker.exists()
     assert not list(tmp_path.glob("target.db.restic-restore.*"))
+
+
+@pytest.mark.parametrize("termination", [15, 2])
+def test_restore_signal_reaps_restic_and_transport_children(
+    tmp_path: Path, termination: int
+) -> None:
+    import signal
+    import time
+    from contextlib import suppress
+
+    binary = tmp_path / "fake-restic"
+    pid_file = tmp_path / "restic.pid"
+    marker = tmp_path / "transport-survived"
+    child_code = (
+        f"import time, pathlib; time.sleep(2); pathlib.Path({str(marker)!r}).touch(); "
+        "time.sleep(60)"
+    )
+    binary.write_text(
+        f"#!{sys.executable}\n"
+        "import os, pathlib, subprocess, sys, time\n"
+        f"child = subprocess.Popen([sys.executable, '-c', "
+        f"{child_code!r}])\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    database = tmp_path / "target.db"
+    database.write_bytes(b"unchanged")
+    journal = tmp_path / "journal.jsonl"
+    _empty_journal(journal)
+    env = _restore_env(
+        tmp_path / "repository",
+        str(binary),
+        "a" * 64,
+        database,
+        tmp_path / "objects",
+        journal,
+    )
+    with subprocess.Popen(
+        [sys.executable, "scripts/restore_restic.py"],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ) as process:
+        try:
+            deadline = time.monotonic() + 10
+            while not pid_file.exists() and time.monotonic() < deadline:
+                assert process.poll() is None
+                time.sleep(0.02)
+            assert pid_file.exists(), "restic did not start"
+            process.send_signal(termination)
+            stdout, stderr = process.communicate(timeout=5)
+            assert process.returncode == 128 + termination
+            assert RESTIC_PASSWORD not in stdout + stderr
+            with pytest.raises(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), 0)
+            time.sleep(2.1)
+            assert not marker.exists()
+            assert database.read_bytes() == b"unchanged"
+            assert not list(tmp_path.glob("target.db.restic-restore.*"))
+        finally:
+            # Never leave processes from a failing regression behind.
+            if pid_file.exists():
+                with suppress(ProcessLookupError):
+                    os.killpg(int(pid_file.read_text()), signal.SIGKILL)
+            if process.poll() is None:
+                process.kill()
+            process.wait()

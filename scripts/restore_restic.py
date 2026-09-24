@@ -21,6 +21,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from types import FrameType
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -50,7 +51,19 @@ class ResticRestoreError(RuntimeError):
         )
 
 
+def _interrupt_restore(signum: int, frame: FrameType | None) -> None:
+    # Let finally blocks clean staging and reap the child before exiting.
+    # Repeated shutdown signals must not interrupt that cleanup.
+    for termination in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(termination, signal.SIG_IGN)
+    raise SystemExit(128 + signum)
+
+
 def main() -> None:
+    previous_handlers = {
+        termination: signal.signal(termination, _interrupt_restore)
+        for termination in (signal.SIGTERM, signal.SIGINT)
+    }
     previous_umask = os.umask(0o077)
     try:
         try:
@@ -59,6 +72,8 @@ def main() -> None:
             raise SystemExit(str(exc)) from None
     finally:
         os.umask(previous_umask)
+        for termination, handler in previous_handlers.items():
+            signal.signal(termination, handler)
 
 
 def _restore_from_env() -> None:
@@ -182,6 +197,12 @@ def _run_restic_restore(binary: str, snapshot_id: str, target: Path) -> None:
                     "Restore exceeded its time limit; retry or increase the configured timeout.",
                     time.monotonic() - started,
                 ) from None
+            finally:
+                # The outer runner can terminate this CLI before its own timeout.
+                # Reap the independent restic group on every exit, including signals.
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
     except OSError:
         raise ResticRestoreError(
             "RESTIC_RESTORE_UNAVAILABLE",

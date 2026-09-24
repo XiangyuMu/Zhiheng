@@ -50,3 +50,10 @@ the staging directory is removed before returning, without replacing the live
 database. This deadline covers restic execution, not the later SQLite validation
 and installation steps. Existing preflight validation failures retain their
 current diagnostics.
+
+On SIGTERM or SIGINT, the restore CLI unwinds through the same cleanup path:
+its independent restic process group is killed, the restic leader is reaped,
+and staging is removed. Exit codes are 143 and 130 respectively. Repeated
+termination signals are ignored during cleanup; previous signal handlers are
+restored when the CLI returns. SIGKILL cannot be intercepted, so outer runners
+must allow a grace period for normal termination before escalating.
