@@ -20,13 +20,25 @@ from zhiheng.evolution.releases import ReleaseController
 from zhiheng.evolution.trajectory_repository import TrajectoryRepository
 
 
+@pytest.mark.parametrize("failure", ["missing_restic", "unindexed_knowledge"])
 def test_execution_uses_immutable_proposal_and_records_failed_suite(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    failure: str,
 ) -> None:
-    # Exercise a real dependency failure independently of the host's restic setup.
-    monkeypatch.delenv("ZHIHENG_RESTIC_BINARY", raising=False)
-    monkeypatch.setattr("zhiheng.evaluation.g006_recovery_case.shutil.which", lambda _: None)
+    if failure == "missing_restic":
+        # Exercise a real dependency failure independently of the host's setup.
+        monkeypatch.delenv("ZHIHENG_RESTIC_BINARY", raising=False)
+        monkeypatch.setattr("zhiheng.evaluation.g006_recovery_case.shutil.which", lambda _: None)
+    else:
+        if not (os.environ.get("ZHIHENG_RESTIC_BINARY") or shutil.which("restic")):
+            pytest.skip("real restic required to isolate the serving-fixture regression")
+        # Reproduce the original serving-fixture regression without weakening
+        # production authorization or manufacturing evaluation scores.
+        monkeypatch.setattr(
+            "zhiheng.evaluation.g006_knowledge_case.mark_formal_knowledge_indexed",
+            lambda session, knowledge_object_id: None,
+        )
     database = tmp_path / "execution.sqlite"
     connection = _upgrade(database)
     try:
@@ -81,7 +93,23 @@ def test_execution_uses_immutable_proposal_and_records_failed_suite(
             with pytest.raises(ValueError, match="differ from protected execution"):
                 ReleaseController._validate_execution_case_links(record, [linked])
         assert record["report"]["promotion_eligible"] is False
-        assert record["report"]["failure_count"] == 1
+        assert record["evaluation_contract"]["status"] == "failed"
+        assert record["report"]["failure_count"] == (2 if failure == "unindexed_knowledge" else 1)
+        boundary = next(
+            case
+            for case in record["cases"]
+            if case["case_id"] == "boundary-rag-citation-conflict-001"
+        )
+        if failure == "unindexed_knowledge":
+            assert {case["case_id"] for case in record["cases"] if case["failure_tags"]} == {
+                "boundary-rag-citation-conflict-001",
+                "migration-answer-strategy-transfer-001",
+            }
+            assert "assertion_failed:rag.recall_at_10" in boundary["failure_tags"]
+            assert "assertion_failed:rag.citation_coverage" in boundary["failure_tags"]
+            assert "assertion_failed:rag.conflict_detected" in boundary["failure_tags"]
+        else:
+            assert boundary["failure_tags"] == []
         assert service.load(record["id"]) == record
         assert service.execute(proposal_id=proposal.proposal_id, idempotency_key="probe") == record
         with sqlite3.connect(database) as gate_connection:
@@ -100,6 +128,9 @@ def test_execution_uses_immutable_proposal_and_records_failed_suite(
                 gate.record_release_validation_evidence(
                     **validation, evaluation_run_id=record["id"]
                 )
+            stable = gate.load_default_head(binding.target_component)
+            assert stable is not None
+            assert stable.release_id == binding.rollback_target_id
             with pytest.raises(ValueError, match="protected execution reference"):
                 gate._validate_report_execution(
                     {},
@@ -182,6 +213,7 @@ def test_real_passing_execution_validates_but_does_not_approve(tmp_path: Path) -
     try:
         record = service.execute(proposal_id=proposal.proposal_id, idempotency_key="passing")
         assert record["report"]["promotion_eligible"] is True
+        assert record["evaluation_contract"]["status"] == "passed"
         assert record["report"]["failure_count"] == 0
         validation_kwargs = dict(
             binding=binding,
