@@ -435,17 +435,21 @@ def test_restore_cli_reports_safe_failure_and_cleans_staging(
 
 
 def test_restore_timeout_terminates_transport_children(tmp_path: Path) -> None:
-    import shlex
     import time
 
     marker = tmp_path / "child-survived"
     pid_file = tmp_path / "restic.pid"
     binary = tmp_path / "fake-restic"
+    child_code = (
+        f"import time, pathlib; time.sleep(10); pathlib.Path({str(marker)!r}).touch(); "
+        "time.sleep(60)"
+    )
     binary.write_text(
-        "#!/bin/sh\n"
-        f"echo $$ > {shlex.quote(str(pid_file))}\n"
-        f"(sleep 2; touch {shlex.quote(str(marker))}) &\n"
-        "wait\n",
+        f"#!{sys.executable}\n"
+        "import pathlib, subprocess, sys, time\n"
+        f"child = subprocess.Popen([sys.executable, '-c', {child_code!r}])\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(child.pid), encoding='utf-8')\n"
+        "time.sleep(60)\n",
         encoding="utf-8",
     )
     binary.chmod(0o700)
@@ -459,12 +463,12 @@ def test_restore_timeout_terminates_transport_children(tmp_path: Path) -> None:
         tmp_path / "objects",
         journal,
     )
-    env["ZHIHENG_RESTIC_RESTORE_TIMEOUT_SECONDS"] = "0.5"
+    env["ZHIHENG_RESTIC_RESTORE_TIMEOUT_SECONDS"] = "5.0"
     result = _run_restore(env, check=False)
     assert json.loads(result.stderr)["error_code"] == "RESTIC_RESTORE_TIMEOUT"
     with pytest.raises(ProcessLookupError):
         os.kill(int(pid_file.read_text()), 0)
-    time.sleep(2.1)
+    time.sleep(10.1)
     assert not marker.exists()
     assert not list(tmp_path.glob("target.db.restic-restore.*"))
 
