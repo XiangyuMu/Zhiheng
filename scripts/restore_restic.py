@@ -189,9 +189,6 @@ def _run_restic_restore(binary: str, snapshot_id: str, target: Path) -> None:
             try:
                 returncode = process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
-                with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
                 raise ResticRestoreError(
                     "RESTIC_RESTORE_TIMEOUT",
                     "Restore exceeded its time limit; retry or increase the configured timeout.",
