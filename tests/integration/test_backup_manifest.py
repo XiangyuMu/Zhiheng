@@ -131,6 +131,7 @@ def test_real_restic_encrypts_and_restores_bundle(tmp_path: Path) -> None:
         env=env,
         capture_output=True,
         check=True,
+        timeout=60,
     )
     manifests = list(restored.rglob("manifest.json"))
     assert len(manifests) == 1

@@ -9,14 +9,17 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import tempfile
+import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -32,10 +35,28 @@ SNAPSHOT_PATTERN = re.compile(r"[0-9a-f]{64}")
 SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 
 
+class ResticRestoreError(RuntimeError):
+    """Safe diagnostic: never carry command output or repository credentials."""
+
+    def __init__(self, code: str, reason: str, elapsed: float) -> None:
+        super().__init__(
+            json.dumps(
+                {
+                    "error_code": code,
+                    "reason": reason,
+                    "elapsed_seconds": round(elapsed, 3),
+                }
+            )
+        )
+
+
 def main() -> None:
     previous_umask = os.umask(0o077)
     try:
-        _restore_from_env()
+        try:
+            _restore_from_env()
+        except ResticRestoreError as exc:
+            raise SystemExit(str(exc)) from None
     finally:
         os.umask(previous_umask)
 
@@ -131,12 +152,55 @@ def _refuse_sqlite_sidecars(database: Path) -> None:
 
 def _run_restic_restore(binary: str, snapshot_id: str, target: Path) -> None:
     target.mkdir(mode=0o700)
-    subprocess.run(
-        [binary, "restore", snapshot_id, "--target", str(target), "--verify"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    raw_timeout = os.environ.get("ZHIHENG_RESTIC_RESTORE_TIMEOUT_SECONDS", "30")
+    try:
+        timeout = float(raw_timeout)
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError
+    except ValueError:
+        raise ResticRestoreError(
+            "RESTIC_RESTORE_CONFIG_INVALID", "Restore timeout must be positive and finite.", 0
+        ) from None
+    started = time.monotonic()
+    try:
+        # A separate process group also bounds transport subprocesses (for example SSH).
+        # Discard raw output: restic may echo repository URLs or credentials on failure.
+        with subprocess.Popen(
+            [binary, "restore", snapshot_id, "--target", str(target), "--verify"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        ) as process:
+            try:
+                returncode = process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+                raise ResticRestoreError(
+                    "RESTIC_RESTORE_TIMEOUT",
+                    "Restore exceeded its time limit; retry or increase the configured timeout.",
+                    time.monotonic() - started,
+                ) from None
+    except OSError:
+        raise ResticRestoreError(
+            "RESTIC_RESTORE_UNAVAILABLE",
+            "Unable to execute restic; check its installation.",
+            time.monotonic() - started,
+        ) from None
+    errors = {
+        11: ("RESTIC_REPOSITORY_LOCKED", "Repository is locked; retry after the active operation."),
+        12: (
+            "RESTIC_AUTH_FAILED",
+            "Repository authentication failed; check configured credentials.",
+        ),
+    }
+    if returncode != 0:
+        code, reason = errors.get(
+            returncode,
+            ("RESTIC_RESTORE_FAILED", "Restic restore failed; verify repository and snapshot."),
+        )
+        raise ResticRestoreError(code, reason, time.monotonic() - started)
 
 
 def _single_restored_bundle(root: Path) -> Path:

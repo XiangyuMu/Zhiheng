@@ -137,6 +137,7 @@ def _run_restore(env: dict[str, str], *, check: bool = True) -> subprocess.Compl
         capture_output=True,
         text=True,
         check=check,
+        timeout=60,
     )
 
 
@@ -385,3 +386,84 @@ def test_restic_restore_refuses_while_serving_lock_is_active(tmp_path: Path) -> 
 
     assert result.returncode != 0
     assert target_db.read_bytes() == before_db
+
+
+@pytest.mark.parametrize(
+    ("behavior", "code", "timeout"),
+    [
+        ("import time; time.sleep(60)", "RESTIC_RESTORE_TIMEOUT", "0.2"),
+        ("sys.exit(11)", "RESTIC_REPOSITORY_LOCKED", "10"),
+        ("sys.exit(12)", "RESTIC_AUTH_FAILED", "10"),
+        ("sys.exit(1)", "RESTIC_RESTORE_FAILED", "10"),
+        ("sys.exit(0)", "RESTIC_RESTORE_CONFIG_INVALID", "nan"),
+        ("sys.exit(0)", "RESTIC_RESTORE_CONFIG_INVALID", "0"),
+        ("sys.exit(0)", "RESTIC_RESTORE_CONFIG_INVALID", "invalid"),
+    ],
+)
+def test_restore_cli_reports_safe_failure_and_cleans_staging(
+    tmp_path: Path, behavior: str, code: str, timeout: str
+) -> None:
+    binary = tmp_path / "fake-restic"
+    binary.write_text(
+        f"#!{sys.executable}\nimport sys\n"
+        f"print({RESTIC_PASSWORD!r}, file=sys.stderr, flush=True)\n{behavior}\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    database = tmp_path / "target.db"
+    database.write_bytes(b"original database")
+    journal = tmp_path / "journal.jsonl"
+    _empty_journal(journal)
+    env = _restore_env(
+        tmp_path / "repository",
+        str(binary),
+        "a" * 64,
+        database,
+        tmp_path / "objects",
+        journal,
+    )
+    env["ZHIHENG_RESTIC_RESTORE_TIMEOUT_SECONDS"] = timeout
+    result = _run_restore(env, check=False)
+    assert result.returncode != 0
+    diagnostic = json.loads(result.stderr)
+    assert diagnostic["error_code"] == code
+    assert diagnostic["reason"]
+    assert diagnostic["elapsed_seconds"] >= 0
+    assert RESTIC_PASSWORD not in result.stderr + result.stdout
+    assert database.read_bytes() == b"original database"
+    assert not list(tmp_path.glob("target.db.restic-restore.*"))
+
+
+def test_restore_timeout_terminates_transport_children(tmp_path: Path) -> None:
+    import shlex
+    import time
+
+    marker = tmp_path / "child-survived"
+    pid_file = tmp_path / "restic.pid"
+    binary = tmp_path / "fake-restic"
+    binary.write_text(
+        "#!/bin/sh\n"
+        f"echo $$ > {shlex.quote(str(pid_file))}\n"
+        f"(sleep 2; touch {shlex.quote(str(marker))}) &\n"
+        "wait\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    journal = tmp_path / "journal.jsonl"
+    _empty_journal(journal)
+    env = _restore_env(
+        tmp_path / "repository",
+        str(binary),
+        "a" * 64,
+        tmp_path / "target.db",
+        tmp_path / "objects",
+        journal,
+    )
+    env["ZHIHENG_RESTIC_RESTORE_TIMEOUT_SECONDS"] = "0.5"
+    result = _run_restore(env, check=False)
+    assert json.loads(result.stderr)["error_code"] == "RESTIC_RESTORE_TIMEOUT"
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+    time.sleep(2.1)
+    assert not marker.exists()
+    assert not list(tmp_path.glob("target.db.restic-restore.*"))

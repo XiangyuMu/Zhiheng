@@ -29,3 +29,24 @@
 密码只通过环境变量注入，不得写入仓库或命令行参数。
 
 官方参考：[仓库初始化与密码](https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html)、[备份与返回码](https://restic.readthedocs.io/en/stable/040_backup.html)、[按 snapshot ID 恢复](https://restic.readthedocs.io/en/stable/050_restore.html)。
+
+### Restic restore execution deadline
+
+The restore CLI bounds the restic subprocess (including its transport process
+group) with a 30-second default deadline. Set
+`ZHIHENG_RESTIC_RESTORE_TIMEOUT_SECONDS` to a positive, finite number of seconds
+for larger repositories. Outer job/test deadlines must allow additional time for
+journal replay, bundle validation and installation.
+
+On a restic failure the CLI exits nonzero and writes a JSON diagnostic to stderr
+with `error_code`, `reason` and `elapsed_seconds`. Codes are
+`RESTIC_RESTORE_TIMEOUT`, `RESTIC_REPOSITORY_LOCKED` (restic exit 11),
+`RESTIC_AUTH_FAILED` (exit 12), `RESTIC_RESTORE_FAILED` (other nonzero exits),
+`RESTIC_RESTORE_UNAVAILABLE` and `RESTIC_RESTORE_CONFIG_INVALID`.
+Older restic versions without distinct exit codes use the generic failure code.
+Raw subprocess output is discarded so repository URLs and credentials cannot
+appear in these diagnostics. A timeout kills and reaps the restic process group;
+the staging directory is removed before returning, without replacing the live
+database. This deadline covers restic execution, not the later SQLite validation
+and installation steps. Existing preflight validation failures retain their
+current diagnostics.
