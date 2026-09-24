@@ -467,9 +467,11 @@ def answer_question(
         )
         if snapshot.digest != response.memory_context_digest:
             raise HTTPException(status_code=409, detail="answer memory context changed")
-        # Erase lineage follows the same formal references the answer reported.
-        # Candidate and merely loaded context entries must not become answer lineage.
-        memory_source_ids = [ref.formal_memory_id for ref in response.personalization_refs]
+        # Erasure lineage follows the authorized memory context that was supplied
+        # to answer generation, rather than model-reported personalization refs.
+        # A provider may omit refs from its response while still receiving and
+        # using formal memory context; those memories must remain erasable.
+        memory_source_ids = [entry.formal_memory_id for entry in snapshot.entries]
     _complete_operation_receipt(
         session,
         receipt_id,
