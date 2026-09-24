@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import sys
 import types
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
 import pytest
+from sqlalchemy.orm import Session
 
 from tests.query_session_stub import QuerySessionStub
 from zhiheng.core.ids import sha256_text
@@ -116,7 +117,7 @@ class _Model:
         self.manifests: list[AuthorizedContextManifest] = []
         self.citations_seen: list[tuple[Citation, ...]] = []
         self.max_output_tokens_seen: list[int | None] = []
-        self.conversation_context_seen: list[Sequence[dict[str, str]] | None] = []
+        self.conversation_context_seen: list[Sequence[Mapping[str, str]] | None] = []
 
     def generate_answer(
         self,
@@ -126,7 +127,7 @@ class _Model:
         citations: Sequence[Citation],
         max_output_tokens: int | None = None,
         memory_context: MemoryContextSnapshot | None = None,
-        conversation_context: Sequence[dict[str, str]] | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> GeneratedAnswer:
         del memory_context
         self.calls += 1
@@ -285,11 +286,11 @@ def test_current_conversation_context_reaches_answer_model() -> None:
 
     context = [{"query": "前一问", "answer": "当前会话的前文"}]
     answer = service.answer(
-        QuerySessionStub(),
+        Session(),
         "当前问题",
         route=QueryRoute.HYBRID,
         conversation_context=context,
-    )  # type: ignore[arg-type]
+    )
 
     assert answer.stop_reason is StopReason.COMPLETED
     assert model.conversation_context_seen == [context]

@@ -1,9 +1,16 @@
 from pathlib import Path
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+from httpx import Response
 
 from tests.integration.test_memory_api import _client, _headers, _login
 
 
-def _source_and_draft(client, csrf: str, suffix: str, claim: str, premise: str) -> dict:
+def _source_and_draft(
+    client: TestClient, csrf: str, suffix: str, claim: str, premise: str
+) -> dict[str, Any]:
     source = client.post(
         "/v1/conclusions/sources",
         json={"text": f"来源 {suffix}"},
@@ -23,7 +30,7 @@ def _source_and_draft(client, csrf: str, suffix: str, claim: str, premise: str) 
         headers=_headers(csrf, f"relation-draft-{suffix}"),
     )
     assert draft.status_code == 200
-    return draft.json()
+    return dict(draft.json())
 
 
 def test_formal_conclusion_gets_explainable_relation_proposal_and_review_decision(
@@ -145,13 +152,15 @@ def test_concurrent_relation_approvals_have_one_decision(tmp_path: Path) -> None
     relation = client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"][0]
     barrier = Barrier(2)
 
-    def approve(index):
+    def approve(index: int) -> Response:
         barrier.wait(timeout=10)
-        return client.post(
+        response = client.post(
             f"/v1/conclusions/relations/{relation['id']}/approve",
             json={},
             headers=_headers(csrf, f"race-approve-{index}"),
         )
+        assert isinstance(response, Response)
+        return response
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         responses = list(pool.map(approve, range(2)))
@@ -292,7 +301,9 @@ def test_duplicate_relation_reuses_existing_knowledge_object(tmp_path: Path) -> 
     assert approved.json()["knowledge_id"] == first.json()["knowledge_id"]
 
 
-def test_formalization_failure_rolls_back_and_retry_recovers(tmp_path, monkeypatch):
+def test_formalization_failure_rolls_back_and_retry_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from sqlalchemy import text
 
     from zhiheng.knowledge import KnowledgeRepository
@@ -312,7 +323,7 @@ def test_formalization_failure_rolls_back_and_retry_recovers(tmp_path, monkeypat
     relation = client.get(f"/v1/conclusions/{new['id']}/relations").json()["items"][0]
     original = KnowledgeRepository.ingest_text
 
-    def fail(*args, **kwargs):
+    def fail(*args: Any, **kwargs: Any) -> None:
         original(*args, **kwargs)
         raise ValueError("injected failure after indexing")
 
@@ -332,7 +343,7 @@ def test_formalization_failure_rolls_back_and_retry_recovers(tmp_path, monkeypat
     assert client.post(url, json={}, headers=headers).status_code == 200
 
 
-def test_confirmed_conflict_is_not_unconditional_retrieval(tmp_path):
+def test_confirmed_conflict_is_not_unconditional_retrieval(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
     csrf = _login(client)
     old = _source_and_draft(client, csrf, "conflict-old", "复习有效", "固定条件")

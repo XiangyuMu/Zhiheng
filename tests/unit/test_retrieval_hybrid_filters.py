@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sqlalchemy.orm import Session
+
 from zhiheng.retrieval.contracts import RetrievalCandidate, RetrievalSource
 from zhiheng.retrieval.hybrid import DeterministicReranker
 from zhiheng.retrieval.tokenizer import JiebaChineseTokenizer
@@ -42,7 +44,7 @@ def test_default_reranker_is_stable_and_rewards_retriever_agreement() -> None:
         _candidate("c", 0.7, (RetrievalSource.VECTOR,)),
     ]
 
-    ranked = reranker.rerank(None, "中文检索", candidates, limit=3)
+    ranked = reranker.rerank(Session(), "中文检索", candidates, limit=3)
 
     assert [candidate.chunk_id for candidate in ranked] == ["a", "b", "c"]
     assert [candidate.rank for candidate in ranked] == [1, 2, 3]

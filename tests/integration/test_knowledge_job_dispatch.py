@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from zhiheng.knowledge.pdf_worker import (
     ParserManifestReference,
     ParserReceipt,
     ParserStatus,
+    ParserWorkerClient,
 )
 
 
@@ -103,7 +105,7 @@ def test_dispatches_parse_and_index_jobs_to_their_respective_executors(
     assert completed == 2
     assert index_executor.jobs == ["knowledge.index"]
     assert parse_executor.jobs == ["knowledge.parse_pdf"]
-    assert statuses == [
+    assert [tuple(row) for row in statuses] == [
         ("knowledge.index", "completed"),
         ("knowledge.parse_pdf", "completed"),
     ]
@@ -166,7 +168,7 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
             },
         )
 
-    manifest = {
+    manifest: dict[str, object] = {
         "schema_version": "pdf-parser.manifest.v1",
         "task_id": task_id,
         "source": {
@@ -215,11 +217,14 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
         "artifacts": [],
     }
 
-    class _Parser:
-        def submit(self, _request: object) -> ParserReceipt:
+    class _Parser(ParserWorkerClient):
+        def __init__(self) -> None:
+            pass
+
+        def submit(self, request: object) -> ParserReceipt:
             return ParserReceipt("attempt-1", "accepted")
 
-        def status(self, _attempt_id: str) -> ParserStatus:
+        def status(self, attempt_id: str) -> ParserStatus:
             return ParserStatus(
                 "attempt-1",
                 "succeeded",
@@ -227,7 +232,9 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
                 None,
             )
 
-        def load_manifest(self, _reference: object, *, read_bytes: object) -> dict[str, object]:
+        def load_manifest(
+            self, reference: ParserManifestReference, *, read_bytes: Callable[[str], bytes]
+        ) -> dict[str, object]:
             return manifest
 
     class _Store:

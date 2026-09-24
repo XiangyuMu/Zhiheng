@@ -1,7 +1,7 @@
 from zhiheng.conclusions.relations import relation_kind
 
 
-def _payload(claim: str, premise: str = "固定时间") -> dict:
+def _payload(claim: str, premise: str = "固定时间") -> dict[str, object]:
     return {"claim": claim, "premises": [{"text": premise, "confirmed": False}]}
 
 

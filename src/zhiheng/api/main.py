@@ -28,7 +28,7 @@ from zhiheng.api.knowledge import install_knowledge_routes
 from zhiheng.api.knowledge_workspace import install_knowledge_workspace_routes
 from zhiheng.api.memory import install_memory_routes
 from zhiheng.api.personal_updates import install_personal_update_routes
-from zhiheng.api.retrieval import install_retrieval_routes
+from zhiheng.api.retrieval import initialize_retrieval_services, install_retrieval_routes
 from zhiheng.api.review import install_review_routes
 from zhiheng.api.taxonomy import install_taxonomy_routes
 from zhiheng.auth import SessionService
@@ -140,19 +140,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         startup_recovery_barrier(app_settings, session_factory)
+        initialize_retrieval_services(app, app_settings)
         yield
 
     app = FastAPI(title="Zhiheng API", version=__version__, lifespan=lifespan)
     engine = create_sqlite_engine(app_settings)
     session_factory = create_session_factory(engine)
-    if settings is not None:
-        startup_recovery_barrier(app_settings, session_factory)
     session_service = SessionService()
     app.state.session_factory = session_factory
     app.state.settings = app_settings
     # Idempotency records are intentionally response-only and contain no secret
     # material. A durable audit table can replace this process-local cache later.
     app.state.model_config_idempotency = {}
+    if settings is not None:
+        startup_recovery_barrier(app_settings, session_factory)
+        initialize_retrieval_services(app, app_settings)
     install_import_task_routes(app)
     from zhiheng.api.events import install_event_routes
 

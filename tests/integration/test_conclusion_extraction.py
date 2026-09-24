@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from fastapi import FastAPI
 from sqlalchemy import text
 
 from tests.integration.test_g005_api_impl import _client, _headers, _login, _seed
@@ -13,6 +14,7 @@ def test_persisted_conversation_creates_multiple_reviewable_conclusion_drafts(
     tmp_path: Path,
 ) -> None:
     client, factory = _client(tmp_path)
+    assert isinstance(client.app, FastAPI)
     csrf = _login(client)
     _seed(client.app.state.session_factory, tmp_path)
     conversation = client.post(

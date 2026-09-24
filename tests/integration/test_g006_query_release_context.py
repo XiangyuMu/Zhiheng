@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -51,6 +51,7 @@ from zhiheng.retrieval.contracts import (
     AuthorizedContextManifest,
     Citation,
     RetrievalCandidate,
+    RetrievalFilters,
     RetrievalSource,
 )
 from zhiheng.retrieval.hybrid import HybridRetriever
@@ -278,7 +279,7 @@ class _RecordingRag:
         release_context: ReleaseContext | None = None,
         behavior: ReleaseBehaviorConfig | None = None,
         memory_context: MemoryContextSnapshot | None = None,
-        conversation_context: Sequence[dict[str, str]] | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> AnswerEnvelope:
         del memory_context, conversation_context
         self.calls.append((release_context, behavior or ReleaseBehaviorConfig()))
@@ -305,6 +306,7 @@ class _Model:
         citations: Sequence[Citation],
         max_output_tokens: int | None = None,
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> GeneratedAnswer:
         del query, manifest, max_output_tokens, memory_context
         return GeneratedAnswer(
@@ -328,6 +330,7 @@ class _TransactionCheckingModel:
         citations: Sequence[Citation],
         max_output_tokens: int | None = None,
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> GeneratedAnswer:
         del query, manifest, max_output_tokens, memory_context
         self.calls += 1
@@ -350,7 +353,9 @@ class _Lexical:
         self._candidate = candidate
         self.limits: list[int] = []
 
-    def search(self, session: Session, query: str, *, limit: int) -> list[RetrievalCandidate]:
+    def search(
+        self, session: Session, query: str, *, limit: int, filters: RetrievalFilters | None = None
+    ) -> list[RetrievalCandidate]:
         self.limits.append(limit)
         return [self._candidate]
 
@@ -363,6 +368,7 @@ class _Vector:
         *,
         generation_id: str,
         limit: int,
+        filters: RetrievalFilters | None = None,
     ) -> list[RetrievalCandidate]:
         return []
 

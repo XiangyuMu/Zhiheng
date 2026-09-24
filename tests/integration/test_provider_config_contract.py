@@ -288,6 +288,41 @@ def test_defaults_reject_incomplete_persisted_route(tmp_path: Path) -> None:
         defaults(session)
 
 
+def test_api_startup_rejects_incomplete_persisted_route(tmp_path: Path) -> None:
+    db_path = tmp_path / "zhiheng.db"
+    cfg = Config("alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.upgrade(cfg, "head")
+    settings = Settings(environment="test", database_url=f"sqlite:///{db_path}")
+    factory = create_session_factory(create_sqlite_engine(settings))
+    with factory.begin() as session:
+        session.execute(
+            text(
+                """
+                INSERT INTO model_provider_configs (
+                  id, provider_kind, display_name, enabled, policy_json, secret_ref,
+                  model_allowlist_json, endpoint_url, endpoint_origin, policy_revision
+                ) VALUES (
+                  'provider-test', 'openai-compatible', 'Test', 1, '{}',
+                  'env:ZHIHENG_PRIVATE_TEST_SECRET', '[\"model-a\"]',
+                  'https://models.example.test/v1', 'https://models.example.test', 'rev-1'
+                )
+                """
+            )
+        )
+        session.execute(
+            text(
+                "INSERT INTO model_route_defaults "
+                "(id, text_provider_id, text_model_id, etag) "
+                "VALUES ('broken-default', :provider, NULL, 'broken')"
+            ),
+            {"provider": "provider-test"},
+        )
+
+    with pytest.raises(RuntimeError, match="incomplete route"):
+        create_app(settings)
+
+
 def test_provider_update_rejects_stale_etag(tmp_path: Path) -> None:
     client = _client(tmp_path)
     csrf = _login(client)

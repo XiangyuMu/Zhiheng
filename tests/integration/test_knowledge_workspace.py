@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from sqlalchemy import text
+from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.test_g005_api_impl import _client, _headers, _login, _seed
 from tests.knowledge_helpers import stored_text_artifacts
@@ -10,7 +12,7 @@ from zhiheng.db.session import session_scope
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 
 
-def _second_knowledge(session_factory, tmp_path: Path) -> str:
+def _second_knowledge(session_factory: sessionmaker[Session], tmp_path: Path) -> str:
     text_value = "中文全文检索必须回查正式视图后，才能进入回答上下文。"
     artifacts = stored_text_artifacts(tmp_path / "second", text_value)
     with session_scope(session_factory) as session:
@@ -29,7 +31,7 @@ def _second_knowledge(session_factory, tmp_path: Path) -> str:
         return item.knowledge_object_id
 
 
-def _claim_knowledge(session_factory, ids: list[str]) -> None:
+def _claim_knowledge(session_factory: sessionmaker[Session], ids: list[str]) -> None:
     with session_scope(session_factory) as session:
         user_id = session.execute(text("SELECT id FROM auth_users LIMIT 1")).scalar_one()
         session.execute(
@@ -41,7 +43,9 @@ def _claim_knowledge(session_factory, ids: list[str]) -> None:
         )
 
 
-def test_workspace_reader_exports_similar_and_merge(tmp_path: Path, monkeypatch) -> None:
+def test_workspace_reader_exports_similar_and_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv(
         "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH", str(tmp_path / "knowledge-object-store")
     )
@@ -90,7 +94,7 @@ def test_workspace_reader_exports_similar_and_merge(tmp_path: Path, monkeypatch)
 
 
 def test_workspace_bulk_export_returns_item_manifest_and_is_idempotent(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv(
         "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH", str(tmp_path / "knowledge-object-store")

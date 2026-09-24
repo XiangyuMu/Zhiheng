@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import Mock
 
 import pytest
+from sqlalchemy.orm import Session
 
 from zhiheng.knowledge.pdf_publication import (
     fallback_decision,
@@ -38,7 +39,7 @@ class _Savepoint:
     def __enter__(self) -> _Savepoint:
         return self
 
-    def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> Literal[False]:
         if exc_type is None:
             self.committed = True
         else:
@@ -46,8 +47,9 @@ class _Savepoint:
         return False
 
 
-class _Session:
+class _Session(Mock):
     def __init__(self) -> None:
+        super().__init__(spec=Session)
         self.savepoint = _Savepoint()
         self.execute = Mock()
 

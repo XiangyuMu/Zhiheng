@@ -1,9 +1,12 @@
 from pathlib import Path
+from typing import Any
+
+from fastapi.testclient import TestClient
 
 from tests.integration.test_memory_api import _client, _headers, _login
 
 
-def _draft(client, csrf: str, key: str) -> dict:
+def _draft(client: TestClient, csrf: str, key: str) -> dict[str, Any]:
     source = client.post(
         "/v1/conclusions/sources",
         json={"text": "研究结论原文：固定条件下复习有效。"},
@@ -23,7 +26,7 @@ def _draft(client, csrf: str, key: str) -> dict:
         headers=_headers(csrf, key + "-draft"),
     )
     assert response.status_code == 200, response.text
-    return response.json()
+    return dict(response.json())
 
 
 def test_review_center_summary_exposes_details_and_defer_is_reopenable(tmp_path: Path) -> None:

@@ -1,10 +1,16 @@
 """Real HTTP, SQLite outbox, FTS5 and sqlite-vec event integration tests."""
 
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
+from httpx import Response
 from sqlalchemy import text
+from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.test_memory_api import _client, _headers, _login
 from zhiheng.core.config import Settings
@@ -14,12 +20,15 @@ from zhiheng.jobs.knowledge_indexing import KnowledgeIndexJobExecutor, process_k
 from zhiheng.jobs.outbox import OutboxRepository
 from zhiheng.retrieval.authorization import RetrievalAuthorizer
 from zhiheng.retrieval.citations import CitationBuilder
+from zhiheng.retrieval.contracts import Citation
 from zhiheng.retrieval.replay import CitationReplayValidator
 from zhiheng.retrieval.repository import LexicalRetriever, VectorRetriever
 
+EventEnv = tuple[TestClient, sessionmaker[Session], str, dict[str, str]]
+
 
 @pytest.fixture
-def event_env(tmp_path):
+def event_env(tmp_path: Path) -> Iterator[EventEnv]:
     client, factory = _client(tmp_path)
     csrf = _login(client)
     ids = {key: new_id() for key in ("event", "version", "request", "history", "conversation")}
@@ -69,9 +78,9 @@ def event_env(tmp_path):
     factory.kw["bind"].dispose()
 
 
-def confirm(env, *, key="confirm", decision="confirmed"):
+def confirm(env: EventEnv, *, key: str = "confirm", decision: str = "confirmed") -> Response:
     client, _, csrf, ids = env
-    return client.post(
+    response = client.post(
         f"/v1/events/{ids['event']}/confirmation",
         json={
             "decision": decision,
@@ -80,9 +89,11 @@ def confirm(env, *, key="confirm", decision="confirmed"):
         },
         headers=_headers(csrf, key),
     )
+    assert isinstance(response, Response)
+    return response
 
 
-def test_confirmation_http_replay_and_outbox(event_env):
+def test_confirmation_http_replay_and_outbox(event_env: EventEnv) -> None:
     client, factory, _, ids = event_env
     assert len(client.get("/v1/events/candidates").json()["items"]) == 1
     first = confirm(event_env)
@@ -112,7 +123,7 @@ def test_confirmation_http_replay_and_outbox(event_env):
     assert client.get("/v1/events/candidates").json()["items"] == []
 
 
-def test_rejection_has_no_index_work(event_env):
+def test_rejection_has_no_index_work(event_env: EventEnv) -> None:
     response = confirm(event_env, decision="rejected")
     assert response.status_code == 200, response.text
     with session_scope(event_env[1]) as session:
@@ -126,17 +137,19 @@ def test_rejection_has_no_index_work(event_env):
 
 
 class Embedder:
-    def __init__(self, callback=None):
+    def __init__(self, callback: Callable[[], None] | None = None) -> None:
         self.callback = callback
 
-    def embed_text(self, value, **kwargs):
+    def embed_text(
+        self, text: str, *, model_id: str, model_revision: str, dimension: int, normalize: bool
+    ) -> list[float]:
         if self.callback:
             callback, self.callback = self.callback, None
             callback()
         return [1.0, 0.0, 0.0]
 
 
-def index_event(env, callback=None):
+def index_event(env: EventEnv, callback: Callable[[], None] | None = None) -> int:
     factory = env[1]
     with session_scope(factory) as session:
         outbox = OutboxRepository()
@@ -151,14 +164,14 @@ def index_event(env, callback=None):
     )
 
 
-def citation_payload(citation):
+def citation_payload(citation: Citation) -> dict[str, Any]:
     value = asdict(citation)
     value["span_start"], value["span_end"] = value.pop("content_span")
     value["offset_start"], value["offset_end"] = value.pop("offset")
     return value
 
 
-def test_confirmation_worker_fts_vector_citation(event_env):
+def test_confirmation_worker_fts_vector_citation(event_env: EventEnv) -> None:
     assert confirm(event_env).status_code == 200
     assert index_event(event_env) == 1
     with session_scope(event_env[1]) as session:
@@ -196,7 +209,7 @@ def test_confirmation_worker_fts_vector_citation(event_env):
     assert event_env[0].post("/v1/citations/context", json=forged).status_code == 404
 
 
-def test_edit_appends_version_and_rejects_stale_confirmation(event_env):
+def test_edit_appends_version_and_rejects_stale_confirmation(event_env: EventEnv) -> None:
     client, factory, csrf, ids = event_env
     before = client.get(f"/v1/events/{ids['event']}").json()
     edited = client.patch(
@@ -224,13 +237,15 @@ def test_edit_appends_version_and_rejects_stale_confirmation(event_env):
 
 
 @pytest.mark.parametrize("mutation", ["edit", "delete", "erase_history"])
-def test_mutation_during_embedding_prevents_generation_activation(event_env, mutation):
+def test_mutation_during_embedding_prevents_generation_activation(
+    event_env: EventEnv, mutation: str
+) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     assert confirm(event_env).status_code == 200
     _, factory, _, ids = event_env
 
-    def mutate():
+    def mutate() -> None:
         with session_scope(factory) as session:
             if mutation == "edit":
                 session.execute(
@@ -251,7 +266,7 @@ def test_mutation_during_embedding_prevents_generation_activation(event_env, mut
                     text("DELETE FROM answer_history WHERE id=:h"), {"h": ids["history"]}
                 )
 
-    def concurrent_mutation():
+    def concurrent_mutation() -> None:
         with ThreadPoolExecutor(max_workers=1) as pool:
             pool.submit(mutate).result(timeout=10)
 
@@ -278,7 +293,9 @@ def test_mutation_during_embedding_prevents_generation_activation(event_env, mut
 
 
 @pytest.mark.parametrize("mutation", ["edit", "delete", "erase_history"])
-def test_stale_fts_vector_and_citation_denied_after_mutation(event_env, mutation):
+def test_stale_fts_vector_and_citation_denied_after_mutation(
+    event_env: EventEnv, mutation: str
+) -> None:
     assert confirm(event_env).status_code == 200
     assert index_event(event_env) == 1
     client, factory, _, ids = event_env
@@ -319,7 +336,9 @@ def test_stale_fts_vector_and_citation_denied_after_mutation(event_env, mutation
 
 
 @pytest.mark.parametrize("invalid", ["request", "version", "hash", "expired", "etag"])
-def test_confirmation_rejects_stale_input_without_side_effects(event_env, invalid):
+def test_confirmation_rejects_stale_input_without_side_effects(
+    event_env: EventEnv, invalid: str
+) -> None:
     client, factory, csrf, ids = event_env
     if invalid in {"request", "version"}:
         ids[invalid] = new_id()
@@ -356,7 +375,7 @@ def test_confirmation_rejects_stale_input_without_side_effects(event_env, invali
         assert session.execute(text("SELECT count(*) FROM outbox_events")).scalar_one() == 0
 
 
-def test_event_http_auth_csrf_and_owner_boundary(event_env):
+def test_event_http_auth_csrf_and_owner_boundary(event_env: EventEnv) -> None:
     client, factory, csrf, ids = event_env
     path = f"/v1/events/{ids['event']}"
     response = client.post(

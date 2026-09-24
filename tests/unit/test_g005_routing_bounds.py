@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -89,6 +89,7 @@ class _Model:
         citations: Sequence[Citation],
         max_output_tokens: int | None = None,
         memory_context: MemoryContextSnapshot | None = None,
+        conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> GeneratedAnswer:
         del memory_context
         self.calls += 1

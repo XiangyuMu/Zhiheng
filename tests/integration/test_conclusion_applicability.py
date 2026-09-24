@@ -33,7 +33,7 @@ def _approved(client: TestClient, csrf: str, key: str, **extra: Any) -> dict[str
         headers=_headers(csrf, key + "-approve", item["etag"]),
     )
     assert response.status_code == 200, response.text
-    return response.json()
+    return dict(response.json())
 
 
 def test_expired_conclusion_is_unusable_but_retains_original_version(tmp_path: Path) -> None:

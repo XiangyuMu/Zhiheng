@@ -258,6 +258,11 @@ def install_retrieval_routes(app: Any, settings: Settings) -> None:
     app.include_router(router)
 
 
+def initialize_retrieval_services(app: Any, settings: Settings) -> None:
+    app.state.retrieval_settings = settings
+    _ensure_query_services(app, eager_answer_model=True)
+
+
 def get_db_session(request: Request) -> Generator[Session, None, None]:
     factory = request.app.state.session_factory
     with session_scope(factory) as session:
@@ -765,7 +770,7 @@ def _answer_authority_digest(
     )
 
 
-def _ensure_query_services(app: Any) -> None:
+def _ensure_query_services(app: Any, *, eager_answer_model: bool = False) -> None:
     if not hasattr(app.state, "memory_context_service"):
         app.state.memory_context_service = MemoryContextService()
     if not hasattr(app.state, "query_router"):
@@ -780,7 +785,21 @@ def _ensure_query_services(app: Any) -> None:
         )
     if not hasattr(app.state, "evidence_verifier"):
         app.state.evidence_verifier = RetrievalAuthorizer()
+    settings: Settings = app.state.retrieval_settings
+    if (
+        settings.answer_provider_id is not None
+        and settings.answer_model_id is not None
+        and not hasattr(app.state, "model_gateway")
+    ):
+        app.state.model_gateway = ModelGateway(
+            session_factory=app.state.session_factory,
+            settings=settings,
+        )
     if not hasattr(app.state, "answer_model"):
+        app.state.answer_model = (
+            _answer_model_for_settings(app) if eager_answer_model else _DeferredAnswerModel(app)
+        )
+    elif eager_answer_model and isinstance(app.state.answer_model, _DeferredAnswerModel):
         app.state.answer_model = _answer_model_for_settings(app)
     if not hasattr(app.state, "trajectory_repository"):
         app.state.trajectory_repository = TrajectoryRepository(
@@ -845,6 +864,16 @@ def _answer_model_for_settings(app: Any) -> Any:
         provider_id=configured_provider,
         model_id=configured_model,
     )
+
+
+class _DeferredAnswerModel:
+    """Resolve the configured answer model after startup checks have run."""
+
+    def __init__(self, app: Any) -> None:
+        self._app = app
+
+    def generate_answer(self, **kwargs: Any) -> Any:
+        return _answer_model_for_settings(self._app).generate_answer(**kwargs)
 
 
 class _DynamicGatewayAnswerModel:

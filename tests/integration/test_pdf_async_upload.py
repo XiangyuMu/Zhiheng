@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,7 @@ from zhiheng.knowledge.pdf_repository import PdfRepository
 def _pdf_bytes() -> bytes:
     writer = PdfWriter()
     writer.add_blank_page(width=200, height=100)
-    output = __import__("io").BytesIO()
+    output = BytesIO()
     writer.write(output)
     return output.getvalue()
 

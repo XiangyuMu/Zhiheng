@@ -4,7 +4,7 @@ from zhiheng.knowledge.mineru_adapter import content_list_to_manifest
 from zhiheng.knowledge.pdf_manifest import validate_manifest
 
 
-def test_mineru_content_list_is_schema_valid():
+def test_mineru_content_list_is_schema_valid() -> None:
     manifest = content_list_to_manifest(
         [
             {

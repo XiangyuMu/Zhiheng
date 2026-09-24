@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from fastapi import FastAPI
+
 from tests.integration.test_g005_api_impl import _client, _headers, _login, _seed
 from zhiheng.worker.main import process_worker_once
 
@@ -8,6 +10,7 @@ def test_unapproved_conversation_conclusions_do_not_cross_into_another_answer(
     tmp_path: Path,
 ) -> None:
     client, _ = _client(tmp_path)
+    assert isinstance(client.app, FastAPI)
     csrf = _login(client)
     _seed(client.app.state.session_factory, tmp_path)
     source_conversation = client.post(
@@ -42,6 +45,7 @@ def test_unapproved_conversation_conclusions_do_not_cross_into_another_answer(
 
 def test_only_the_approved_draft_becomes_cross_conversation_context(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
+    assert isinstance(client.app, FastAPI)
     csrf = _login(client)
     source = client.post(
         "/v1/conclusions/sources",
@@ -78,6 +82,7 @@ def test_rejected_or_deferred_drafts_never_gain_cross_conversation_qualification
     tmp_path: Path,
 ) -> None:
     client, _ = _client(tmp_path)
+    assert isinstance(client.app, FastAPI)
     csrf = _login(client)
     source = client.post(
         "/v1/conclusions/sources",

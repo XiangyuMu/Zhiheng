@@ -26,6 +26,7 @@ from zhiheng.retrieval import (
     VectorIndexRepository,
     VectorRetriever,
 )
+from zhiheng.retrieval.contracts import RetrievalFilters
 
 
 def _migrated_session_factory(tmp_path: Path) -> sessionmaker[Session]:
@@ -304,7 +305,14 @@ def test_structured_lookup_uses_only_current_formal_views(tmp_path: Path) -> Non
 
 
 class _EmptyLexicalRetriever:
-    def search(self, session: Session, query: str, *, limit: int = 10) -> list[RetrievalCandidate]:
+    def search(
+        self,
+        session: Session,
+        query: str,
+        *,
+        limit: int = 10,
+        filters: RetrievalFilters | None = None,
+    ) -> list[RetrievalCandidate]:
         return []
 
 
@@ -316,6 +324,7 @@ class _ExplodingVectorRetriever:
         *,
         generation_id: str,
         limit: int,
+        filters: RetrievalFilters | None = None,
     ) -> list[RetrievalCandidate]:
         raise AssertionError("vector should not run without an embedding and generation")
 
@@ -324,7 +333,14 @@ class _CandidateLexicalRetriever:
     def __init__(self, candidate: RetrievalCandidate) -> None:
         self._candidate = candidate
 
-    def search(self, session: Session, query: str, *, limit: int = 10) -> list[RetrievalCandidate]:
+    def search(
+        self,
+        session: Session,
+        query: str,
+        *,
+        limit: int = 10,
+        filters: RetrievalFilters | None = None,
+    ) -> list[RetrievalCandidate]:
         return [self._candidate]
 
 

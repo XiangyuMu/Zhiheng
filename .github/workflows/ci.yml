@@ -34,7 +34,17 @@ jobs:
         run: uv run ruff check .
 
       - name: Mypy
+        if: ${{ !cancelled() }}
         run: uv run mypy src tests
 
-      - name: Pytest
-        run: uv run pytest
+      - name: Complete pytest delivery gate
+        if: ${{ !cancelled() }}
+        run: uv run python scripts/pytest_delivery_gate.py --output "$RUNNER_TEMP/pytest-delivery" --timeout 7200
+
+      - name: Preserve pytest delivery evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-delivery-${{ github.sha }}
+          path: ${{ runner.temp }}/pytest-delivery/
+          if-no-files-found: warn

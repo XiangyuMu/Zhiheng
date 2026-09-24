@@ -18,8 +18,9 @@ def _client(tmp_path: Path) -> TestClient:
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
     command.upgrade(cfg, "head")
     settings = Settings(environment="test", database_url=f"sqlite:///{db_path}")
-    client = TestClient(create_app(settings))
-    install_personal_update_routes(client.app)
+    app = create_app(settings)
+    client = TestClient(app)
+    install_personal_update_routes(app)
     return client
 
 
