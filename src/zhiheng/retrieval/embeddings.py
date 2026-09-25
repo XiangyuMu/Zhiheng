@@ -69,7 +69,9 @@ class BgeM3QueryEmbedder:
         if self._model is not None:
             return self._model
         try:
-            from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
+            from importlib import import_module
+
+            SentenceTransformer = import_module("sentence_transformers").SentenceTransformer
         except ImportError as exc:
             raise QueryEmbeddingUnavailableError(
                 "local query embeddings require the 'local-embeddings' extra "
