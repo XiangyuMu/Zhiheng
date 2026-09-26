@@ -11,7 +11,7 @@ from zhiheng.knowledge.pdf_manifest import ManifestValidationError, validate_man
 
 def test_manifest_schema_accepts_planned_contract_example() -> None:
     example = json.loads(
-        Path(".omx/plans/pdf-parser-manifest-example.json").read_text(encoding="utf-8")
+        Path("tests/fixtures/pdf/pdf-parser-manifest-example.json").read_text(encoding="utf-8")
     )
 
     validate_manifest(example)
@@ -19,7 +19,7 @@ def test_manifest_schema_accepts_planned_contract_example() -> None:
 
 def test_manifest_schema_rejects_invalid_sha256() -> None:
     example = json.loads(
-        Path(".omx/plans/pdf-parser-manifest-example.json").read_text(encoding="utf-8")
+        Path("tests/fixtures/pdf/pdf-parser-manifest-example.json").read_text(encoding="utf-8")
     )
     invalid = copy.deepcopy(example)
     invalid["source"]["sha256"] = "not-a-sha"
@@ -32,7 +32,7 @@ def test_manifest_schema_rejects_invalid_sha256() -> None:
     "failure", ["duplicate_page", "missing_page", "bbox", "hash", "cycle", "failed_page"]
 )
 def test_semantic_manifest_corruption_rejected(failure: str) -> None:
-    example = json.loads(Path(".omx/plans/pdf-parser-manifest-example.json").read_text())
+    example = json.loads(Path("tests/fixtures/pdf/pdf-parser-manifest-example.json").read_text())
     block = example["blocks"][0]
     if failure == "duplicate_page":
         example["pages"].append(copy.deepcopy(example["pages"][0]))
