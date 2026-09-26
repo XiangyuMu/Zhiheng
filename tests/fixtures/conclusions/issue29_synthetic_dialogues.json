@@ -1,0 +1,765 @@
+{
+  "schema_version": "issue29.synthetic-dialogues.v1",
+  "fixture_policy": {
+    "synthetic": true,
+    "minimum_dialogues": 50,
+    "no_real_personal_data": true
+  },
+  "cases": [
+    {
+      "case_id": "issue29-positive-01",
+      "query": "前提：每天安排1分钟练习。\n结论：练习主题1应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题1应采用间隔复习。",
+          "premises": [
+            "每天安排1分钟练习。"
+          ],
+          "start_offset": 17,
+          "end_offset": 30
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-02",
+      "query": "前提：每天安排2分钟练习。\n结论：练习主题2应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题2应采用间隔复习。",
+          "premises": [
+            "每天安排2分钟练习。"
+          ],
+          "start_offset": 17,
+          "end_offset": 30
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-03",
+      "query": "前提：每天安排3分钟练习。\n结论：练习主题3应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题3应采用间隔复习。",
+          "premises": [
+            "每天安排3分钟练习。"
+          ],
+          "start_offset": 17,
+          "end_offset": 30
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-04",
+      "query": "前提：每天安排4分钟练习。\n结论：练习主题4应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题4应采用间隔复习。",
+          "premises": [
+            "每天安排4分钟练习。"
+          ],
+          "start_offset": 17,
+          "end_offset": 30
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-05",
+      "query": "前提：每天安排5分钟练习。\n结论：练习主题5应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题5应采用间隔复习。",
+          "premises": [
+            "每天安排5分钟练习。"
+          ],
+          "start_offset": 17,
+          "end_offset": 30
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-06",
+      "query": "前提：每天安排6分钟练习。\n结论：练习主题6应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题6应采用间隔复习。",
+          "premises": [
+            "每天安排6分钟练习。"
+          ],
+          "start_offset": 17,
+          "end_offset": 30
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-07",
+      "query": "前提：每天安排7分钟练习。\n结论：练习主题7应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题7应采用间隔复习。",
+          "premises": [
+            "每天安排7分钟练习。"
+          ],
+          "start_offset": 17,
+          "end_offset": 30
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-08",
+      "query": "前提：每天安排8分钟练习。\n结论：练习主题8应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题8应采用间隔复习。",
+          "premises": [
+            "每天安排8分钟练习。"
+          ],
+          "start_offset": 17,
+          "end_offset": 30
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-09",
+      "query": "前提：每天安排9分钟练习。\n结论：练习主题9应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题9应采用间隔复习。",
+          "premises": [
+            "每天安排9分钟练习。"
+          ],
+          "start_offset": 17,
+          "end_offset": 30
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-10",
+      "query": "前提：每天安排10分钟练习。\n结论：练习主题10应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题10应采用间隔复习。",
+          "premises": [
+            "每天安排10分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-11",
+      "query": "前提：每天安排11分钟练习。\n结论：练习主题11应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题11应采用间隔复习。",
+          "premises": [
+            "每天安排11分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-12",
+      "query": "前提：每天安排12分钟练习。\n结论：练习主题12应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题12应采用间隔复习。",
+          "premises": [
+            "每天安排12分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-13",
+      "query": "前提：每天安排13分钟练习。\n结论：练习主题13应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题13应采用间隔复习。",
+          "premises": [
+            "每天安排13分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-14",
+      "query": "前提：每天安排14分钟练习。\n结论：练习主题14应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题14应采用间隔复习。",
+          "premises": [
+            "每天安排14分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-15",
+      "query": "前提：每天安排15分钟练习。\n结论：练习主题15应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题15应采用间隔复习。",
+          "premises": [
+            "每天安排15分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-16",
+      "query": "前提：每天安排16分钟练习。\n结论：练习主题16应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题16应采用间隔复习。",
+          "premises": [
+            "每天安排16分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-17",
+      "query": "前提：每天安排17分钟练习。\n结论：练习主题17应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题17应采用间隔复习。",
+          "premises": [
+            "每天安排17分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-18",
+      "query": "前提：每天安排18分钟练习。\n结论：练习主题18应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题18应采用间隔复习。",
+          "premises": [
+            "每天安排18分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-19",
+      "query": "前提：每天安排19分钟练习。\n结论：练习主题19应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题19应采用间隔复习。",
+          "premises": [
+            "每天安排19分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-20",
+      "query": "前提：每天安排20分钟练习。\n结论：练习主题20应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题20应采用间隔复习。",
+          "premises": [
+            "每天安排20分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-21",
+      "query": "前提：每天安排21分钟练习。\n结论：练习主题21应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题21应采用间隔复习。",
+          "premises": [
+            "每天安排21分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-22",
+      "query": "前提：每天安排22分钟练习。\n结论：练习主题22应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题22应采用间隔复习。",
+          "premises": [
+            "每天安排22分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-23",
+      "query": "前提：每天安排23分钟练习。\n结论：练习主题23应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题23应采用间隔复习。",
+          "premises": [
+            "每天安排23分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-24",
+      "query": "前提：每天安排24分钟练习。\n结论：练习主题24应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题24应采用间隔复习。",
+          "premises": [
+            "每天安排24分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-25",
+      "query": "前提：每天安排25分钟练习。\n结论：练习主题25应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题25应采用间隔复习。",
+          "premises": [
+            "每天安排25分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-26",
+      "query": "前提：每天安排26分钟练习。\n结论：练习主题26应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题26应采用间隔复习。",
+          "premises": [
+            "每天安排26分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-27",
+      "query": "前提：每天安排27分钟练习。\n结论：练习主题27应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题27应采用间隔复习。",
+          "premises": [
+            "每天安排27分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-28",
+      "query": "前提：每天安排28分钟练习。\n结论：练习主题28应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题28应采用间隔复习。",
+          "premises": [
+            "每天安排28分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-29",
+      "query": "前提：每天安排29分钟练习。\n结论：练习主题29应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题29应采用间隔复习。",
+          "premises": [
+            "每天安排29分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-30",
+      "query": "前提：每天安排30分钟练习。\n结论：练习主题30应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题30应采用间隔复习。",
+          "premises": [
+            "每天安排30分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-31",
+      "query": "前提：每天安排31分钟练习。\n结论：练习主题31应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题31应采用间隔复习。",
+          "premises": [
+            "每天安排31分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-32",
+      "query": "前提：每天安排32分钟练习。\n结论：练习主题32应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题32应采用间隔复习。",
+          "premises": [
+            "每天安排32分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-33",
+      "query": "前提：每天安排33分钟练习。\n结论：练习主题33应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题33应采用间隔复习。",
+          "premises": [
+            "每天安排33分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-34",
+      "query": "前提：每天安排34分钟练习。\n结论：练习主题34应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题34应采用间隔复习。",
+          "premises": [
+            "每天安排34分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-35",
+      "query": "前提：每天安排35分钟练习。\n结论：练习主题35应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题35应采用间隔复习。",
+          "premises": [
+            "每天安排35分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-36",
+      "query": "前提：每天安排36分钟练习。\n结论：练习主题36应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题36应采用间隔复习。",
+          "premises": [
+            "每天安排36分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-37",
+      "query": "前提：每天安排37分钟练习。\n结论：练习主题37应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题37应采用间隔复习。",
+          "premises": [
+            "每天安排37分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-38",
+      "query": "前提：每天安排38分钟练习。\n结论：练习主题38应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题38应采用间隔复习。",
+          "premises": [
+            "每天安排38分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-39",
+      "query": "前提：每天安排39分钟练习。\n结论：练习主题39应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题39应采用间隔复习。",
+          "premises": [
+            "每天安排39分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-40",
+      "query": "前提：每天安排40分钟练习。\n结论：练习主题40应采用间隔复习。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "练习主题40应采用间隔复习。",
+          "premises": [
+            "每天安排40分钟练习。"
+          ],
+          "start_offset": 18,
+          "end_offset": 32
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-41",
+      "query": "如果每天有固定时间，则间隔练习更有效。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "间隔练习更有效。",
+          "premises": [
+            "每天有固定时间"
+          ],
+          "start_offset": 11,
+          "end_offset": 19
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-42",
+      "query": "结论：资料整理应保留原文出处。\n前提：来源可以稳定访问。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "资料整理应保留原文出处。",
+          "premises": [
+            "来源可以稳定访问。"
+          ],
+          "start_offset": 3,
+          "end_offset": 15
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-43",
+      "query": "请比较两种方法。\n结论：先做小规模验证再全面推广。\n前提：验证成本可控。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "先做小规模验证再全面推广。",
+          "premises": [
+            "验证成本可控。"
+          ],
+          "start_offset": 12,
+          "end_offset": 25
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-44",
+      "query": "结论：个人偏好需要用户确认。\n前提：系统只能提出候选。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "个人偏好需要用户确认。",
+          "premises": [
+            "系统只能提出候选。"
+          ],
+          "start_offset": 3,
+          "end_offset": 14
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-positive-45",
+      "query": "结论：失败任务应保留稳定错误码。\n前提：用户需要知道下一步。",
+      "answer": "",
+      "expected": [
+        {
+          "claim": "失败任务应保留稳定错误码。",
+          "premises": [
+            "用户需要知道下一步。"
+          ],
+          "start_offset": 3,
+          "end_offset": 16
+        }
+      ],
+      "negative": false
+    },
+    {
+      "case_id": "issue29-negative-01",
+      "query": "引用：有人说，结论：熬夜效率最高。",
+      "answer": "",
+      "expected": [],
+      "negative": true
+    },
+    {
+      "case_id": "issue29-negative-02",
+      "query": "这是玩笑，结论：完全不需要复习。",
+      "answer": "",
+      "expected": [],
+      "negative": true
+    },
+    {
+      "case_id": "issue29-negative-03",
+      "query": "假设一下，结论：随机学习一定最有效。",
+      "answer": "",
+      "expected": [],
+      "negative": true
+    },
+    {
+      "case_id": "issue29-negative-04",
+      "query": "结论：不要记录这条判断，也不要当真。",
+      "answer": "",
+      "expected": [],
+      "negative": true
+    },
+    {
+      "case_id": "issue29-negative-05",
+      "query": "他说，结论：所有代码都不需要测试。",
+      "answer": "",
+      "expected": [],
+      "negative": true
+    }
+  ]
+}

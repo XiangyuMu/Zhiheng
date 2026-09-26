@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from zhiheng.api.memory import get_db_session, require_user
-from zhiheng.conclusions import ConclusionRepository
+from zhiheng.conclusions import ConclusionRepository, list_extraction_review_results
 from zhiheng.memory.personal_updates import PersonalUpdateService
 from zhiheng.memory.repository import MemoryRepository
 
@@ -22,6 +22,7 @@ AuthDep = Annotated[str, Depends(require_user)]
 def summary(session: SessionDep, user: AuthDep, limit: int = 100) -> dict[str, Any]:
     bounded = max(1, min(limit, 500))
     conclusions = ConclusionRepository().list_drafts(session, user, limit=bounded)
+    extraction_runs = list_extraction_review_results(session, user, limit=bounded)
     conflicts = PersonalUpdateService().list_conflicts(session, limit=bounded)
     memory_repo = MemoryRepository()
     for conflict in conflicts:
@@ -33,9 +34,11 @@ def summary(session: SessionDep, user: AuthDep, limit: int = 100) -> dict[str, A
             "conclusions": len(conclusions),
             "conflicts": len(conflicts),
             "total": len(conclusions) + len(conflicts),
+            "extractions": len(extraction_runs),
         },
         "conclusions": conclusions,
         "conflicts": conflicts,
+        "extraction_runs": extraction_runs,
     }
 
 

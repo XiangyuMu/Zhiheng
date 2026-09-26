@@ -72,3 +72,56 @@ def test_persisted_conversation_creates_multiple_reviewable_conclusion_drafts(
     with session_scope(factory) as session:
         session.execute(text("DELETE FROM answer_history WHERE id=:id"), {"id": history_id})
     assert client.get("/v1/conclusions/drafts").json()["items"] == []
+
+
+def test_unrecognized_extraction_is_visible_and_manual_supplement_stays_draft(
+    tmp_path: Path,
+) -> None:
+    client, _ = _client(tmp_path)
+    assert isinstance(client.app, FastAPI)
+    csrf = _login(client)
+    _seed(client.app.state.session_factory, tmp_path)
+    conversation = client.post(
+        "/v1/conversations",
+        json={"title": "未识别提炼"},
+        headers=_headers(csrf, "unrecognized-conversation"),
+    )
+    assert conversation.status_code == 200
+    answer = client.post(
+        "/v1/answers",
+        json={
+            "query": "请记录这段普通聊天，但没有明确结论。",
+            "conversation_id": conversation.json()["id"],
+        },
+        headers=_headers(csrf, "unrecognized-answer"),
+    )
+    assert answer.status_code == 200
+    app = client.app
+    assert process_worker_once(app.state.settings, worker_id="unrecognized-worker") >= 1
+
+    runs = client.get("/v1/conclusions/extraction-runs").json()["items"]
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["status"] == "succeeded"
+    assert run["extracted_count"] == 0
+    assert run["unrecognized_count"] == 1
+    assert run["review_items"][0]["reason_code"] == "no_supported_expression"
+    detail = client.get(f"/v1/conclusions/extraction-runs/{run['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["source"]["text"]
+
+    supplemented = client.post(
+        f"/v1/conclusions/drafts/{run['id']}:manual-supplement/supplement",
+        json={
+            "title": "人工补充",
+            "claim": "人工确认的结论",
+            "domain_id": "education_learning",
+            "premises": [{"text": "需要用户确认", "confirmed": False}],
+            "excerpt": run["source"]["text"],
+            "evidence": [{"excerpt": run["source"]["text"], "source": "conversation"}],
+        },
+        headers={**_headers(csrf, "manual-supplement"), "If-Match": "*"},
+    )
+    assert supplemented.status_code == 200, supplemented.text
+    assert supplemented.json()["status"] == "draft"
+    assert client.get("/v1/conclusions/context", params={"query": "人工确认"}).json()["items"] == []

@@ -84,6 +84,12 @@
     $("conclusion-count").textContent = data.counts.conclusions;
     $("relation-count").textContent = relations.length;
     $("conflict-count").textContent = data.counts.conflicts;
+    $("extraction-count").textContent = data.counts.extractions || 0;
+    const extractionItems = (data.extraction_runs || []).map((run) => ({
+      ...run,
+      kind: "extraction",
+      title: `对话提炼 · ${run.status === "failed" ? "失败" : "待补充"}`,
+    }));
     state.items = [
       ...data.conclusions.map((item) => ({ ...item, kind: "conclusion" })),
       ...relations,
@@ -92,6 +98,7 @@
         kind: "conflict",
         id: item.conflict_id || item.id,
       })),
+      ...extractionItems,
     ];
     $("total").textContent = state.items.length;
     const queue = $("queue");
@@ -111,12 +118,16 @@
         ? item.title
         : item.kind === "relation"
           ? item.title
-          : `${item.state_key} · 个人信息冲突`;
+          : item.kind === "extraction"
+            ? item.title
+            : `${item.state_key} · 个人信息冲突`;
       const type = item.kind === "conclusion"
         ? "结论草稿"
         : item.kind === "relation"
           ? "关系建议"
-          : "冲突待确认";
+          : item.kind === "extraction"
+            ? "提炼结果"
+            : "冲突待确认";
       button.append(text("strong", label), text("small", `${type} · ${item.status || "pending"}${item.kind === "conclusion" && item.claim ? ` · ${item.claim}` : ""}`));
       button.onclick = () => {
         state.selected = item;
@@ -145,6 +156,10 @@
       detail.append(definition, actionButtons(item, true));
       return;
     }
+    if (item.kind === "extraction") {
+      renderExtractionDetail(detail, item);
+      return;
+    }
     if (item.kind === "relation") {
       renderRelationDetail(detail, item);
       return;
@@ -164,6 +179,48 @@
     detail.append(definition);
     if (state.taxonomy) detail.append(classificationEditor(item));
     detail.append(actionButtons(item, false));
+  }
+
+  function renderExtractionDetail(detail, item) {
+    detail.append(
+      text("p", "对话提炼结果", "eyebrow"),
+      text("h2", item.title),
+    );
+    const definition = document.createElement("dl");
+    [
+      ["状态", item.status],
+      ["已提炼", String(item.extracted_count || 0)],
+      ["未识别/待补充", String(item.unrecognized_count || 0)],
+      ["失败原因", item.failure_reason || "无"],
+      ["原文", sourceText(item.source)],
+    ].forEach(([key, value]) => definition.append(text("dt", key), text("dd", value)));
+    detail.append(definition);
+    (item.review_items || []).forEach((review) => {
+      const block = document.createElement("blockquote");
+      block.append(text("strong", review.reason || "需要人工补充"), text("p", review.excerpt));
+      if (review.end_offset != null) {
+        block.append(text("small", `原文位置：${review.start_offset}–${review.end_offset}`));
+      }
+      detail.append(block);
+    });
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const supplement = addAction(actions, "手动补充结论", async () => {
+      const claim = window.prompt("从原文补充结论");
+      if (!claim) return;
+      const title = window.prompt("结论标题", claim.slice(0, 80)) || claim.slice(0, 80);
+      const domain = window.prompt("主领域", "education_learning") || "education_learning";
+      await mutation(`/v1/conclusions/drafts/${encodeURIComponent(item.id)}:manual-supplement/supplement`, "POST", {
+        title,
+        claim,
+        domain_id: domain,
+        premises: [],
+        excerpt: item.source?.text || "",
+        evidence: [{ excerpt: item.source?.text || "", source: "conversation" }],
+      });
+    });
+    if (item.status === "failed") supplement.className = "danger";
+    detail.append(actions);
   }
 
   function classificationEditor(item) {

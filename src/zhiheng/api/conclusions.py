@@ -8,7 +8,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from zhiheng.api.memory import MutationDep, get_db_session, require_user
-from zhiheng.conclusions import ConclusionRepository
+from zhiheng.conclusions import (
+    ConclusionRepository,
+    get_extraction_review_result,
+    list_extraction_review_results,
+)
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
 
@@ -124,6 +128,18 @@ class DraftUpdatePayload(BaseModel):
     valid_until: AwareDatetime | None = None
 
 
+class SupplementPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=512)
+    claim: str = Field(min_length=1, max_length=10000)
+    domain_id: str = Field(min_length=1, max_length=128)
+    premises: list[dict[str, Any]] = Field(default_factory=list)
+    excerpt: str = Field(min_length=1, max_length=10000)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    classification: ClassificationPayload | None = None
+    valid_until: AwareDatetime | None = None
+
+
 @router.post("/sources")
 def source(
     payload: SourcePayload, session: SessionDep, user: AuthDep, mutation: MutationDep
@@ -154,6 +170,46 @@ def context(query: str, session: SessionDep, user: AuthDep) -> dict[str, Any]:
 @router.get("/drafts")
 def drafts(session: SessionDep, user: AuthDep, limit: int = 100) -> dict[str, Any]:
     return {"items": repo.list_drafts(session, user, limit=limit)}
+
+
+@router.get("/extraction-runs")
+def extraction_runs(session: SessionDep, user: AuthDep, limit: int = 100) -> dict[str, Any]:
+    return {"items": list_extraction_review_results(session, user, limit=limit)}
+
+
+@router.get("/extraction-runs/{run_id}")
+def extraction_run(run_id: str, session: SessionDep, user: AuthDep) -> dict[str, Any]:
+    item = get_extraction_review_result(session, user, run_id)
+    if item is None:
+        raise HTTPException(404, "extraction run not found")
+    return item
+
+
+@router.post("/drafts/{run_id}/supplement")
+def supplement_draft(
+    run_id: str,
+    payload: SupplementPayload,
+    session: SessionDep,
+    user: AuthDep,
+    mutation: MutationDep,
+) -> dict[str, Any]:
+    """Create a normal review draft from an unrecognized extraction result."""
+    key, _ = mutation
+    run = get_extraction_review_result(session, user, run_id)
+    if run is None and run_id.endswith(":manual-supplement"):
+        run = get_extraction_review_result(session, user, run_id[: -len(":manual-supplement")])
+    if run is None:
+        raise HTTPException(404, "extraction run not found")
+    try:
+        return repo.create_draft(
+            session,
+            user,
+            str(run["source"]["id"]),
+            payload.model_dump(mode="json"),
+            key,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/{entry_id}/defer")

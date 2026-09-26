@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from zhiheng.memory.personal_updates import PersonalUpdate, PersonalUpdateServic
 
 MEMORY_EXTRACTION_EVENT = "conversation.persisted"
 MEMORY_EXTRACTION_JOB_TYPE = "memory.extract_conversation"
+logger = logging.getLogger(__name__)
 
 
 class ConversationMemoryExtractor(Protocol):
@@ -91,6 +93,8 @@ class HeuristicConversationMemoryExtractor:
         for memory_type, state_key, pattern, rationale, basis in self._RULES:
             match = re.search(pattern, query, flags=re.IGNORECASE)
             if match is None:
+                continue
+            if _is_non_assertive_context(query, match.start()):
                 continue
             value = _clean(match.group(1))
             if not value:
@@ -402,6 +406,7 @@ def process_memory_extraction_jobs_once(
         try:
             executor.execute(session_factory, job)
         except Exception as exc:
+            _record_conclusion_extraction_failure(session_factory, job, exc)
             with session_scope(session_factory) as session:
                 session.execute(
                     text(
@@ -449,6 +454,53 @@ def process_memory_extraction_jobs_once(
     return completed
 
 
+def _record_conclusion_extraction_failure(
+    session_factory: sessionmaker[Session],
+    job: ClaimedMemoryExtractionJob,
+    exc: Exception,
+) -> None:
+    """Persist a visible extraction failure after the job transaction rolls back."""
+    payload = job.payload
+    try:
+        with session_scope(session_factory) as session:
+            row = (
+                session.execute(
+                    text(
+                        """
+                        SELECT id, conversation_id, owner_user_id, query, response_json
+                        FROM answer_history
+                        WHERE id=:history_id
+                          AND conversation_id=:conversation_id
+                          AND owner_user_id=:owner_user_id
+                        """
+                    ),
+                    {
+                        "history_id": str(payload["history_id"]),
+                        "conversation_id": str(payload["conversation_id"]),
+                        "owner_user_id": str(payload["owner_user_id"]),
+                    },
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                return
+            response = _json_object(row["response_json"])
+            ConversationConclusionDraftService().record_failure(
+                session,
+                history_id=str(row["id"]),
+                conversation_id=str(row["conversation_id"]),
+                owner_user_id=str(row["owner_user_id"]),
+                query=str(row["query"]),
+                answer=str(response.get("answer", "")),
+                failure_code="EXTRACTION_FAILED",
+                failure_reason=str(exc)[:1000],
+            )
+    except Exception as persistence_error:
+        logger.exception("failed to persist conversation extraction review outcome")
+        raise RuntimeError("conversation extraction review persistence failed") from persistence_error
+
+
 def _event_memory_tables_available(session: Session) -> bool:
     required = {
         "event_memories",
@@ -468,6 +520,28 @@ def _event_memory_tables_available(session: Session) -> bool:
 
 def _clean(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip(" \t\r\n，。,.!?！？")).strip()
+
+
+def _is_non_assertive_context(text: str, offset: int) -> bool:
+    """Reject quoted, hypothetical, and joking text before memory creation."""
+    sentence = re.split(r"[。！？!?\n]", text[:offset])[-1].strip().lower()
+    return any(
+        marker in sentence
+        for marker in (
+            "引用",
+            "据说",
+            "他说",
+            "她说",
+            "例如",
+            "假设",
+            "如果",
+            "开玩笑",
+            "笑话",
+            "quote",
+            "hypothetical",
+            "joke",
+        )
+    )
 
 
 def _json_object(value: Any) -> dict[str, Any]:
