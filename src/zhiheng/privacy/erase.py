@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,22 @@ from zhiheng.privacy.erase_journal import EraseJournalRecord, ExternalEraseJourn
 class PrivacyEraseIntent:
     request_id: str
     ledger_id: str
+
+
+def _string_leaves(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        leaves: list[str] = []
+        for item in value.values():
+            leaves.extend(_string_leaves(item))
+        return leaves
+    if isinstance(value, list):
+        leaves = []
+        for item in value:
+            leaves.extend(_string_leaves(item))
+        return leaves
+    return []
 
 
 class PrivacyEraseService:
@@ -938,21 +955,65 @@ class PrivacyEraseService:
     def _erase_derived_results(self, session: Session, target_id: str) -> None:
         # Answer/decision receipts are derived caches, not immutable evidence.
         # Keep operation keys so erasure never turns a retry into a fresh action.
+        lineage_tokens = self._derived_lineage_tokens(session, target_id)
+        receipt_predicates = ["instr(result_json, :target_id) > 0"]
+        receipt_params: dict[str, str] = {"target_id": target_id}
+        for index, token in enumerate(lineage_tokens):
+            parameter = f"lineage_token_{index}"
+            receipt_predicates.append(f"instr(result_json, :{parameter}) > 0")
+            receipt_params[parameter] = token
         session.execute(
             text(
                 "UPDATE memory_operation_receipts SET result_json = '{}', status = 'privacy_erased' "
-                "WHERE instr(result_json, :target_id) > 0 AND status <> 'privacy_erased'"
+                "WHERE ("
+                + " OR ".join(receipt_predicates)
+                + ") AND status <> 'privacy_erased'"
             ),
-            {"target_id": target_id},
+            receipt_params,
         )
+        decision_predicates = ["instr(recommendation_json, :target_id) > 0", "instr(review_json, :target_id) > 0"]
+        decision_params: dict[str, str] = {"target_id": target_id}
+        for index, token in enumerate(lineage_tokens):
+            parameter = f"lineage_token_{index}"
+            decision_predicates.extend(
+                [
+                    f"instr(recommendation_json, :{parameter}) > 0",
+                    f"instr(review_json, :{parameter}) > 0",
+                ]
+            )
+            decision_params[parameter] = token
         session.execute(
             text(
                 "UPDATE decision_support_runs SET recommendation_json = '{}', review_json = '{}', "
                 "status = 'privacy_erased' WHERE status <> 'privacy_erased' AND "
-                "(instr(recommendation_json, :target_id) > 0 OR instr(review_json, :target_id) > 0)"
+                "(" + " OR ".join(decision_predicates) + ")"
             ),
-            {"target_id": target_id},
+            decision_params,
         )
+
+    def _derived_lineage_tokens(self, session: Session, target_id: str) -> tuple[str, ...]:
+        """Return legacy receipt content that identifies a source without its ID."""
+        values: list[str] = []
+        memory_rows = session.execute(
+            text("SELECT value_json FROM formal_memory_versions WHERE formal_memory_id = :id"),
+            {"id": target_id},
+        ).scalars()
+        for value_json in memory_rows:
+            try:
+                payload = json.loads(str(value_json))
+            except (TypeError, ValueError):
+                continue
+            values.extend(_string_leaves(payload))
+        knowledge_rows = session.execute(
+            text(
+                "SELECT title, segmented_text, raw_text FROM chunks "
+                "WHERE source_type = 'knowledge_object' AND source_id = :id"
+            ),
+            {"id": target_id},
+        ).mappings()
+        for row in knowledge_rows:
+            values.extend(str(row[key]) for key in ("title", "segmented_text", "raw_text") if row[key])
+        return tuple(dict.fromkeys(value for value in values if len(value) >= 3 and value != target_id))
 
     def _erase_formal_memory(self, session: Session, formal_memory_id: str) -> None:
         self._erase_derived_results(session, formal_memory_id)

@@ -68,6 +68,24 @@ def test_erase_scrubs_answer_receipt(tmp_path: Path, mode: str) -> None:
     assert first.status_code == 200
     assert sentinel in first.text
     with factory() as session:
+        if mode == "memory_without_refs":
+            session.execute(
+                text(
+                    "UPDATE memory_operation_receipts "
+                    "SET result_json = json_remove(result_json, '$.memory_source_ids') "
+                    "WHERE operation_type = 'answer_question'"
+                )
+            )
+            session.execute(
+                text(
+                    "INSERT INTO memory_operation_receipts "
+                    "(id, operation_key, operation_type, request_hash, status, result_json) "
+                    "VALUES ('unrelated-receipt', 'unrelated-answer', 'answer_question', "
+                    "'unrelated-hash', 'completed', :result)"
+                ),
+                {"result": '{"response":{"answer":"unrelated receipt"}}'},
+            )
+            session.commit()
         before = (
             session.execute(
                 text(
@@ -121,6 +139,8 @@ def test_erase_scrubs_answer_receipt(tmp_path: Path, mode: str) -> None:
             .all()
         )
     assert sentinel not in str(receipts)
+    if mode == "memory_without_refs":
+        assert "unrelated receipt" in str(receipts)
     assert client.post("/v1/answers", json=payload, headers=headers).status_code == 409
 
 
