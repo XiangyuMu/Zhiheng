@@ -32,6 +32,16 @@ def test_erase_scrubs_linked_decision_run(tmp_path: Path, target_type: str) -> N
     with factory() as session:
         before = session.execute(query, {"id": run_id}).mappings().one()
         assert target_id in str(dict(before))
+        linked_sources = {
+            (str(row["source_type"]), str(row["source_id"]))
+            for row in session.execute(
+                text(
+                    "SELECT source_type, source_id FROM decision_run_sources WHERE run_id=:run_id"
+                ),
+                {"run_id": run_id},
+            ).mappings()
+        }
+        assert (target_type, target_id) in linked_sources
         assert DecisionSupportService().get_analysis(session, run_id) is not None
     service = PrivacyEraseService(
         ExternalEraseJournal(

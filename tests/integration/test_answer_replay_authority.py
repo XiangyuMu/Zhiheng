@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -85,6 +86,23 @@ def test_erase_scrubs_answer_receipt(tmp_path: Path, mode: str) -> None:
                 ),
                 {"result": '{"response":{"answer":"unrelated receipt"}}'},
             )
+            session.execute(
+                text(
+                    "INSERT INTO memory_operation_receipts "
+                    "(id, operation_key, operation_type, request_hash, status, result_json) "
+                    "VALUES ('shared-text-receipt', 'shared-text-answer', 'answer_question', "
+                    "'shared-text-hash', 'completed', :result)"
+                ),
+                {"result": json.dumps({"response": {"answer": sentinel}})},
+            )
+            linked = session.execute(
+                text(
+                    "SELECT source_type, source_id FROM memory_operation_receipt_sources "
+                    "WHERE receipt_id IN (SELECT id FROM memory_operation_receipts "
+                    "WHERE operation_type='answer_question')"
+                )
+            ).all()
+            assert ("formal_memory", ids["goal_id"]) in [tuple(row) for row in linked]
             session.commit()
         before = (
             session.execute(
@@ -138,9 +156,41 @@ def test_erase_scrubs_answer_receipt(tmp_path: Path, mode: str) -> None:
             .scalars()
             .all()
         )
-    assert sentinel not in str(receipts)
+    if mode == "memory_without_refs":
+        with factory() as session:
+            receipt_states = {
+                row[0]: row[1:]
+                for row in session.execute(
+                    text(
+                        "SELECT id, status, result_json FROM memory_operation_receipts "
+                        "WHERE id IN ('shared-text-receipt', 'unrelated-receipt') "
+                        "OR operation_key='api:answers:erase-replay'"
+                    )
+                ).all()
+            }
+            assert receipt_states["shared-text-receipt"][0] == "completed"
+            assert sentinel in str(receipt_states["shared-text-receipt"][1])
+            assert receipt_states["unrelated-receipt"][0] == "completed"
+    else:
+        assert sentinel not in str(receipts)
     if mode == "memory_without_refs":
         assert "unrelated receipt" in str(receipts)
+        assert sentinel in str(receipts)
+        with factory() as session:
+            unresolved = (
+                session.execute(
+                    text(
+                        "SELECT derived_type, derived_id FROM privacy_erase_unresolved_derived "
+                        "WHERE target_id=:target"
+                    ),
+                    {"target": ids["goal_id"]},
+                )
+                .mappings()
+                .all()
+            )
+            assert {(str(row["derived_type"]), str(row["derived_id"])) for row in unresolved} == {
+                ("memory_operation_receipt", "shared-text-receipt")
+            }
     assert client.post("/v1/answers", json=payload, headers=headers).status_code == 409
 
 
@@ -182,3 +232,143 @@ def test_citation_replay_requires_exact_current_provenance(tmp_path: Path) -> No
         assert renewed != proof
         KnowledgeRepository().soft_delete_knowledge(session, ids["knowledge_id"])
         assert validator.digest(session, citations) is None
+
+
+def test_legacy_receipt_collisions_are_preserved_and_audited(tmp_path: Path) -> None:
+    _client_instance, factory = _client(tmp_path)
+    ids = _seed(factory, tmp_path)
+    linked_receipt = "linked-paraphrase-receipt"
+    legacy_same_text = "legacy-same-text-receipt"
+    legacy_exact_id = "legacy-exact-id-receipt"
+    legacy_short_id = "legacy-short-id-receipt"
+    legacy_paraphrase = "legacy-paraphrase-receipt"
+    linked_malformed = "linked-malformed-receipt"
+    legacy_malformed = "legacy-malformed-receipt"
+    with factory() as session:
+        rows = [
+            (
+                linked_receipt,
+                json.dumps({"response": {"answer": "study quantitative finance"}}),
+            ),
+            (
+                legacy_same_text,
+                json.dumps({"response": {"answer": "learn quantitative finance"}}),
+            ),
+            (
+                legacy_exact_id,
+                json.dumps({"response": {"answer": ids["goal_id"]}}),
+            ),
+            (
+                legacy_short_id,
+                json.dumps({"response": {"answer": ids["goal_id"][:8]}}),
+            ),
+            (
+                legacy_paraphrase,
+                json.dumps({"response": {"answer": "study quantitative finance"}}),
+            ),
+            (linked_malformed, "{malformed"),
+            (legacy_malformed, "{malformed"),
+        ]
+        for receipt_id, result_json in rows:
+            session.execute(
+                text(
+                    "INSERT INTO memory_operation_receipts "
+                    "(id, operation_key, operation_type, request_hash, status, result_json) "
+                    "VALUES (:id, :operation_key, 'answer_question', :request_hash, "
+                    "'completed', :result_json)"
+                ),
+                {
+                    "id": receipt_id,
+                    "operation_key": f"operation:{receipt_id}",
+                    "request_hash": f"hash:{receipt_id}",
+                    "result_json": result_json,
+                },
+            )
+        session.execute(
+            text(
+                "INSERT INTO memory_operation_receipt_sources "
+                "(receipt_id, source_type, source_id) "
+                "VALUES (:receipt_id, 'formal_memory', :source_id)"
+            ),
+            {"receipt_id": linked_receipt, "source_id": ids["goal_id"]},
+        )
+        session.execute(
+            text(
+                "INSERT INTO memory_operation_receipt_sources "
+                "(receipt_id, source_type, source_id) "
+                "VALUES (:receipt_id, 'formal_memory', :source_id)"
+            ),
+            {"receipt_id": linked_malformed, "source_id": ids["goal_id"]},
+        )
+        session.commit()
+
+    service = PrivacyEraseService(
+        ExternalEraseJournal(tmp_path / "erase.jsonl", "synthetic-collision-secret")
+    )
+    with factory() as session:
+        intent = service.request_erase(
+            session,
+            target_type="formal_memory",
+            target_id=ids["goal_id"],
+            requester="synthetic-user",
+            reason="verify legacy receipt collision handling",
+        )
+        service.execute_memory_erase(
+            session,
+            request_id=intent.request_id,
+            target_type="formal_memory",
+            target_id=ids["goal_id"],
+        )
+        session.commit()
+
+    with factory() as session:
+        states = {
+            str(row["id"]): (str(row["status"]), str(row["result_json"]))
+            for row in session.execute(
+                text(
+                    "SELECT id, status, result_json FROM memory_operation_receipts "
+                    "WHERE id IN (:linked, :same_text, :exact_id, :short_id, "
+                    ":paraphrase, :linked_malformed, :legacy_malformed)"
+                ),
+                {
+                    "linked": linked_receipt,
+                    "same_text": legacy_same_text,
+                    "exact_id": legacy_exact_id,
+                    "short_id": legacy_short_id,
+                    "paraphrase": legacy_paraphrase,
+                    "linked_malformed": linked_malformed,
+                    "legacy_malformed": legacy_malformed,
+                },
+            ).mappings()
+        }
+        assert states[linked_receipt] == ("privacy_erased", "{}")
+        assert states[linked_malformed] == ("privacy_erased", "{}")
+        for receipt_id in (
+            legacy_same_text,
+            legacy_exact_id,
+            legacy_short_id,
+            legacy_paraphrase,
+            legacy_malformed,
+        ):
+            assert states[receipt_id][0] == "completed"
+
+        unresolved = {
+            str(row["derived_id"])
+            for row in session.execute(
+                text(
+                    "SELECT derived_id FROM privacy_erase_unresolved_derived "
+                    "WHERE erase_request_id=:request_id"
+                ),
+                {"request_id": intent.request_id},
+            ).mappings()
+        }
+        assert {
+            legacy_same_text,
+            legacy_exact_id,
+            legacy_malformed,
+        } <= unresolved
+        request_status = session.execute(
+            text("SELECT status FROM privacy_erase_requests WHERE id=:request_id"),
+            {"request_id": intent.request_id},
+        ).scalar_one()
+        assert request_status == "completed_with_unresolved"

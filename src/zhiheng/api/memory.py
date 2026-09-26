@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hmac
 import json
-from collections.abc import Generator
+from collections.abc import Generator, Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -1053,6 +1053,31 @@ def _complete_operation_receipt(
             "result_json": json_text(result),
         },
     )
+
+
+def _link_operation_receipt_sources(
+    session: Session,
+    receipt_id: str,
+    sources: Iterable[tuple[str, str]],
+) -> None:
+    """Persist exact source ownership outside the replayable result payload."""
+    for source_type, source_id in sources:
+        if not source_type or not source_id:
+            continue
+        session.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO memory_operation_receipt_sources
+                  (receipt_id, source_type, source_id)
+                VALUES (:receipt_id, :source_type, :source_id)
+                """
+            ),
+            {
+                "receipt_id": receipt_id,
+                "source_type": source_type,
+                "source_id": source_id,
+            },
+        )
 
 
 def _complete_api_mutation(session: Session, receipt_id: str, response: MutationResponse) -> None:

@@ -16,6 +16,7 @@ from zhiheng.api.memory import (
     _complete_operation_receipt,
     _csrf_token,
     _insert_operation_receipt,
+    _link_operation_receipt_sources,
     _operation_receipt,
     _request_hash,
 )
@@ -487,6 +488,17 @@ def answer_question(
             "memory_source_ids": memory_source_ids,
             "response": response.model_dump(mode="json"),
         },
+    )
+    _link_operation_receipt_sources(
+        session,
+        receipt_id,
+        [("formal_memory", source_id) for source_id in memory_source_ids]
+        + [
+            (str(row["source_type"]), str(row["source_id"]))
+            for row in response.rows
+            if row.get("source_type") and row.get("source_id")
+        ]
+        + [(citation.source_type, citation.source_id) for citation in response.citations],
     )
     if payload.conversation_id is not None:
         ConversationRepository().append(

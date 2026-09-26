@@ -8,7 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy.orm import Session
 
-from zhiheng.api.memory import _complete_operation_receipt, _insert_operation_receipt
+from zhiheng.api.memory import (
+    _complete_operation_receipt,
+    _insert_operation_receipt,
+    _link_operation_receipt_sources,
+)
 from zhiheng.api.retrieval import (
     BudgetUsagePayload,
     CitationPayload,
@@ -276,6 +280,12 @@ def analyze_decision(
         receipt_id,
         status_value="completed",
         result=response.model_dump(mode="json"),
+    )
+    _link_operation_receipt_sources(
+        session,
+        receipt_id,
+        [("formal_memory", source_id) for source_id in analysis.memory_source_ids]
+        + [(citation.source_type, citation.source_id) for citation in analysis.citations],
     )
     return response
 

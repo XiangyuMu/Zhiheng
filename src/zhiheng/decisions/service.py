@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
@@ -22,6 +22,27 @@ from zhiheng.retrieval.replay import CitationReplayValidator
 
 SUPPORTED_DECISION_TYPES = frozenset({"compare"})
 SUPPORTED_TEMPLATE_IDS = frozenset({"g005.default"})
+
+
+def link_decision_run_sources(
+    session: Session,
+    run_id: str,
+    sources: Iterable[tuple[str, str]],
+) -> None:
+    """Persist exact decision-run source ownership outside mutable JSON."""
+    for source_type, source_id in sources:
+        if not source_type or not source_id:
+            continue
+        session.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO decision_run_sources
+                  (run_id, source_type, source_id)
+                VALUES (:run_id, :source_type, :source_id)
+                """
+            ),
+            {"run_id": run_id, "source_type": source_type, "source_id": source_id},
+        )
 
 
 @dataclass(frozen=True)
@@ -369,6 +390,12 @@ class DecisionSupportService:
                     }
                 ),
             },
+        )
+        link_decision_run_sources(
+            session,
+            analysis.run_id,
+            [("formal_memory", source_id) for source_id in analysis.memory_source_ids]
+            + [(citation.source_type, citation.source_id) for citation in analysis.citations],
         )
         return analysis
 

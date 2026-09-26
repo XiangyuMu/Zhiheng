@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -30,10 +31,10 @@ def _string_leaves(value: object) -> list[str]:
             leaves.extend(_string_leaves(item))
         return leaves
     if isinstance(value, list):
-        leaves = []
+        list_leaves: list[str] = []
         for item in value:
-            leaves.extend(_string_leaves(item))
-        return leaves
+            list_leaves.extend(_string_leaves(item))
+        return list_leaves
     return []
 
 
@@ -57,8 +58,9 @@ class PrivacyEraseService:
                 SELECT per.id, pel.target_type, pel.target_id
                 FROM privacy_erase_requests per
                 JOIN privacy_erase_ledger pel ON pel.erase_request_id = per.id
-                WHERE per.status <> 'completed'
-                  AND pel.phase = 'intent' AND pel.status = 'pending'
+                WHERE per.status NOT IN ('completed', 'completed_with_unresolved')
+                  AND pel.phase = 'intent'
+                  AND pel.status = 'pending'
                 ORDER BY per.id
                 """
             )
@@ -274,13 +276,20 @@ class PrivacyEraseService:
     ) -> None:
         self._ensure_knowledge_intent(session, request_id, knowledge_object_id)
         self._record_pending_physical_erases(session, request_id, knowledge_object_id)
-        self._erase_knowledge_rows(session, knowledge_object_id)
+        unresolved_count = self._erase_knowledge_rows(
+            session, knowledge_object_id, request_id=request_id
+        )
         session.commit()
 
         self._unlink_pending_physical_erases(session, request_id, knowledge_object_id)
         session.commit()
 
-        self._complete_knowledge_erase(session, request_id, knowledge_object_id)
+        self._complete_knowledge_erase(
+            session,
+            request_id,
+            knowledge_object_id,
+            unresolved_count=unresolved_count,
+        )
 
     def _ensure_knowledge_intent(
         self, session: Session, request_id: str, knowledge_object_id: str
@@ -373,8 +382,15 @@ class PrivacyEraseService:
                 },
             )
 
-    def _erase_knowledge_rows(self, session: Session, knowledge_object_id: str) -> None:
-        self._erase_derived_results(session, knowledge_object_id)
+    def _erase_knowledge_rows(
+        self, session: Session, knowledge_object_id: str, *, request_id: str
+    ) -> int:
+        unresolved_count = self._erase_derived_results(
+            session,
+            target_type="knowledge_object",
+            target_id=knowledge_object_id,
+            request_id=request_id,
+        )
         fts_rows = session.execute(
             text(
                 """
@@ -488,16 +504,21 @@ class PrivacyEraseService:
                 UPDATE knowledge_operation_receipts
                 SET result_json = :result_json,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE result_json LIKE :knowledge_object_ref
+                WHERE json_valid(knowledge_operation_receipts.result_json)
+                  AND json_extract(
+                        knowledge_operation_receipts.result_json,
+                        '$.knowledge_object_id'
+                      ) = :knowledge_object_id
                 """
             ),
             {
                 "result_json": json_text(
                     {"privacy_erased_knowledge_object_id": knowledge_object_id}
                 ),
-                "knowledge_object_ref": f"%{knowledge_object_id}%",
+                "knowledge_object_id": knowledge_object_id,
             },
         )
+        return unresolved_count
 
     def _unlink_pending_physical_erases(
         self, session: Session, request_id: str, knowledge_object_id: str
@@ -558,7 +579,12 @@ class PrivacyEraseService:
             session.commit()
 
     def _complete_knowledge_erase(
-        self, session: Session, request_id: str, knowledge_object_id: str
+        self,
+        session: Session,
+        request_id: str,
+        knowledge_object_id: str,
+        *,
+        unresolved_count: int = 0,
     ) -> None:
         pending_physical = session.execute(
             text(
@@ -579,12 +605,15 @@ class PrivacyEraseService:
             text(
                 """
                 UPDATE privacy_erase_ledger
-                SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+                SET status = :status, completed_at = CURRENT_TIMESTAMP
                 WHERE erase_request_id = :request_id
                   AND phase = 'intent'
                 """
             ),
-            {"request_id": request_id},
+            {
+                "request_id": request_id,
+                "status": "completed_with_unresolved" if unresolved_count else "completed",
+            },
         )
         session.execute(
             text(
@@ -654,11 +683,14 @@ class PrivacyEraseService:
             text(
                 """
                 UPDATE privacy_erase_requests
-                SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+                SET status = :status, completed_at = CURRENT_TIMESTAMP
                 WHERE id = :request_id
                 """
             ),
-            {"request_id": request_id},
+            {
+                "request_id": request_id,
+                "status": "completed_with_unresolved" if unresolved_count else "completed",
+            },
         )
 
     def _mark_physical_erase_failed(self, session: Session, erase_id: str, error: str) -> None:
@@ -770,20 +802,33 @@ class PrivacyEraseService:
             raise ValueError("privacy erase requires a pending write-ahead intent")
 
         if target_type == "memory_candidate":
+            unresolved_count = self._erase_derived_results(
+                session,
+                target_type=target_type,
+                target_id=target_id,
+                request_id=request_id,
+            )
             self._erase_memory_candidate(session, target_id)
         else:
-            self._erase_formal_memory(session, target_id)
+            unresolved_count = self._erase_formal_memory(
+                session,
+                target_id,
+                request_id=request_id,
+            )
 
         session.execute(
             text(
                 """
                 UPDATE privacy_erase_ledger
-                SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+                SET status = :status, completed_at = CURRENT_TIMESTAMP
                 WHERE erase_request_id = :request_id
                   AND phase = 'intent'
                 """
             ),
-            {"request_id": request_id},
+            {
+                "request_id": request_id,
+                "status": "completed_with_unresolved" if unresolved_count else "completed",
+            },
         )
 
         session.execute(
@@ -819,11 +864,14 @@ class PrivacyEraseService:
             text(
                 """
                 UPDATE privacy_erase_requests
-                SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+                SET status = :status, completed_at = CURRENT_TIMESTAMP
                 WHERE id = :request_id
                 """
             ),
-            {"request_id": request_id},
+            {
+                "request_id": request_id,
+                "status": "completed_with_unresolved" if unresolved_count else "completed",
+            },
         )
 
     def execute_event_erase(self, session: Session, *, request_id: str, event_id: str) -> None:
@@ -952,47 +1000,248 @@ class PrivacyEraseService:
             {"candidate_id": candidate_id},
         )
 
-    def _erase_derived_results(self, session: Session, target_id: str) -> None:
-        # Answer/decision receipts are derived caches, not immutable evidence.
-        # Keep operation keys so erasure never turns a retry into a fresh action.
-        lineage_tokens = self._derived_lineage_tokens(session, target_id)
-        receipt_predicates = ["instr(result_json, :target_id) > 0"]
-        receipt_params: dict[str, str] = {"target_id": target_id}
-        for index, token in enumerate(lineage_tokens):
-            parameter = f"lineage_token_{index}"
-            receipt_predicates.append(f"instr(result_json, :{parameter}) > 0")
-            receipt_params[parameter] = token
+    def _erase_derived_results(
+        self,
+        session: Session,
+        *,
+        target_type: str,
+        target_id: str,
+        request_id: str,
+    ) -> int:
+        """Erase bound results and audit ambiguous legacy derived data.
+
+        New records carry source bindings in dedicated tables. Legacy records are
+        only quarantined when their structured payload contains an exact known
+        source value; free text and short substrings are never treated as proof.
+        Malformed legacy payloads are retained and audited because their lineage
+        cannot be established safely.
+        """
         session.execute(
             text(
-                "UPDATE memory_operation_receipts SET result_json = '{}', status = 'privacy_erased' "
-                "WHERE ("
-                + " OR ".join(receipt_predicates)
-                + ") AND status <> 'privacy_erased'"
+                """
+                UPDATE memory_operation_receipts
+                SET result_json = '{}', status = 'privacy_erased'
+                WHERE status <> 'privacy_erased'
+                  AND EXISTS (
+                    SELECT 1 FROM memory_operation_receipt_sources s
+                    WHERE s.receipt_id = memory_operation_receipts.id
+                      AND s.source_type = :target_type
+                      AND s.source_id = :target_id
+                  )
+                """
             ),
-            receipt_params,
+            {"target_type": target_type, "target_id": target_id},
         )
-        decision_predicates = ["instr(recommendation_json, :target_id) > 0", "instr(review_json, :target_id) > 0"]
-        decision_params: dict[str, str] = {"target_id": target_id}
-        for index, token in enumerate(lineage_tokens):
-            parameter = f"lineage_token_{index}"
-            decision_predicates.extend(
-                [
-                    f"instr(recommendation_json, :{parameter}) > 0",
-                    f"instr(review_json, :{parameter}) > 0",
-                ]
-            )
-            decision_params[parameter] = token
         session.execute(
             text(
-                "UPDATE decision_support_runs SET recommendation_json = '{}', review_json = '{}', "
-                "status = 'privacy_erased' WHERE status <> 'privacy_erased' AND "
-                "(" + " OR ".join(decision_predicates) + ")"
+                """
+                UPDATE decision_support_runs
+                SET recommendation_json = '{}', review_json = '{}', status = 'privacy_erased'
+                WHERE status <> 'privacy_erased'
+                  AND EXISTS (
+                    SELECT 1 FROM decision_run_sources s
+                    WHERE s.run_id = decision_support_runs.id
+                      AND s.source_type = :target_type
+                      AND s.source_id = :target_id
+                  )
+                """
             ),
-            decision_params,
+            {"target_type": target_type, "target_id": target_id},
         )
 
+        unresolved = 0
+        legacy_exact_id_receipts = (
+            session.execute(
+                text(
+                    """
+                SELECT r.id
+                FROM memory_operation_receipts r
+                WHERE r.operation_type IN ('answer_question', 'analyze_decision')
+                  AND r.status <> 'privacy_erased'
+                  AND json_valid(r.result_json)
+                  AND NOT EXISTS (SELECT 1 FROM memory_operation_receipt_sources s
+                                  WHERE s.receipt_id = r.id)
+                  AND EXISTS (SELECT 1 FROM json_tree(r.result_json) j
+                              WHERE j.type = 'text' AND j.value = :target_id)
+                """
+                ),
+                {"target_id": target_id},
+            )
+            .scalars()
+            .all()
+        )
+        for derived_id in legacy_exact_id_receipts:
+            unresolved += self._record_unresolved_derived(
+                session,
+                request_id=request_id,
+                derived_type="memory_operation_receipt",
+                derived_id=str(derived_id),
+                target_type=target_type,
+                target_id=target_id,
+            )
+        for token in self._derived_lineage_tokens(session, target_id):
+            receipt_ids = (
+                session.execute(
+                    text(
+                        """
+                    SELECT r.id
+                    FROM memory_operation_receipts r
+                    WHERE r.operation_type IN ('answer_question', 'analyze_decision')
+                      AND r.status <> 'privacy_erased'
+                      AND json_valid(r.result_json)
+                      AND NOT EXISTS (SELECT 1 FROM memory_operation_receipt_sources s
+                                      WHERE s.receipt_id = r.id)
+                      AND EXISTS (SELECT 1 FROM json_tree(r.result_json) j
+                                  WHERE j.type = 'text' AND j.value = :token)
+                    """
+                    ),
+                    {"token": token},
+                )
+                .scalars()
+                .all()
+            )
+            for derived_id in receipt_ids:
+                unresolved += self._record_unresolved_derived(
+                    session,
+                    request_id=request_id,
+                    derived_type="memory_operation_receipt",
+                    derived_id=str(derived_id),
+                    target_type=target_type,
+                    target_id=target_id,
+                )
+            run_ids = (
+                session.execute(
+                    text(
+                        """
+                    SELECT r.id
+                    FROM decision_support_runs r
+                    WHERE r.status <> 'privacy_erased'
+                      AND json_valid(r.recommendation_json)
+                      AND json_valid(r.review_json)
+                      AND NOT EXISTS (SELECT 1 FROM decision_run_sources s
+                                      WHERE s.run_id = r.id)
+                      AND (EXISTS (SELECT 1 FROM json_tree(r.recommendation_json) j
+                                   WHERE j.type = 'text' AND j.value = :token)
+                           OR EXISTS (SELECT 1 FROM json_tree(r.review_json) j
+                                      WHERE j.type = 'text' AND j.value = :token))
+                    """
+                    ),
+                    {"token": token},
+                )
+                .scalars()
+                .all()
+            )
+            for derived_id in run_ids:
+                unresolved += self._record_unresolved_derived(
+                    session,
+                    request_id=request_id,
+                    derived_type="decision_support_run",
+                    derived_id=str(derived_id),
+                    target_type=target_type,
+                    target_id=target_id,
+                )
+
+        malformed_receipts = (
+            session.execute(
+                text(
+                    """
+                SELECT r.id FROM memory_operation_receipts r
+                WHERE r.operation_type IN ('answer_question', 'analyze_decision')
+                  AND r.status <> 'privacy_erased'
+                  AND NOT json_valid(r.result_json)
+                  AND NOT EXISTS (SELECT 1 FROM memory_operation_receipt_sources s
+                                  WHERE s.receipt_id = r.id)
+                """
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for derived_id in malformed_receipts:
+            unresolved += self._record_unresolved_derived(
+                session,
+                request_id=request_id,
+                derived_type="memory_operation_receipt",
+                derived_id=str(derived_id),
+                target_type=target_type,
+                target_id=target_id,
+            )
+        malformed_runs = (
+            session.execute(
+                text(
+                    """
+                SELECT r.id FROM decision_support_runs r
+                WHERE r.status <> 'privacy_erased'
+                  AND (NOT json_valid(r.recommendation_json) OR NOT json_valid(r.review_json))
+                  AND NOT EXISTS (SELECT 1 FROM decision_run_sources s WHERE s.run_id = r.id)
+                """
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for derived_id in malformed_runs:
+            unresolved += self._record_unresolved_derived(
+                session,
+                request_id=request_id,
+                derived_type="decision_support_run",
+                derived_id=str(derived_id),
+                target_type=target_type,
+                target_id=target_id,
+            )
+        return unresolved
+
+    @staticmethod
+    def _record_unresolved_derived(
+        session: Session,
+        *,
+        request_id: str,
+        derived_type: str,
+        derived_id: str,
+        target_type: str,
+        target_id: str,
+    ) -> int:
+        existing = session.execute(
+            text(
+                """
+                SELECT 1
+                FROM privacy_erase_unresolved_derived
+                WHERE erase_request_id = :request_id
+                  AND derived_type = :derived_type
+                  AND derived_id = :derived_id
+                """
+            ),
+            {
+                "request_id": request_id,
+                "derived_type": derived_type,
+                "derived_id": derived_id,
+            },
+        ).first()
+        if existing is not None:
+            return 0
+        session.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO privacy_erase_unresolved_derived
+                  (id, erase_request_id, derived_type, derived_id,
+                   target_type, target_id, reason)
+                VALUES (:id, :request_id, :derived_type, :derived_id,
+                        :target_type, :target_id, 'legacy content match without authoritative source binding')
+                """
+            ),
+            {
+                "id": new_id(),
+                "request_id": request_id,
+                "derived_type": derived_type,
+                "derived_id": derived_id,
+                "target_type": target_type,
+                "target_id": target_id,
+            },
+        )
+        return 1
+
     def _derived_lineage_tokens(self, session: Session, target_id: str) -> tuple[str, ...]:
-        """Return legacy receipt content that identifies a source without its ID."""
+        """Return legacy text values that may identify the erased source."""
         values: list[str] = []
         memory_rows = session.execute(
             text("SELECT value_json FROM formal_memory_versions WHERE formal_memory_id = :id"),
@@ -1006,17 +1255,37 @@ class PrivacyEraseService:
             values.extend(_string_leaves(payload))
         knowledge_rows = session.execute(
             text(
-                "SELECT title, segmented_text, raw_text FROM chunks "
-                "WHERE source_type = 'knowledge_object' AND source_id = :id"
+                """
+                SELECT ko.title, kv.summary, eo.source_metadata_json
+                FROM knowledge_objects ko
+                JOIN knowledge_versions kv ON kv.knowledge_object_id = ko.id
+                LEFT JOIN content_versions cv ON cv.id = kv.content_version_id
+                LEFT JOIN evidence_objects eo ON eo.id = cv.evidence_object_id
+                WHERE ko.id = :id
+                """
             ),
             {"id": target_id},
         ).mappings()
         for row in knowledge_rows:
-            values.extend(str(row[key]) for key in ("title", "segmented_text", "raw_text") if row[key])
-        return tuple(dict.fromkeys(value for value in values if len(value) >= 3 and value != target_id))
+            for key in ("title", "summary"):
+                if row[key]:
+                    values.append(str(row[key]))
+            if row["source_metadata_json"]:
+                with suppress(TypeError, ValueError):
+                    values.extend(_string_leaves(json.loads(str(row["source_metadata_json"]))))
+        return tuple(
+            dict.fromkeys(value for value in values if len(value) >= 3 and value != target_id)
+        )
 
-    def _erase_formal_memory(self, session: Session, formal_memory_id: str) -> None:
-        self._erase_derived_results(session, formal_memory_id)
+    def _erase_formal_memory(
+        self, session: Session, formal_memory_id: str, *, request_id: str
+    ) -> int:
+        unresolved_count = self._erase_derived_results(
+            session,
+            target_type="formal_memory",
+            target_id=formal_memory_id,
+            request_id=request_id,
+        )
         session.execute(
             text(
                 """
@@ -1072,3 +1341,4 @@ class PrivacyEraseService:
             ),
             {"formal_memory_id": formal_memory_id},
         )
+        return unresolved_count
