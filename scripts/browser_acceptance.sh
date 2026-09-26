@@ -64,6 +64,7 @@ if ! kill -0 "${WORKER_PID}" 2>/dev/null; then
 fi
 
 BASE_URL="http://127.0.0.1:${PORT}"
+node --test tests/e2e/test_import_polling.cjs >"${OUTPUT_DIR}/import-polling.log" 2>&1
 ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs "${BASE_URL}" "${OUTPUT_DIR}/workspace-full"
 node tests/e2e/check_review_relations.cjs "${BASE_URL}" "${OUTPUT_DIR}/relations"
 node tests/e2e/check_qualification.cjs "${BASE_URL}" "${OUTPUT_DIR}/qualification"
@@ -81,8 +82,15 @@ import sys
 from pathlib import Path
 
 output, git_sha, port = sys.argv[1:]
+output_path = Path(output)
+artifact_root = output_path.parent
 def version(command: list[str]) -> str:
     return subprocess.check_output(command, text=True).strip()
+def load_json(relative_path: str) -> object:
+    path = artifact_root / relative_path
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
 
 report = {
     "status": "passed",
@@ -92,9 +100,11 @@ report = {
     "commands": [
         "npm ci --ignore-scripts --no-audit --no-fund",
         "npx playwright install chromium",
-        "uv run python scripts/upgrade_database.py $ZHIHENG_DATABASE_URL (isolated database)",
+        "uv run python scripts/upgrade_database.py <isolated sqlite path>",
+        "uv run python scripts/upgrade_database.py <isolated sqlite path> (idempotence check)",
         "uv run uvicorn zhiheng.api.main:app",
         "uv run zhiheng-worker --role worker --idle-seconds 1",
+        "node --test tests/e2e/test_import_polling.cjs",
         "ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs",
         "node tests/e2e/check_review_relations.cjs",
         "node tests/e2e/check_qualification.cjs",
@@ -106,16 +116,28 @@ report = {
         "playwright": version(["node", "-e", "console.log(require('playwright/package.json').version)"]),
         "chromium": version(["node", "-e", "const { chromium } = require('playwright'); console.log(chromium.executablePath())"]),
     },
-    "artifacts": ["migration.log", "api.log", "worker.log", "workspace-full", "relations", "qualification"],
+    "artifacts": ["migration.log", "api.log", "worker.log", "import-polling.log", "workspace-full", "relations", "qualification"],
+    "browser_evidence": {
+        "workspace_full": load_json("workspace-full/checks.json"),
+        "relations": load_json("relations/checks.json"),
+        "qualification": load_json("qualification/checks.json"),
+    },
     "issue_mapping": {
         "#1": ["authenticated research workspace loads", "missing evidence remains explicit"],
         "#2-#10": ["workspace-full", "relation review", "cross-session qualification"],
         "#15": ["taxonomy APIs are reachable from the authenticated browser"],
         "#16": ["unapproved conclusions stay out of both browser sessions; approved conclusions become visible in a separate browser session"],
-        "#17": ["workspace-full", "relation review", "cross-session qualification"],
+        "#17": [
+            "clean isolated database migration is idempotent",
+            "real API and independent worker stay alive",
+            "browser login to pasted text import to durable worker-completed job",
+            "succeeded import requires searchable index and original reader content",
+            "polling failure diagnostics cover 404, bounded 5xx retry, failed, unsupported, and partial states",
+            "workspace-full, relation review, cross-session qualification"
+        ],
         "#18": ["API and worker remain alive during browser acceptance"],
     },
 }
-Path(output).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
 PY
 echo "Browser acceptance passed; report: ${OUTPUT_DIR}/report.json"

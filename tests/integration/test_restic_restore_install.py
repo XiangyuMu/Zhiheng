@@ -21,9 +21,11 @@ from zhiheng.backup import BackupArtifact
 from zhiheng.core.config import Settings
 from zhiheng.db.maintenance import acquire_database_lock
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
+from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import LocalKnowledgeObjectStore, StoredTextArtifacts
 from zhiheng.privacy.erase_journal import ExternalEraseJournal
+from zhiheng.retrieval.repository import CitationContextRepository, LexicalRetriever
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTIC_FIXTURE = Path("/tmp/zhiheng-restic-runtime.xgcP3J/restic/0.19.1/bin/restic")
@@ -79,6 +81,10 @@ def _make_backup(tmp_path: Path, binary: str) -> tuple[Path, str, str]:
     artifacts = LocalKnowledgeObjectStore(source_objects).write_text_artifacts(RESTORE_TEXT)
     with session_scope(session_factory) as session:
         knowledge_object_id = _ingest(session, artifacts)
+        # The fixture represents a completed indexing worker before the
+        # snapshot is taken, so restored search observes the normal serving
+        # qualification contract.
+        mark_formal_knowledge_indexed(session, knowledge_object_id)
     engine = session_factory.kw["bind"]
     assert isinstance(engine, Engine)
     engine.dispose()
@@ -203,6 +209,52 @@ def test_restic_restore_installs_clean_bundle_into_new_target(tmp_path: Path) ->
     assert len(object_paths) == 3
     assert all(path.is_relative_to(target_objects) for path in object_paths)
     assert all(path.read_bytes() == RESTORE_TEXT.encode() for path in object_paths)
+
+
+def test_restic_restore_supports_real_search_and_original_source_resolution(
+    tmp_path: Path,
+) -> None:
+    binary = _restic_binary()
+    repository, snapshot_id, knowledge_object_id = _make_backup(tmp_path, binary)
+    target_db = tmp_path / "target" / "zhiheng.db"
+    target_objects = tmp_path / "target" / "objects"
+    journal_path = tmp_path / "target" / "erase-journal.jsonl"
+    _empty_journal(journal_path)
+
+    _run_restore(
+        _restore_env(repository, binary, snapshot_id, target_db, target_objects, journal_path)
+    )
+
+    with session_scope(_open_session_factory(target_db)) as session:
+        hits = LexicalRetriever().search(session, "restore install")
+        assert [hit.source_id for hit in hits] == [knowledge_object_id]
+        hit = hits[0]
+        chunk = CitationContextRepository().get_chunk(
+            session,
+                source_type=hit.source_type,
+            source_id=hit.source_id,
+            source_version_id=hit.source_version_id,
+            chunk_id=hit.chunk_id,
+        )
+        assert chunk is not None
+        assert chunk["text"] == RESTORE_TEXT
+
+        object_uri = session.execute(
+            text(
+                """
+                SELECT eo.object_uri
+                FROM evidence_objects eo
+                JOIN content_versions cv ON cv.evidence_object_id = eo.id
+                JOIN knowledge_versions kv ON kv.content_version_id = cv.id
+                WHERE kv.knowledge_object_id = :knowledge_object_id
+                """
+            ),
+            {"knowledge_object_id": knowledge_object_id},
+        ).scalar_one()
+
+    assert LocalKnowledgeObjectStore(target_objects).read_bytes(str(object_uri)) == (
+        RESTORE_TEXT.encode()
+    )
 
 
 def test_restic_restore_replays_later_external_erase_against_final_object_root(

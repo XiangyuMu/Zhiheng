@@ -19,6 +19,7 @@ fs.mkdirSync(output, { recursive: true });
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   const checks = [];
+  const evidence = {};
   async function check(label, work) { await work(); checks.push(label); console.log('PASS', label); }
   async function shot(name) { await page.screenshot({ path: path.join(output, `${name}.png`), fullPage: true }); }
   async function noOverflow() { assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'body must not scroll horizontally'); }
@@ -68,6 +69,49 @@ fs.mkdirSync(output, { recursive: true });
       await page.getByRole('button', { name: '中文检索研究记录', exact: true }).waitFor({ timeout: 25000 });
       assert.equal(await page.evaluate(() => window.untrustedRan), undefined);
       assert(!await page.locator('#import-dialog').isVisible());
+    });
+    await check('import task reaches formal retrieval qualification through the independent worker', async () => {
+      const search = await apiJson('/v1/knowledge/search?' + new URLSearchParams({
+        q: '中文全文检索 正式视图 原文核验',
+        limit: '5',
+      }));
+      const item = search.items.find((entry) => entry.title === '中文检索研究记录');
+      assert(item, 'imported item must be reachable through the public search API');
+      assert.equal(item.lifecycle_status, 'formal_current');
+      assert(item.knowledge_object_id, 'search result must expose a knowledge object id');
+      assert(item.knowledge_version_id, 'search result must expose a version pointer');
+      assert.equal(item.source_type, 'user_explicit');
+      assert.equal(item.media_type, 'text/markdown');
+      assert.equal(String(item.content_sha256).length, 64);
+
+      const processing = await apiJson(`/v1/knowledge/${item.knowledge_object_id}/processing`);
+      assert.equal(processing.public_status, 'succeeded');
+      assert.equal(processing.job_status, 'completed');
+      assert.equal(processing.searchable, true);
+      assert(processing.job_id, 'worker-completed import must retain its durable job id');
+      assert.match(processing.etag, /^knowledge-job:/);
+
+      const reader = await apiJson(`/v1/knowledge/${item.knowledge_object_id}/reader`);
+      assert.equal(reader.knowledge_version_id, item.knowledge_version_id);
+      assert.equal(reader.source.kind, 'user_explicit');
+      assert.equal(reader.source.sha256, item.content_sha256);
+      assert(Number(reader.source.byte_size) > 0);
+      assert(reader.text.includes('所有结论都需要回到原文核验'));
+      assert(Array.isArray(reader.chunks));
+
+      evidence.importQualification = {
+        knowledge_object_id: item.knowledge_object_id,
+        knowledge_version_id: item.knowledge_version_id,
+        job_id: processing.job_id,
+        public_status: processing.public_status,
+        job_status: processing.job_status,
+        searchable: processing.searchable,
+        source_type: item.source_type,
+        media_type: item.media_type,
+        content_sha256: item.content_sha256,
+        original_source_sha256: reader.source.sha256,
+        reader_text_contains_original: reader.text.includes('中文全文检索必须回查正式视图'),
+      };
     });
     await shot('library-desktop');
     await check('library filtering and reader preserve context', async () => {
@@ -179,11 +223,11 @@ fs.mkdirSync(output, { recursive: true });
       assert.equal((await apiJson(`/v1/conclusions/${first.id}`)).status, 'formal');
       assert.equal((await apiJson(`/v1/conclusions/${second.id}`)).status, 'deferred');
       page.once('dialog', async (dialog) => { await dialog.accept('固定条件下复习需要更多样本（已修订）'); });
-      await page.locator('.queue-item').filter({ hasText: '固定条件下复习需要更多样本' }).click();
+      await page.locator(`button.queue-item[data-entry-id="${third.id}"]`).click();
       await page.getByRole('button', { name: '修订' }).click();
       await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
       assert.equal((await apiJson(`/v1/conclusions/${third.id}`)).claim, '固定条件下复习需要更多样本（已修订）');
-      await page.locator('.queue-item').filter({ hasText: '固定条件下复习暂不确定' }).click();
+      await page.locator(`button.queue-item[data-entry-id="${fourth.id}"]`).click();
       await page.getByRole('button', { name: '拒绝' }).click();
       await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
       assert.equal((await apiJson(`/v1/conclusions/${fourth.id}`)).status, 'rejected');
@@ -221,6 +265,6 @@ fs.mkdirSync(output, { recursive: true });
       }
     });
     assert.deepEqual(errors, [], 'no uncaught browser errors');
-    fs.writeFileSync(path.join(output, 'checks.json'), JSON.stringify({ checks, browserErrors: errors }, null, 2));
+    fs.writeFileSync(path.join(output, 'checks.json'), JSON.stringify({ checks, evidence, browserErrors: errors }, null, 2));
   } finally { await browser.close(); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

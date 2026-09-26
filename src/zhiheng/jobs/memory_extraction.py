@@ -406,7 +406,13 @@ def process_memory_extraction_jobs_once(
         try:
             executor.execute(session_factory, job)
         except Exception as exc:
-            _record_conclusion_extraction_failure(session_factory, job, exc)
+            try:
+                _record_conclusion_extraction_failure(session_factory, job, exc)
+            except RuntimeError:
+                # A transient database lock must not terminate the worker. The
+                # durable job_attempts row below still preserves the failure
+                # diagnostics for retry/operations.
+                logger.exception("conversation extraction failure could not be reviewed")
             with session_scope(session_factory) as session:
                 session.execute(
                     text(
