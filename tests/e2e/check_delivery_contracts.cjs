@@ -246,7 +246,7 @@ const MINIMAL_PDF = Buffer.from(
       assert(context.items.some((item) => item.id === conditional.id));
       assert(!context.items.some((item) => item.id === expired.id));
       const reader = await apiJson(`/v1/knowledge/${conditionalApproval.knowledge_id}/reader`);
-      assert.match(reader.text, /^如果固定条件/);
+      assert.match(reader.text, /^如果在固定条件/);
       evidence.applicability = {
         conditional_id: conditional.id,
         conditional_context_visible: true,
