@@ -1,9 +1,8 @@
 /* Browser acceptance for Issue #17 delivery contracts.
  *
  * This script uses an authenticated browser context for every HTTP mutation.
- * Taxonomy has a dedicated center but the item migration contract is asserted
- * through its authenticated API because the main workspace does not expose the
- * proposal editor as a visible navigation item.
+ * Taxonomy uses the real taxonomy center UI for per-item migration decisions
+ * and authenticated HTTP checks for durable state verification.
  *
  * node tests/e2e/check_delivery_contracts.cjs LOOPBACK_URL OUTPUT_DIR
  */
@@ -11,6 +10,11 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { chromium } = require("playwright");
+const { randomUUID } = require("node:crypto");
+const runTag = randomUUID().replaceAll("-", "").slice(0, 12);
+const personalFinanceDomain = `issue17_personal_finance_${runTag}`;
+const businessFinanceDomain = `issue17_business_finance_${runTag}`;
+const mergedFinanceDomain = `issue17_finance_merged_${runTag}`;
 
 const base = process.argv[2];
 const output = process.argv[3];
@@ -68,6 +72,22 @@ const MINIMAL_PDF = Buffer.from(
       if (!response.ok) throw new Error(`${response.status}: ${body.detail || raw}`);
       return body;
     }, { url, options });
+  }
+  async function contextPrompts(query) {
+    return apiJson(`/v1/personal-updates/context-prompts?query=${encodeURIComponent(query)}`);
+  }
+  async function waitKnowledgeSearchable(knowledgeId) {
+    let latest;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      latest = await apiJson(`/v1/knowledge/${encodeURIComponent(knowledgeId)}/processing`);
+      if (
+        latest.public_status === "succeeded"
+        && latest.job_status === "completed"
+        && latest.searchable === true
+      ) return latest;
+      await page.waitForTimeout(1000);
+    }
+    throw new Error(`knowledge object did not become searchable: ${JSON.stringify(latest)}`);
   }
   async function login() {
     await page.goto(`${base}/login`);
@@ -132,23 +152,24 @@ const MINIMAL_PDF = Buffer.from(
           operation: "split",
           source_domain_ids: ["economics_finance_business"],
           new_domains: [
-            { id: "issue17_personal_finance", name: "Issue17 个人财务", sort_order: 900 },
-            { id: "issue17_business_finance", name: "Issue17 商业金融", sort_order: 901 },
+            { id: personalFinanceDomain, name: "Issue17 个人财务", sort_order: 900 },
+            { id: businessFinanceDomain, name: "Issue17 商业金融", sort_order: 901 },
           ],
           reason: "Issue 17 browser item-by-item migration",
         },
       });
       const proposalResult = proposal.result;
-      assert.deepEqual(
-        new Set(proposalResult.preview.affected_knowledge.map((item) => item.knowledge_object_id)),
-        new Set([first, second]),
+      const affectedIds = new Set(
+        proposalResult.preview.affected_knowledge.map((item) => item.knowledge_object_id),
       );
+      assert(affectedIds.has(first));
+      assert(affectedIds.has(second));
       await page.goto(`${base}/taxonomy-center`);
       await page.locator("main").waitFor();
       const migrationItems = page.locator(".migration-item");
       const firstItem = migrationItems.filter({ hasText: "分类迁移条目 A" });
       await firstItem.waitFor();
-      await firstItem.locator("select").selectOption("issue17_personal_finance");
+      await firstItem.locator("select").selectOption(personalFinanceDomain);
       await firstItem.getByRole("button", { name: "保存" }).click();
       await page.locator("#proposal-message").filter({ hasText: "迁移决定已保存" }).waitFor();
       const approved = page.getByRole("button", { name: "批准已确认迁移" });
@@ -166,31 +187,34 @@ const MINIMAL_PDF = Buffer.from(
       );
       assert.equal(
         (await apiJson(`/v1/knowledge/${first}/classifications`)).primary_domain_id,
-        "issue17_personal_finance",
+        personalFinanceDomain,
       );
       assert.equal(
         (await apiJson(`/v1/knowledge/${second}/classifications`)).primary_domain_id,
         "economics_finance_business",
       );
       const history = await apiJson(`/v1/knowledge/${first}/classification-history`);
+      const deferredHistory = await apiJson(`/v1/knowledge/${second}/classification-history`);
       assert(history.items.some((item) => item.action === "domain_migration_approved"));
+      assert(!deferredHistory.items.some((item) => item.action === "domain_migration_approved"));
       evidence.taxonomy = {
         mode: "authenticated_browser_ui_with_http_verification",
         proposal_id: proposalResult.id,
         approved_item: first,
         deferred_item: second,
-        approved_domain: "issue17_personal_finance",
+        approved_domain: personalFinanceDomain,
         deferred_domain: "economics_finance_business",
         history_entries: history.items.length,
+        deferred_history_entries: deferredHistory.items.length,
       };
-      const mergedFirst = await makeKnowledge("分类合并条目 C", "issue17_personal_finance");
-      const mergedSecond = await makeKnowledge("分类合并条目 D", "issue17_business_finance");
+      const mergedFirst = await makeKnowledge("分类合并条目 C", personalFinanceDomain);
+      const mergedSecond = await makeKnowledge("分类合并条目 D", businessFinanceDomain);
       const mergeProposal = await apiJson("/v1/taxonomy/proposals/domain", {
         method: "POST",
         body: {
           operation: "merge",
-          source_domain_ids: ["issue17_personal_finance", "issue17_business_finance"],
-          new_domains: [{ id: "issue17_finance_merged", name: "Issue17 合并金融", sort_order: 902 }],
+          source_domain_ids: [personalFinanceDomain, businessFinanceDomain],
+          new_domains: [{ id: mergedFinanceDomain, name: "Issue17 合并金融", sort_order: 902 }],
           reason: "Issue 17 browser merge item-by-item migration",
         },
       });
@@ -199,24 +223,29 @@ const MINIMAL_PDF = Buffer.from(
       const mergeProposalRow = page.locator(".proposal").filter({ hasText: "Issue 17 browser merge item-by-item migration" });
       const mergeItem = mergeProposalRow.locator(".migration-item").filter({ hasText: "分类合并条目 C" });
       await mergeItem.waitFor();
-      await mergeItem.locator("select").selectOption("issue17_finance_merged");
+      await mergeItem.locator("select").selectOption(mergedFinanceDomain);
       await mergeItem.getByRole("button", { name: "保存" }).click();
       await page.locator("#proposal-message").filter({ hasText: "迁移决定已保存" }).waitFor();
       await mergeProposalRow.getByRole("button", { name: "批准已确认迁移" }).click();
       await page.locator("#proposal-message").filter({ hasText: /迁移已批准|仍有条目待处理/ }).waitFor();
       assert.equal(
         (await apiJson(`/v1/knowledge/${mergedFirst}/classifications`)).primary_domain_id,
-        "issue17_finance_merged",
+        mergedFinanceDomain,
       );
       assert.equal(
         (await apiJson(`/v1/knowledge/${mergedSecond}/classifications`)).primary_domain_id,
-        "issue17_business_finance",
+        businessFinanceDomain,
       );
+      const mergeHistory = await apiJson(`/v1/knowledge/${mergedFirst}/classification-history`);
+      const mergeDeferredHistory = await apiJson(`/v1/knowledge/${mergedSecond}/classification-history`);
+      assert(mergeHistory.items.some((item) => item.action === "domain_migration_approved"));
+      assert(!mergeDeferredHistory.items.some((item) => item.action === "domain_migration_approved"));
       evidence.taxonomy.merge = {
         proposal_id: mergeProposal.result.id,
         approved_item: mergedFirst,
         deferred_item: mergedSecond,
-        approved_domain: "issue17_finance_merged",
+        approved_domain: mergedFinanceDomain,
+        history_entries: mergeHistory.items.length,
       };
       await shot("taxonomy-center");
     });
@@ -238,6 +267,7 @@ const MINIMAL_PDF = Buffer.from(
         method: "POST",
         headers: { "If-Match": expired.etag },
       });
+      const processing = await waitKnowledgeSearchable(conditionalApproval.knowledge_id);
       const conditionalDetail = await apiJson(`/v1/conclusions/${conditional.id}`);
       const expiredDetail = await apiJson(`/v1/conclusions/${expired.id}`);
       assert.equal(conditionalDetail.status, "formal");
@@ -251,41 +281,78 @@ const MINIMAL_PDF = Buffer.from(
         conditional_id: conditional.id,
         conditional_context_visible: true,
         conditional_reader_prefix: reader.text.slice(0, 32),
+        conditional_searchable: processing.searchable,
         suspended_id: expired.id,
         suspended_context_visible: false,
         suspended_state: expiredDetail.applicability.state,
       };
       await page.goto(`${base}/knowledge-agent#research`);
-      await page.locator("#question").fill("固定条件下复习是否有效？");
+      await page.locator("#question").fill("固定条件下复习有效");
       await page.locator("#answer-form button[type=submit]").click();
       await page.locator("#answer-result").waitFor({ state: "visible", timeout: 20000 });
-      assert((await page.locator("#answer").innerText()).length > 0);
+      await page.locator("#citations .source-card").filter({ hasText: "Issue 17 条件结论" }).waitFor({ timeout: 20000 });
+      const answerText = await page.locator("#answer").innerText();
+      const citationText = await page.locator("#citations").innerText();
+      assert((answerText.includes("如果") || citationText.includes("如果")) && (answerText.includes("固定条件") || citationText.includes("固定条件")));
+      assert(!answerText.includes("已过期的复习结论"));
+      assert(!citationText.includes("已过期的复习结论"));
+      await page.locator("#citations .source-card").filter({ hasText: "Issue 17 条件结论" }).first().click();
+      await page.locator("#citation-context-text").filter({ hasText: "如果在固定条件" }).waitFor();
+      await page.keyboard.press("Escape");
       await shot("conditional-answer");
     });
 
     await check("missing information prompt supports defer, skip, and supplement on the real page", async () => {
+      const deferredQuery = "我的工作偏好是什么？";
       await page.goto(`${base}/knowledge-agent#research`);
-      await page.locator("#question").fill("我的工作偏好是什么？");
+      await page.locator("#question").fill(deferredQuery);
       await page.locator("#answer-form button[type=submit]").click();
       await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
       assert((await page.locator("#context-prompt-reason").innerText()).includes("个人背景"));
+      const deferredPrompt = (await contextPrompts(deferredQuery)).items.find((item) => item.kind === "missing");
+      assert(deferredPrompt);
+      assert.equal(deferredPrompt.status, "pending");
       await page.locator("#context-prompt-defer").click();
       await page.locator("#toast").filter({ hasText: "待办" }).waitFor();
-      await page.locator("#question").fill("我的第二个工作偏好是什么？");
+      const deferredState = (await contextPrompts(deferredQuery)).items
+        .find((item) => item.id === deferredPrompt.id);
+      assert.equal(deferredState?.status, "deferred");
+
+      await page.locator("#question").fill("qzxv742919 未记录的天文学结论");
+      await page.locator("#answer-form button[type=submit]").click();
+      await page.locator("#answer-limits").waitFor({ state: "visible" });
+      assert(!await page.locator("#context-prompt-dialog").isVisible());
+
+      const supplementQuery = "我的第二个工作偏好是什么？";
+      await page.locator("#question").fill(supplementQuery);
       await page.locator("#answer-form button[type=submit]").click();
       await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
+      const supplementPrompt = (await contextPrompts(supplementQuery)).items.find((item) => item.kind === "missing");
+      assert(supplementPrompt);
       await page.locator("#context-prompt-input").fill("偏好短反馈");
       await page.locator("#context-prompt-supplement").click();
       await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
-      await page.locator("#question").fill("我的第三个工作偏好是什么？");
+      assert(!(await contextPrompts(supplementQuery)).items.some((item) => item.id === supplementPrompt.id));
+      const supplementedMemory = await apiJson(`/v1/lookups/memory/${encodeURIComponent(supplementPrompt.state_key)}`);
+      assert(supplementedMemory.rows.some((row) => JSON.stringify(row.value_json).includes("偏好短反馈")));
+
+      const skipQuery = "我的第三个工作偏好是什么？";
+      await page.locator("#question").fill(skipQuery);
       await page.locator("#answer-form button[type=submit]").click();
       await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
+      const skipPrompt = (await contextPrompts(skipQuery)).items.find((item) => item.kind === "missing");
+      assert(skipPrompt);
       await page.locator("#context-prompt-skip").click();
       await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
+      assert(!(await contextPrompts(skipQuery)).items.some((item) => item.id === skipPrompt.id));
       evidence.missing_information = {
         prompt_reason_visible: true,
         decisions: ["defer", "supplement", "skip"],
         supplement_value: "偏好短反馈",
+        deferred_prompt_status: deferredState.status,
+        unrelated_prompt_suppressed: true,
+        supplemented_prompt_removed: true,
+        skipped_prompt_removed: true,
       };
       await shot("missing-information");
     });

@@ -1,7 +1,9 @@
 # 完整 pytest 交付证据（#27）
 
 在独立、干净的检出中安装锁定依赖并运行门禁；不要复制开发目录的数据库、
-`.env` 或对象存储。需要 Python 3.12、uv 和可执行的 restic。
+`.env` 或对象存储。需要 Python 3.12、uv、Node.js/npm 和可执行的 restic。
+restic 使用系统安装（macOS：`brew install restic`；Ubuntu：`sudo apt-get install restic`），
+先运行 `restic version` 确认可用；统一采集只使用 `PATH`，不会读取本机临时目录回退。
 
 ```sh
 uv sync --all-extras --frozen

@@ -245,13 +245,22 @@ def test_restic_restore_supports_real_search_and_original_source_resolution(
         _restore_env(repository, binary, snapshot_id, target_db, target_objects, journal_path)
     )
 
+    upgraded = subprocess.run(
+        [sys.executable, "scripts/upgrade_database.py", str(target_db)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert upgraded.returncode == 0, upgraded.stderr
+    _assert_current_schema(target_db)
     with session_scope(_open_session_factory(target_db)) as session:
         hits = LexicalRetriever().search(session, "restore install")
         assert [hit.source_id for hit in hits] == [knowledge_object_id]
         hit = hits[0]
         chunk = CitationContextRepository().get_chunk(
             session,
-                source_type=hit.source_type,
+            source_type=hit.source_type,
             source_id=hit.source_id,
             source_version_id=hit.source_version_id,
             chunk_id=hit.chunk_id,

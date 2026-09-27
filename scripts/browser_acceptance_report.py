@@ -23,11 +23,21 @@ REQUIRED_CHECKS = {
     ),
 }
 
+IMPORT_FAILURE_CHECKS = {
+    "failed": "failed status is rendered with bounded polling and recovery semantics",
+    "unsupported": "unsupported status is rendered with bounded polling and recovery semantics",
+    "partial": "partial status is rendered with bounded polling and recovery semantics",
+    "not_found": "not_found status is rendered with bounded polling and recovery semantics",
+    "server_error": "server_error status is rendered with bounded polling and recovery semantics",
+    "network_error": "network_error status is rendered with bounded polling and recovery semantics",
+}
+
 EXPECTED_CHECKS = {
     "workspace_full": Path("workspace-full/checks.json"),
     "relations": Path("relations/checks.json"),
     "qualification": Path("qualification/checks.json"),
     "delivery_contracts": Path("delivery-contracts/checks.json"),
+    "import_failures": Path("import-failures/checks.json"),
 }
 
 
@@ -60,6 +70,8 @@ def load_checks(path: Path) -> tuple[dict[str, Any] | None, str | None]:
         payload = json.loads(path.read_text())
     except FileNotFoundError:
         return None, "missing"
+    except (OSError, UnicodeError) as error:
+        return None, f"unreadable: {type(error).__name__}"
     except json.JSONDecodeError as error:
         return None, f"malformed json: {error}"
     if not isinstance(payload, dict):
@@ -98,17 +110,38 @@ def validate_checks(output: Path) -> dict[str, Any]:
             elif status is not None and status != "passed":
                 result["error"] = f"child report status is {status}"
             else:
-                missing = [label for key, label in REQUIRED_CHECKS.items() if not any(
-                    isinstance(item, str) and item == label for item in checks
-                )]
+                missing = [
+                    label
+                    for key, label in REQUIRED_CHECKS.items()
+                    if not any(isinstance(item, str) and item == label for item in checks)
+                ]
                 evidence = payload.get("evidence")
+                import_missing = [
+                    label
+                    for label in IMPORT_FAILURE_CHECKS.values()
+                    if not any(isinstance(item, str) and item == label for item in checks)
+                ]
+                import_evidence = payload.get("evidence")
+                import_scenarios = (
+                    import_evidence.get("scenarios") if isinstance(import_evidence, dict) else None
+                )
                 if name == "delivery_contracts" and missing:
                     result["error"] = f"required checks missing: {missing}"
                 elif name == "delivery_contracts" and (
                     not isinstance(evidence, dict)
-                    or any(key not in evidence for key in REQUIRED_CHECKS)
+                    or any(
+                        not isinstance(evidence.get(key), dict) or not evidence[key]
+                        for key in REQUIRED_CHECKS
+                    )
                 ):
                     result["error"] = "required evidence fields missing"
+                elif name == "import_failures" and import_missing:
+                    result["error"] = f"required import failure checks missing: {import_missing}"
+                elif name == "import_failures" and (
+                    not isinstance(import_scenarios, dict)
+                    or any(key not in import_scenarios for key in IMPORT_FAILURE_CHECKS)
+                ):
+                    result["error"] = "required import failure evidence fields missing"
                 else:
                     result["status"] = "passed"
         results[name] = result
@@ -142,9 +175,7 @@ def main() -> int:
     repo = args.repo.resolve()
     output.mkdir(parents=True, exist_ok=True)
     checks = validate_checks(output)
-    child_reports_passed = all(
-        result.get("status") == "passed" for result in checks.values()
-    )
+    child_reports_passed = all(result.get("status") == "passed" for result in checks.values())
     git_status = command_output(["git", "status", "--porcelain"], repo)
     current_commit = command_output(["git", "rev-parse", "HEAD"], repo)
     working_tree_clean = not bool(git_status)
@@ -212,6 +243,8 @@ def main() -> int:
                 "succeeded import requires searchable index and original reader content",
                 "polling failure diagnostics cover 404, bounded 5xx retry, failed, "
                 "unsupported, and partial states",
+                "real page status polling checks cover failed, unsupported, partial, "
+                "404, 5xx, and network failure states with bounded retries",
                 "real page shows unsupported PDF import as terminal non-searchable state",
                 "suspended conclusions are excluded while assumed-premise conclusions "
                 "keep their condition",
@@ -222,8 +255,14 @@ def main() -> int:
             "#18": ["API and worker remain alive during browser acceptance"],
         },
     }
-    report["commands"].append("node tests/e2e/check_delivery_contracts.cjs")
+    report["commands"].extend(
+        [
+            "node tests/e2e/check_delivery_contracts.cjs",
+            "node tests/e2e/check_import_failures.cjs",
+        ]
+    )
     report["issue_mapping"]["#17"].append("delivery-contracts")
+    report["issue_mapping"]["#17"].append("import-failures")
     (output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     return 0 if status == "passed" else 1
 

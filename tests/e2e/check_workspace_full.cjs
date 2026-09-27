@@ -17,14 +17,24 @@ fs.mkdirSync(output, { recursive: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
   const page = await context.newPage();
   const errors = [];
+  const httpFailures = [];
+  const networkFailures = [];
+  let currentCheck = 'login';
+  page.on('response', (response) => {
+    if (response.status() >= 400) httpFailures.push({ url: response.url(), status: response.status() });
+  });
+  page.on('requestfailed', (request) => networkFailures.push({
+    url: request.url(), error: request.failure()?.errorText,
+  }));
   page.on('pageerror', (error) => errors.push(error.message));
   const checks = [];
   const evidence = {};
-  async function check(label, work) { await work(); checks.push(label); console.log('PASS', label); }
+  async function check(label, work) { currentCheck = label; await work(); checks.push(label); console.log('PASS', label); }
   async function shot(name) { await page.screenshot({ path: path.join(output, `${name}.png`), fullPage: true }); }
   function writeChecks(status, error) {
     fs.writeFileSync(path.join(output, 'checks.json'), JSON.stringify({
       status, checks, evidence, browserErrors: errors,
+      diagnostics: { currentCheck, pageUrl: page.url(), httpFailures, networkFailures },
       error: error ? error.stack || String(error) : undefined,
     }, null, 2));
   }
@@ -307,6 +317,11 @@ fs.mkdirSync(output, { recursive: true });
       for (const [name, route] of [['research','/knowledge-agent#research'],['library','/knowledge-agent#library'],['comparison','/knowledge-agent#decisions'],['settings','/knowledge-agent#settings'],['context','/memory-center'],['review','/review-center'],['system','/evolution-center'],['login','/login']]) {
         await page.goto(base + route);
         await page.locator('main').waitFor();
+        if (name === 'review') {
+          await page.locator('button.queue-item').first().waitFor();
+          await page.locator('button.queue-item').filter({ hasText: '结论草稿' }).first().click();
+          await page.locator('#detail select').first().waitFor();
+        }
         await noOverflow(); await shot(`${name}-mobile`);
       }
     });

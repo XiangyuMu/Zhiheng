@@ -47,7 +47,11 @@ finalize() {
 run_stage() {
   CURRENT_STAGE="$1"
   shift
-  "$@"
+  "$@" >"${OUTPUT_DIR}/${CURRENT_STAGE}.log" 2>&1 || {
+    local stage_code=$?
+    cat "${OUTPUT_DIR}/${CURRENT_STAGE}.log" >&2
+    return "${stage_code}"
+  }
 }
 trap finalize EXIT
 
@@ -103,9 +107,8 @@ node --test tests/e2e/test_import_polling.cjs >"${OUTPUT_DIR}/import-polling.log
 run_stage "workspace-full" env ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs "${BASE_URL}" "${OUTPUT_DIR}/workspace-full"
 run_stage "review-relations" node tests/e2e/check_review_relations.cjs "${BASE_URL}" "${OUTPUT_DIR}/relations"
 run_stage "qualification" node tests/e2e/check_qualification.cjs "${BASE_URL}" "${OUTPUT_DIR}/qualification"
-if [[ -f tests/e2e/check_delivery_contracts.cjs ]]; then
-  run_stage "delivery-contracts" node tests/e2e/check_delivery_contracts.cjs "${BASE_URL}" "${OUTPUT_DIR}/delivery-contracts"
-fi
+run_stage "delivery-contracts" node tests/e2e/check_delivery_contracts.cjs "${BASE_URL}" "${OUTPUT_DIR}/delivery-contracts"
+run_stage "import-failures" node tests/e2e/check_import_failures.cjs "${BASE_URL}" "${OUTPUT_DIR}/import-failures"
 
 CURRENT_STAGE="process-liveness"
 if ! kill -0 "${API_PID}" 2>/dev/null || ! kill -0 "${WORKER_PID}" 2>/dev/null; then
@@ -114,4 +117,4 @@ if ! kill -0 "${API_PID}" 2>/dev/null || ! kill -0 "${WORKER_PID}" 2>/dev/null; 
 fi
 
 CURRENT_STAGE="complete"
-echo "Browser acceptance passed; report: ${OUTPUT_DIR}/report.json"
+echo "Browser scenarios completed; validating report: ${OUTPUT_DIR}/report.json"

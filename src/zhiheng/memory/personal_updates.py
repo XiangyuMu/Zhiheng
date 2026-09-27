@@ -356,7 +356,7 @@ class PersonalUpdateService:
                 WHERE id=:id AND prompt_kind='missing' AND status='pending'
                 """
             ),
-            {"id": prompt_id, "status": decision + "ed"},
+            {"id": prompt_id, "status": "deferred" if decision == "defer" else "skipped"},
         )
         if int(getattr(result, "rowcount", 0)) != 1:
             raise ValueError("prompt not found")

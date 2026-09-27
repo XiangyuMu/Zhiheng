@@ -8,7 +8,7 @@
 | 项目 | 当前值 |
 | --- | --- |
 | 交付分支 | `main` |
-| 验收对象 | 以持久证据目录的 `report.json` 中的 `commit`、`same_sha` 和 artifacts 哈希清单 为准；测试前先提交，在同一干净检出运行 |
+| 验收对象 | 以持久证据目录顶层 `report.json` 的 `sha`、`same_sha` 和 `artifacts` 哈希清单为准；测试前先提交，在同一干净检出运行 |
 | 工作树 | 由报告中的 `clean_before`、`clean_after` 和 `same_sha` 证明，不能沿用文档编写时状态 |
 | 本文件范围 | 映射需求、实现和验收入口；通过结论取自对应 SHA 的原始报告 |
 | 当前证据入口 | `/Users/muxy/Projects/Zhiheng-delivery-evidence/<SHA>/`；完整 pytest、浏览器和提炼评估分开保留 |
@@ -30,18 +30,18 @@
 | 1 | 一段对话中的多个独立判断形成多个草稿；保留原文、前提、来源和候选领域 | `jobs/memory_extraction.py`、`conclusions/extraction.py`、`api/conclusions.py` | `tests/integration/test_conclusion_extraction.py`、`tests/evaluation/test_issue29_conclusion_extraction.py` | **实现入口+测试入口**。仍需在真实应用入口和独立 Worker 上验证；#29 的 50 段质量结果必须绑定最终 SHA |
 | 2 | 草稿跨会话暂存；批准前不得进入另一会话回答，包括原始对话和派生检索 | `conclusions/repository.py`、`query/conversations.py`、资格过滤 | `tests/integration/test_conclusion_lifecycle.py`、`test_cross_conversation_qualification.py`、`tests/e2e/check_qualification.cjs` | **实现入口+测试入口**。浏览器脚本已覆盖两个 context，但仍需在干净检出真实运行并保存截图/日志 |
 | 3 | 只批准选中的条目；重复提交幂等；版本变化不能继承旧批准 | 结论版本、ETag、幂等写入和审核 API | `tests/integration/test_conclusion_lifecycle.py`、`test_conclusion_relations.py`、`test_memory_api.py` | **部分实现证据**。#2 的草稿 CAS 与 #12 的关系双方版本约束仍是独立交付依赖，需确认最终代码和 HTTP 回归 |
-| 4 | 未确认前提的正式结论按条件使用，不能把假设当成用户事实 | `conclusions/applicability.py`、回答上下文资格 | `tests/integration/test_conclusion_applicability.py`、`test_answer_memory_context.py` | **实现入口+测试入口**。缺少最终浏览器中“如果”条件显示的同 SHA 证据 |
-| 5 | 明确事实变化或有效期届满自动暂停；缓存和索引未重建也不得继续使用 | `conclusions/applicability.py`、当前资格复核和缓存撤销 | `tests/integration/test_conclusion_applicability.py` | **实现入口+测试入口**。需要把暂停后的回答资格和缓存复用场景纳入最终浏览器/HTTP 报告 |
+| 4 | 未确认前提的正式结论按条件使用，不能把假设当成用户事实 | `conclusions/applicability.py`、回答上下文资格 | `tests/integration/test_conclusion_applicability.py`、`test_answer_memory_context.py` | **实现入口+测试入口**。由 `check_delivery_contracts.cjs` 验证真实回答、前提和引用；结果见对应 SHA 的子报告 |
+| 5 | 明确事实变化或有效期届满自动暂停；缓存和索引未重建也不得继续使用 | `conclusions/applicability.py`、当前资格复核和缓存撤销 | `tests/integration/test_conclusion_applicability.py` | **实现入口+测试入口**。暂停后的上下文、回答和引用隔离由 `check_delivery_contracts.cjs` 与适用性集成测试共同验证 |
 | 6 | 重复、补充、修订、条件并存和冲突分别展示；用户批准后保留历史 | `conclusions/relations.py`、关系审核和正式化服务 | `tests/unit/test_conclusion_relations.py`、`tests/integration/test_conclusion_relations.py`、`tests/e2e/check_review_relations.cjs` | **实现入口+测试入口**。浏览器脚本覆盖关系审核主路径；需重新运行并证明旧关系、双方版本和来源在最终 SHA 上可追溯 |
 | 7 | 明确且无冲突的个人陈述可自动记忆；引用、玩笑、假设和推断不能自动成为事实 | `jobs/memory_extraction.py`、`memory/repository.py` | `tests/integration/test_memory_repository.py`、`tests/contracts/test_memory_candidate_isolation.py`、#29 固定负例 | **部分实现证据**。固定集覆盖负例，但自动记忆与对话提炼是两条边界；需在最终报告分开给出误提炼率和正式记忆资格 |
 | 8 | 明确时间变化保留历史；无法由时间解释的不一致进入冲突 | `memory/personal_updates.py`、冲突查询/上下文提示 | `tests/integration/test_conclusion_applicability.py`、`tests/e2e/check_workspace_full.cjs` | **实现入口+局部测试入口**。真实浏览器脚本有冲突提示，但尚未证明“历史保留+时序更新”完整链路 |
 | 9 | 冲突可确认、补充、稍后处理或跳过；相关回答按条件回答或暂缓，无关回答继续 | `query/conflicts.py`、`api/memory.py`、上下文提示 UI | `tests/integration/test_memory_context.py`、`tests/e2e/check_workspace_full.cjs` | **实现入口+测试入口**。需在最终浏览器运行中保存弹窗选择、持久待办和回答资格证据；关闭/超时不批准仍需明确断言 |
-| 10 | 缺失信息只在实质影响任务时提示，说明原因并允许跳过 | 上下文提示判定和前端提示组件 | `tests/e2e/check_workspace_full.cjs`、相关 memory/context 集成测试 | **部分实现证据**。当前浏览器脚本证明部分提示路径，尚未单独证明“无关缺失不弹窗”和“补充后重试”在真实 UI 中成立 |
+| 10 | 缺失信息只在实质影响任务时提示，说明原因并允许跳过 | 上下文提示判定和前端提示组件 | `tests/e2e/check_workspace_full.cjs`、相关 memory/context 集成测试 | **部分实现证据**。`check_delivery_contracts.cjs` 通过真实页面与持久化 API 验证延期、跳过、补充和无关回答 |
 | 11 | 普通对话只显示待审核数量；主动打开审核中心后可恢复草稿并执行审核 | `api/static/review-center.*`、`api/conclusions.py` | `tests/integration/test_conclusion_lifecycle.py`、`tests/e2e/check_workspace_full.cjs` | **实现入口+测试入口**。需真实浏览器确认普通对话不被逐条打断、刷新/重新登录后待办仍在 |
 | 12 | 易变信息相关复用时复核；稳定信息不因时间流逝被改写 | 适用性和个人信息有效期字段 | `tests/integration/test_conclusion_applicability.py`、`tests/integration/test_memory_context.py` | **局部测试入口**。缺少一条明确的浏览器用户场景和“稳定信息不重复询问”证据，属于首版验收待补 |
 | 13 | 唯一主领域、跨域关联；个人档案与经历是独立记录类型；同一条目不重复存储 | `classification/taxonomy.py`、结论分类 API/审核 | `tests/integration/test_topic_taxonomy.py`、`test_conclusion_classification.py` | **实现入口+测试入口**。需在最终浏览器或 HTTP 证据中证明分类与记录类型同时展示且不产生重复正式条目 |
-| 14 | 新条目分类随审核；已有分类及领域结构的变更需批准，历史可追溯 | `classification/suggestions.py`、分类审核和 ETag | `tests/integration/test_conclusion_classification.py`、`test_topic_taxonomy.py`、`test_classification_node_errors.py` | **实现入口+测试入口**。#15 的动态目录和逐条迁移必须在同一验收中覆盖；当前浏览器脚本没有完整分类迁移操作证据 |
-| 15 | 旧分类升级逐条迁移；保留原文、条目、前提、来源和历史引用；未批准不改变正式归属 | `classification/taxonomy.py`、迁移预览/批准 API | `tests/integration/test_topic_taxonomy.py` | **局部测试入口**。缺少真实浏览器逐条迁移和恢复后引用检查；这是 #7/#15 的交付缺口 |
+| 14 | 新条目分类随审核；已有分类及领域结构的变更需批准，历史可追溯 | `classification/suggestions.py`、分类审核和 ETag | `tests/integration/test_conclusion_classification.py`、`test_topic_taxonomy.py`、`test_classification_node_errors.py` | **实现入口+测试入口**。`check_delivery_contracts.cjs` 操作分类中心逐条保存并批准拆分、合并迁移；API 复核待处理归属和历史 |
+| 15 | 旧分类升级逐条迁移；保留原文、条目、前提、来源和历史引用；未批准不改变正式归属 | `classification/taxonomy.py`、迁移预览/批准 API | `tests/integration/test_topic_taxonomy.py` | **局部测试入口**。真实分类中心逐条迁移见 `check_delivery_contracts.cjs`；恢复后引用检查见 restic 集成测试，二者分别保存证据，不冒称浏览器执行了恢复 |
 | 16 | 认证、并发版本、删除和恢复边界不退化；删除后派生结果不能复活 | 认证/CSRF/ETag、隐私擦除账本、对象和索引清理、恢复重放 | `tests/integration/test_privacy_physical_erase.py`、`test_answer_replay_authority.py`、`test_restic_restore_install.py`、`test_startup_recovery_barrier.py` | **实现入口+大量测试入口**，历史 `421fbae` 全量已通过；最终 SHA 仍须重跑隐私擦除、restic 恢复和旧快照不复活场景 |
 
 ## 首版新增门禁
@@ -84,7 +84,7 @@
 1. 将本轮修改审查并提交；以该 SHA 的干净检出执行全部门禁，不把开发工作树调试运行当作签收。
 2. 在干净检出中依次运行迁移、编译、Ruff、Mypy、`pytest_delivery_gate.py`、浏览器验收和 #29 固定集；为每步保留日志、JUnit、截图、依赖版本和 SHA。
 3. 复核 #25 隐私擦除、#27 全量 pytest 交付门禁和 #29 提炼质量结果；任一失败都保持 Issue #17 未完成。
-4. 对矩阵中标记“部分实现证据”的 #10、#12、#14、#15 补真实 HTTP/浏览器场景，尤其是无关缺失不弹窗、分类逐条迁移和恢复后历史引用。
+4. 核对新交付契约和导入故障子报告逐项断言；集成测试通过不能替代要求的可见 UI 断言。
 5. 若门禁修复产生新提交，使用新 SHA 完整重跑并替换旧证据；旧报告只能作为历史参考。
 
 只有当所有交付阻塞项有同一最终 SHA 的动态证据、工作树干净且独立审查通过时，Issue #17
@@ -101,3 +101,8 @@
 即使失败也应保存阶段、退出码、已完成检查及已有日志，失败或缺失子报告不能成为通过。
 分类、暂停和缺失信息等旧表“待补”描述代表本轮之前的证据缺口；只有新脚本实际通过后才解除，
 不能因为脚本文件存在就认定完成。完整证据持久保存方法见 [运行说明](pytest-delivery-gate.md)。
+
+`tests/e2e/check_import_failures.cjs` 使用真实页面和真实导入，按场景拦截状态响应或网络请求，
+验证失败终态、404 停止和 5xx/网络有限重试的可见行为。它证明前端故障处理，不把注入状态当作后端任务状态；
+真实 Worker 未配置解析器的终态及搜索排除由独立 PDF 上传场景证明。
+`test_import_task_projection.py` 另验证失败任务的 `searchable=false`；不得把前端注入的假状态当成真实后端资格证明。

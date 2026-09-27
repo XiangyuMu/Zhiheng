@@ -19,7 +19,6 @@ def reporter() -> Any:
     return module
 
 
-
 REQUIRED_CHECKS = [
     "taxonomy migration preserves each item until its own approval",
     "suspended conclusions stay out of context while assumptions remain conditional",
@@ -27,11 +26,45 @@ REQUIRED_CHECKS = [
     "real Worker unsupported PDF failure is visible with stable code and recovery actions",
 ]
 
+IMPORT_FAILURE_CHECKS = [
+    "failed status is rendered with bounded polling and recovery semantics",
+    "unsupported status is rendered with bounded polling and recovery semantics",
+    "partial status is rendered with bounded polling and recovery semantics",
+    "not_found status is rendered with bounded polling and recovery semantics",
+    "server_error status is rendered with bounded polling and recovery semantics",
+    "network_error status is rendered with bounded polling and recovery semantics",
+]
+
 
 def complete_delivery_checks() -> dict[str, object]:
-    return {"checks": REQUIRED_CHECKS, "browserErrors": [], "evidence": {
-        "taxonomy": {}, "applicability": {}, "missing_information": {}, "import_failure": {},
-    }}
+    return {
+        "checks": REQUIRED_CHECKS,
+        "browserErrors": [],
+        "evidence": {
+            "taxonomy": {"proposal_id": "split-proposal", "approved_item": "entry-a"},
+            "applicability": {"suspended_context_visible": False},
+            "missing_information": {"decisions": ["defer", "supplement", "skip"]},
+            "import_failure": {"state": "unsupported", "error_code": "unsupported_pdf_parser"},
+        },
+    }
+
+
+def complete_import_failure_checks() -> dict[str, object]:
+    return {
+        "checks": IMPORT_FAILURE_CHECKS,
+        "browserErrors": [],
+        "evidence": {
+            "scenarios": {
+                "failed": {},
+                "unsupported": {},
+                "partial": {},
+                "not_found": {},
+                "server_error": {},
+                "network_error": {},
+            }
+        },
+    }
+
 
 def write_checks(output: Path, relative: str, payload: object) -> None:
     path = output / relative
@@ -47,6 +80,7 @@ def run_report(
     stage: str = "complete",
 ) -> tuple[int, dict[str, Any]]:
     module = reporter()
+
     def fake_command_output(command: list[str], _cwd: Path | None = None) -> str:
         if command == ["git", "rev-parse", "HEAD"]:
             return "abc123"
@@ -82,8 +116,17 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "relations/checks.json",
         "qualification/checks.json",
         "delivery-contracts/checks.json",
+        "import-failures/checks.json",
     ):
-        write_checks(tmp_path, relative, complete_delivery_checks())
+        write_checks(
+            tmp_path,
+            relative,
+            complete_delivery_checks()
+            if relative == "delivery-contracts/checks.json"
+            else complete_import_failure_checks()
+            if relative == "import-failures/checks.json"
+            else {"checks": ["one"], "browserErrors": []},
+        )
     (tmp_path / "api.log").write_text("api ready")
     (tmp_path / "workspace-full" / "screen.png").write_bytes(b"png")
 
@@ -129,6 +172,7 @@ def test_browser_acceptance_report_rejects_bad_child_reports(
         "relations/checks.json": complete_delivery_checks(),
         "qualification/checks.json": complete_delivery_checks(),
         "delivery-contracts/checks.json": complete_delivery_checks(),
+        "import-failures/checks.json": complete_import_failure_checks(),
     }
     for path, payload in defaults.items():
         write_checks(tmp_path, path, payload)
@@ -167,8 +211,17 @@ def test_browser_acceptance_report_requires_clean_same_sha(
         "relations/checks.json",
         "qualification/checks.json",
         "delivery-contracts/checks.json",
+        "import-failures/checks.json",
     ):
-        write_checks(tmp_path, relative, complete_delivery_checks())
+        write_checks(
+            tmp_path,
+            relative,
+            complete_delivery_checks()
+            if relative == "delivery-contracts/checks.json"
+            else complete_import_failure_checks()
+            if relative == "import-failures/checks.json"
+            else {"checks": ["one"], "browserErrors": []},
+        )
     module = reporter()
 
     def fake_command_output(command: list[str], _cwd: Path | None = None) -> str:
@@ -201,3 +254,37 @@ def test_browser_acceptance_report_requires_clean_same_sha(
     assert report["status"] == "failed"
     assert report["working_tree_clean"] is False
     assert report["same_sha"] is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"checks": ["one"], "evidence": {}},
+        {"checks": REQUIRED_CHECKS, "evidence": {}},
+    ],
+)
+def test_delivery_contracts_require_all_scenarios_and_evidence(
+    tmp_path: Path,
+    payload: dict[str, object],
+) -> None:
+    write_checks(tmp_path, "delivery-contracts/checks.json", payload)
+    result = reporter().validate_checks(tmp_path)["delivery_contracts"]
+    assert result["status"] == "failed"
+    assert "missing" in result["error"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"checks": ["one"], "evidence": {"scenarios": {}}},
+        {"checks": IMPORT_FAILURE_CHECKS, "evidence": {"scenarios": {"failed": {}}}},
+    ],
+)
+def test_import_failures_require_all_scenarios_and_evidence(
+    tmp_path: Path,
+    payload: dict[str, object],
+) -> None:
+    write_checks(tmp_path, "import-failures/checks.json", payload)
+    result = reporter().validate_checks(tmp_path)["import_failures"]
+    assert result["status"] == "failed"
+    assert "missing" in result["error"]
