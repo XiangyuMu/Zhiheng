@@ -19,6 +19,20 @@ def reporter() -> Any:
     return module
 
 
+
+REQUIRED_CHECKS = [
+    "taxonomy migration preserves each item until its own approval",
+    "suspended conclusions stay out of context while assumptions remain conditional",
+    "missing information prompt supports defer, skip, and supplement on the real page",
+    "real Worker unsupported PDF failure is visible with stable code and recovery actions",
+]
+
+
+def complete_delivery_checks() -> dict[str, object]:
+    return {"checks": REQUIRED_CHECKS, "browserErrors": [], "evidence": {
+        "taxonomy": {}, "applicability": {}, "missing_information": {}, "import_failure": {},
+    }}
+
 def write_checks(output: Path, relative: str, payload: object) -> None:
     path = output / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,7 +83,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "qualification/checks.json",
         "delivery-contracts/checks.json",
     ):
-        write_checks(tmp_path, relative, {"checks": ["one"], "browserErrors": []})
+        write_checks(tmp_path, relative, complete_delivery_checks())
     (tmp_path / "api.log").write_text("api ready")
     (tmp_path / "workspace-full" / "screen.png").write_bytes(b"png")
 
@@ -111,10 +125,10 @@ def test_browser_acceptance_report_rejects_bad_child_reports(
     expected_error: str,
 ) -> None:
     defaults = {
-        "workspace-full/checks.json": {"checks": ["one"], "browserErrors": []},
-        "relations/checks.json": {"checks": ["one"], "browserErrors": []},
-        "qualification/checks.json": {"checks": ["one"], "browserErrors": []},
-        "delivery-contracts/checks.json": {"checks": ["one"], "browserErrors": []},
+        "workspace-full/checks.json": complete_delivery_checks(),
+        "relations/checks.json": complete_delivery_checks(),
+        "qualification/checks.json": complete_delivery_checks(),
+        "delivery-contracts/checks.json": complete_delivery_checks(),
     }
     for path, payload in defaults.items():
         write_checks(tmp_path, path, payload)
@@ -154,7 +168,7 @@ def test_browser_acceptance_report_requires_clean_same_sha(
         "qualification/checks.json",
         "delivery-contracts/checks.json",
     ):
-        write_checks(tmp_path, relative, {"checks": ["one"], "browserErrors": []})
+        write_checks(tmp_path, relative, complete_delivery_checks())
     module = reporter()
 
     def fake_command_output(command: list[str], _cwd: Path | None = None) -> str:

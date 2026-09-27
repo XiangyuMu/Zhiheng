@@ -8,7 +8,7 @@
 | 项目 | 当前值 |
 | --- | --- |
 | 交付分支 | `main` |
-| 验收对象 | 以持久证据目录的 `report.json.sha` 为准；测试前先提交，在同一干净检出运行 |
+| 验收对象 | 以持久证据目录的 `report.json` 中的 `commit`、`same_sha` 和 artifacts 哈希清单 为准；测试前先提交，在同一干净检出运行 |
 | 工作树 | 由报告中的 `clean_before`、`clean_after` 和 `same_sha` 证明，不能沿用文档编写时状态 |
 | 本文件范围 | 映射需求、实现和验收入口；通过结论取自对应 SHA 的原始报告 |
 | 当前证据入口 | `/Users/muxy/Projects/Zhiheng-delivery-evidence/<SHA>/`；完整 pytest、浏览器和提炼评估分开保留 |

@@ -119,6 +119,7 @@ const MINIMAL_PDF = Buffer.from(
     });
   }
 
+  let outcome = "passed";
   try {
     await login();
 
@@ -145,14 +146,14 @@ const MINIMAL_PDF = Buffer.from(
       await page.goto(`${base}/taxonomy-center`);
       await page.locator("main").waitFor();
       const migrationItems = page.locator(".migration-item");
-      await migrationItems.nth(0).waitFor();
-      const firstItem = migrationItems.nth(0);
+      const firstItem = migrationItems.filter({ hasText: "分类迁移条目 A" });
+      await firstItem.waitFor();
       await firstItem.locator("select").selectOption("issue17_personal_finance");
       await firstItem.getByRole("button", { name: "保存" }).click();
       await page.locator("#proposal-message").filter({ hasText: "迁移决定已保存" }).waitFor();
       const approved = page.getByRole("button", { name: "批准已确认迁移" });
       await approved.click();
-      await page.locator("#proposal-message").filter({ hasText: "迁移已批准" }).waitFor();
+      await page.locator("#proposal-message").filter({ hasText: /迁移已批准|仍有条目待处理/ }).waitFor();
       const finalProposal = await apiJson(`/v1/taxonomy/proposals/${proposalResult.id}`);
       const finalItems = finalProposal.preview.affected_knowledge || finalProposal.preview.items || [];
       assert.equal(
@@ -182,8 +183,41 @@ const MINIMAL_PDF = Buffer.from(
         deferred_domain: "economics_finance_business",
         history_entries: history.items.length,
       };
+      const mergedFirst = await makeKnowledge("分类合并条目 C", "issue17_personal_finance");
+      const mergedSecond = await makeKnowledge("分类合并条目 D", "issue17_business_finance");
+      const mergeProposal = await apiJson("/v1/taxonomy/proposals/domain", {
+        method: "POST",
+        body: {
+          operation: "merge",
+          source_domain_ids: ["issue17_personal_finance", "issue17_business_finance"],
+          new_domains: [{ id: "issue17_finance_merged", name: "Issue17 合并金融", sort_order: 902 }],
+          reason: "Issue 17 browser merge item-by-item migration",
+        },
+      });
       await page.goto(`${base}/taxonomy-center`);
       await page.locator("main").waitFor();
+      const mergeProposalRow = page.locator(".proposal").filter({ hasText: "Issue 17 browser merge item-by-item migration" });
+      const mergeItem = mergeProposalRow.locator(".migration-item").filter({ hasText: "分类合并条目 C" });
+      await mergeItem.waitFor();
+      await mergeItem.locator("select").selectOption("issue17_finance_merged");
+      await mergeItem.getByRole("button", { name: "保存" }).click();
+      await page.locator("#proposal-message").filter({ hasText: "迁移决定已保存" }).waitFor();
+      await mergeProposalRow.getByRole("button", { name: "批准已确认迁移" }).click();
+      await page.locator("#proposal-message").filter({ hasText: /迁移已批准|仍有条目待处理/ }).waitFor();
+      assert.equal(
+        (await apiJson(`/v1/knowledge/${mergedFirst}/classifications`)).primary_domain_id,
+        "issue17_finance_merged",
+      );
+      assert.equal(
+        (await apiJson(`/v1/knowledge/${mergedSecond}/classifications`)).primary_domain_id,
+        "issue17_business_finance",
+      );
+      evidence.taxonomy.merge = {
+        proposal_id: mergeProposal.result.id,
+        approved_item: mergedFirst,
+        deferred_item: mergedSecond,
+        approved_domain: "issue17_finance_merged",
+      };
       await shot("taxonomy-center");
     });
 
@@ -196,7 +230,7 @@ const MINIMAL_PDF = Buffer.from(
       };
       const conditional = await makeConclusion("固定条件下复习有效", [premise], "conditional");
       const expired = await makeConclusion("已过期的复习结论", [], "expired");
-      await apiJson(`/v1/conclusions/${conditional.id}/approve`, {
+      const conditionalApproval = await apiJson(`/v1/conclusions/${conditional.id}/approve`, {
         method: "POST",
         headers: { "If-Match": conditional.etag },
       });
@@ -211,7 +245,7 @@ const MINIMAL_PDF = Buffer.from(
       const context = await apiJson("/v1/conclusions/context?query=复习");
       assert(context.items.some((item) => item.id === conditional.id));
       assert(!context.items.some((item) => item.id === expired.id));
-      const reader = await apiJson(`/v1/knowledge/${conditionalDetail.knowledge_id}/reader`);
+      const reader = await apiJson(`/v1/knowledge/${conditionalApproval.result.knowledge_id}/reader`);
       assert.match(reader.text, /^如果固定条件/);
       evidence.applicability = {
         conditional_id: conditional.id,
@@ -283,12 +317,18 @@ const MINIMAL_PDF = Buffer.from(
 
     assert.deepEqual(errors, [], "no uncaught browser errors");
   } catch (error) {
+    outcome = "failed";
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({
-      checks, evidence, browserErrors: errors, status: "failed", error: error.stack || String(error),
+      checks, evidence, browserErrors: errors, status: outcome, error: error.stack || String(error),
     }, null, 2));
     await shot("failure").catch(() => {});
     throw error;
   } finally {
+    if (outcome === "passed") {
+      fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({
+        checks, evidence, browserErrors: errors, status: outcome,
+      }, null, 2));
+    }
     await browser.close();
   }
 })().catch((error) => {

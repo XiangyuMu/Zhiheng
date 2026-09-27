@@ -10,6 +10,19 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+REQUIRED_CHECKS = {
+    "taxonomy": "taxonomy migration preserves each item until its own approval",
+    "applicability": (
+        "suspended conclusions stay out of context while assumptions remain conditional"
+    ),
+    "missing_information": (
+        "missing information prompt supports defer, skip, and supplement on the real page"
+    ),
+    "import_failure": (
+        "real Worker unsupported PDF failure is visible with stable code and recovery actions"
+    ),
+}
+
 EXPECTED_CHECKS = {
     "workspace_full": Path("workspace-full/checks.json"),
     "relations": Path("relations/checks.json"),
@@ -85,7 +98,17 @@ def validate_checks(output: Path) -> dict[str, Any]:
             elif status is not None and status != "passed":
                 result["error"] = f"child report status is {status}"
             else:
-                result["status"] = "passed"
+                missing = [label for key, label in REQUIRED_CHECKS.items() if not any(
+                    isinstance(item, str) and item == label for item in checks
+                )]
+                if missing:
+                    result["error"] = f"required checks missing: {missing}"
+                elif not isinstance(payload.get("evidence"), dict) or any(
+                    key not in payload["evidence"] for key in REQUIRED_CHECKS
+                ):
+                    result["error"] = "required evidence fields missing"
+                else:
+                    result["status"] = "passed"
         results[name] = result
     return results
 
