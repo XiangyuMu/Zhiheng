@@ -292,7 +292,7 @@ const MINIMAL_PDF = Buffer.from(
 
     await check("real Worker unsupported PDF failure is visible with stable code and recovery actions", async () => {
       await page.goto(`${base}/knowledge-agent#research`);
-      await page.locator("[data-open-import]").click();
+      await page.locator(".topbar [data-open-import]").first().click();
       await page.locator("#import-title").fill("未配置解析器 PDF");
       await page.locator("#import-file").setInputFiles({
         name: "unsupported.pdf",
