@@ -143,8 +143,12 @@ fs.mkdirSync(output, { recursive: true });
       await page.locator('#import-submit').click();
       await page.waitForFunction(() => location.hash === '#library');
       const unsupportedRow = page.locator('.processing-item').filter({ hasText: '浏览器验收 PDF unsupported' });
-      await unsupportedRow.filter({ hasText: /不支持|unsupported|PDF parsing is unsupported/ }).waitFor({ timeout: 30000 });
-      assert(await unsupportedRow.getByRole('button', { name: '补充资料' }).isVisible());
+      await page.waitForFunction(() => {
+        const row = [...document.querySelectorAll('.processing-item')]
+          .find((item) => item.textContent.includes('浏览器验收 PDF unsupported'));
+        return Boolean(row && /unsupported_pdf_parser|当前服务版本不支持|PDF parsing is unsupported/.test(row.textContent));
+      }, undefined, { timeout: 30000 });
+      await unsupportedRow.getByRole('button', { name: '补充资料' }).waitFor({ state: 'visible' });
       assert.equal(
         (await apiJson('/v1/knowledge/search?' + new URLSearchParams({ q: '浏览器验收 PDF unsupported', limit: '5' }))).items.length,
         0,
