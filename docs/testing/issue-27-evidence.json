@@ -1,0 +1,429 @@
+{
+  "sha": "421fbaec46cf9ee64adb4d8b51c8532d73dc2922",
+  "status": "passed",
+  "termination": "completed",
+  "elapsed_seconds": 1127.928,
+  "exit_code": 0,
+  "clean_before": true,
+  "clean_after": true,
+  "collected_tests": 777,
+  "test_count": 777,
+  "report_complete": true,
+  "first_failure": null,
+  "first_failure_order": "JUnit document order",
+  "failed_nodes": [],
+  "failure_details": [],
+  "failure_groups": {},
+  "skips": [],
+  "versions": {
+    "pytest": "9.1.1",
+    "sqlalchemy": "2.0.52",
+    "pydantic": "2.13.5",
+    "restic": "restic 0.19.1 compiled with go1.26.5 on darwin/arm64"
+  },
+  "python": "3.12.9",
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "started_at_utc": "2026-09-26T16:39:47Z",
+  "command": [
+    "/private/tmp/zhiheng-issue17-final.5zaMLc/.venv/bin/python",
+    "-m",
+    "pytest",
+    "-p",
+    "pytest_delivery_recorder",
+    "-p",
+    "no:cacheprovider",
+    "-o",
+    "addopts=",
+    "--override-ini",
+    "testpaths=tests",
+    "--junitxml=/private/tmp/zhiheng-issue17-final-evidence/pytest/pytest.xml",
+    "--durations=30",
+    "-ra"
+  ],
+  "required_evidence": {
+    "privacy": {
+      "status": "passed",
+      "cases": [
+        {
+          "node": "tests/integration/test_answer_replay_authority.py::test_answer_retry_refuses_deleted_source[False]",
+          "status": "passed",
+          "seconds": 0.338,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_answer_replay_authority.py::test_answer_retry_refuses_deleted_source[True]",
+          "status": "passed",
+          "seconds": 0.459,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_answer_replay_authority.py::test_erase_scrubs_answer_receipt[structured]",
+          "status": "passed",
+          "seconds": 0.352,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_answer_replay_authority.py::test_erase_scrubs_answer_receipt[knowledge]",
+          "status": "passed",
+          "seconds": 0.349,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_answer_replay_authority.py::test_erase_scrubs_answer_receipt[memory_without_refs]",
+          "status": "passed",
+          "seconds": 0.479,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_answer_replay_authority.py::test_citation_replay_requires_exact_current_provenance",
+          "status": "passed",
+          "seconds": 0.208,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_answer_replay_authority.py::test_legacy_receipt_collisions_are_preserved_and_audited",
+          "status": "passed",
+          "seconds": 0.205,
+          "reason": ""
+        }
+      ]
+    },
+    "g006_fixed_suite": {
+      "status": "passed",
+      "cases": [
+        {
+          "node": "tests/unit/test_g006_runner.py::test_fixed_suite_runner_dispatches_exact_registry_and_reports_actual_dependencies",
+          "status": "passed",
+          "seconds": 7.388,
+          "reason": ""
+        },
+        {
+          "node": "tests/unit/test_g006_runner.py::test_retention_case_uses_real_structured_lookup_and_candidate_params_affect_behavior",
+          "status": "passed",
+          "seconds": 14.733,
+          "reason": ""
+        },
+        {
+          "node": "tests/unit/test_g006_runner.py::test_privacy_gateway_zero_outbound_case_executes_real_gateway",
+          "status": "passed",
+          "seconds": 7.411,
+          "reason": ""
+        },
+        {
+          "node": "tests/unit/test_g006_runner.py::test_runner_persists_hmac_verified_case_trajectories",
+          "status": "passed",
+          "seconds": 9.345,
+          "reason": ""
+        }
+      ]
+    },
+    "release_validation": {
+      "status": "passed",
+      "cases": [
+        {
+          "node": "tests/integration/test_release_stage_gates.py::test_stage_gate_rejects_validation_and_wrong_stage_runs",
+          "status": "passed",
+          "seconds": 15.043,
+          "reason": ""
+        }
+      ]
+    },
+    "lifecycle": {
+      "status": "passed",
+      "cases": [
+        {
+          "node": "tests/integration/test_g006_release_lifecycle.py::test_bootstrap_stable_release_is_idempotent_for_trusted_baseline",
+          "status": "passed",
+          "seconds": 0.186,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_release_lifecycle.py::test_release_lifecycle_promotes_candidate_with_binding_and_audit_contract",
+          "status": "passed",
+          "seconds": 30.692,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_release_lifecycle.py::test_release_controller_rejects_contract_violations_before_publishing",
+          "status": "passed",
+          "seconds": 23.667,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_release_lifecycle.py::test_prepare_and_promote_are_idempotent_and_enforce_head_cas",
+          "status": "passed",
+          "seconds": 59.942,
+          "reason": ""
+        }
+      ]
+    },
+    "promotion_rollback": {
+      "status": "passed",
+      "cases": [
+        {
+          "node": "tests/e2e/test_g006_promotion_rollback.py::test_g006_candidate_promotion_and_rollback_restore_exact_prior_default_head",
+          "status": "passed",
+          "seconds": 30.233,
+          "reason": ""
+        }
+      ]
+    },
+    "worker_recovery": {
+      "status": "passed",
+      "cases": [
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_promotion_job_recovers_after_crash_without_double_publishing",
+          "status": "passed",
+          "seconds": 31.207,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_promotion_job_rejects_payload_self_reported_publisher",
+          "status": "passed",
+          "seconds": 30.716,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_same_promotion_idempotency_key_replays_to_single_job",
+          "status": "passed",
+          "seconds": 29.461,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_maintenance_job_cannot_mutate_stable_head",
+          "status": "passed",
+          "seconds": 30.709,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_every_api_event_maintenance_value_is_worker_executable[same_failure_threshold]",
+          "status": "passed",
+          "seconds": 0.185,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_every_api_event_maintenance_value_is_worker_executable[safety_exception]",
+          "status": "passed",
+          "seconds": 0.185,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_every_api_event_maintenance_value_is_worker_executable[knowledge_conflict]",
+          "status": "passed",
+          "seconds": 0.184,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_every_api_event_maintenance_value_is_worker_executable[retrieval_failure]",
+          "status": "passed",
+          "seconds": 0.185,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_every_api_periodic_maintenance_value_is_worker_executable[weekly]",
+          "status": "passed",
+          "seconds": 0.189,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_every_api_periodic_maintenance_value_is_worker_executable[monthly]",
+          "status": "passed",
+          "seconds": 0.185,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_every_api_periodic_maintenance_value_is_worker_executable[quarterly]",
+          "status": "passed",
+          "seconds": 0.187,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_maintenance_api_requires_exactly_one_supported_mode",
+          "status": "passed",
+          "seconds": 0.0,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_stage_worker_fails_closed_without_publisher_capability",
+          "status": "passed",
+          "seconds": 30.678,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_g006_worker_recovery.py::test_stage_jobs_execute_bound_strategy_and_persist_signed_runs",
+          "status": "passed",
+          "seconds": 30.669,
+          "reason": ""
+        }
+      ]
+    },
+    "restic_restore": {
+      "status": "passed",
+      "cases": [
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restic_restore_installs_clean_bundle_into_new_target",
+          "status": "passed",
+          "seconds": 5.167,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restic_restore_supports_real_search_and_original_source_resolution",
+          "status": "passed",
+          "seconds": 5.177,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restic_restore_replays_later_external_erase_against_final_object_root",
+          "status": "passed",
+          "seconds": 6.267,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restic_restore_refuses_missing_or_tampered_journal_without_visible_change[missing]",
+          "status": "passed",
+          "seconds": 5.357,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restic_restore_refuses_missing_or_tampered_journal_without_visible_change[tampered]",
+          "status": "passed",
+          "seconds": 5.366,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_object_install_refuses_symlink_escape_without_writing_outside",
+          "status": "passed",
+          "seconds": 0.002,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_object_install_refuses_conflicting_existing_bytes_without_overwrite",
+          "status": "passed",
+          "seconds": 0.001,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_object_install_publishes_multiple_files_and_fsyncs_touched_directories",
+          "status": "passed",
+          "seconds": 0.002,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restic_restore_rejects_object_root_containing_database_before_change",
+          "status": "passed",
+          "seconds": 5.407,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restic_restore_refuses_while_serving_lock_is_active",
+          "status": "passed",
+          "seconds": 5.419,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restore_cli_reports_safe_failure_and_cleans_staging[import time; time.sleep(60)-RESTIC_RESTORE_TIMEOUT-0.2]",
+          "status": "passed",
+          "seconds": 0.454,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restore_cli_reports_safe_failure_and_cleans_staging[sys.exit(11)-RESTIC_REPOSITORY_LOCKED-10]",
+          "status": "passed",
+          "seconds": 2.625,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restore_cli_reports_safe_failure_and_cleans_staging[sys.exit(12)-RESTIC_AUTH_FAILED-10]",
+          "status": "passed",
+          "seconds": 0.617,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restore_cli_reports_safe_failure_and_cleans_staging[sys.exit(1)-RESTIC_RESTORE_FAILED-10]",
+          "status": "passed",
+          "seconds": 0.622,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restore_cli_reports_safe_failure_and_cleans_staging[sys.exit(0)-RESTIC_RESTORE_CONFIG_INVALID-nan]",
+          "status": "passed",
+          "seconds": 0.212,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restore_cli_reports_safe_failure_and_cleans_staging[sys.exit(0)-RESTIC_RESTORE_CONFIG_INVALID-0]",
+          "status": "passed",
+          "seconds": 0.208,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restore_cli_reports_safe_failure_and_cleans_staging[sys.exit(0)-RESTIC_RESTORE_CONFIG_INVALID-invalid]",
+          "status": "passed",
+          "seconds": 0.209,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restore_timeout_terminates_transport_children",
+          "status": "passed",
+          "seconds": 15.376,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restore_signal_reaps_restic_and_transport_children[15]",
+          "status": "passed",
+          "seconds": 2.717,
+          "reason": ""
+        },
+        {
+          "node": "tests/integration/test_restic_restore_install.py::test_restore_signal_reaps_restic_and_transport_children[2]",
+          "status": "passed",
+          "seconds": 2.737,
+          "reason": ""
+        }
+      ]
+    }
+  },
+  "source_directory": "/tmp/zhiheng-issue17-final-evidence",
+  "artifact_sha256": {
+    "report.json": "de36d741cc5e831857f8349e3a415cbb213e71c04e716aef7a0ec57345cafd79",
+    "pytest/evidence.json": "f57faae7b2ed91b948576ec4779ea58a4fcc4b54a70d0ecbca4318dae8e4de7c",
+    "pytest/pytest-outcomes.jsonl": "296b561fea5386de2bf9fef000683c6de7d84486d4f808b22efa223416613568",
+    "pytest/pytest.log": "388267e4c484e77b5ec250881a8cfae65d9dc5ae3886c8e4136c78ec39769b91",
+    "pytest/pytest.xml": "18c7b56877d9d28304faf9d982062043a990e9f6ed3b8f10004bec55721efdfe"
+  },
+  "quality_steps": [
+    {
+      "name": "dependencies",
+      "status": "passed"
+    },
+    {
+      "name": "versions",
+      "status": "passed"
+    },
+    {
+      "name": "compile",
+      "status": "passed"
+    },
+    {
+      "name": "ruff",
+      "status": "passed"
+    },
+    {
+      "name": "mypy",
+      "status": "passed"
+    },
+    {
+      "name": "pytest",
+      "status": "passed"
+    },
+    {
+      "name": "browser",
+      "status": "passed"
+    },
+    {
+      "name": "extraction",
+      "status": "passed"
+    }
+  ],
+  "scope": "Observed results for the recorded SHA only; this summary is not a new test run."
+}
