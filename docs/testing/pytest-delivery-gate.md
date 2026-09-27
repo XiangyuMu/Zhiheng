@@ -26,3 +26,24 @@ CI 上传与提交绑定的 `pytest-delivery` artifact，即使测试失败也�
 本门禁通过只代表完整 pytest 及指定测试组通过。规范、类型、迁移、API/Worker
 启动及真实浏览器验收仍须按 ADR 0004 单独通过，才能声明产品交付完成。
 已知产品缺陷不能改称 MVP 限制；MVP 限制需引用已确认范围并说明测试所证明的边界。
+
+## 持久保存交付证据
+
+本机交付证据使用检出目录之外的持久目录，避免系统清理 `/tmp` 丢失原始日志：
+
+```sh
+release_sha=$(git rev-parse HEAD)
+uv run python scripts/delivery_acceptance.py \
+  --output "/Users/muxy/Projects/Zhiheng-delivery-evidence/${release_sha}" \
+  --timeout 7200
+```
+
+在其他机器将输出根目录替换为自己的持久目录；每次运行使用全新的目录。
+该命令保存完整 pytest 日志、JUnit、增量事件、浏览器截图和 API/Worker 日志，
+以及带相对路径 SHA-256 清单的统一报告。清单包含浏览器子报告；仅顶层报告自身不参与自身哈希。
+证据目录不随临时检出清理，也不提交含运行时信息的完整日志到产品仓库。
+
+历史 `421fbae` 运行的完整原件已复制到
+`/Users/muxy/Projects/Zhiheng-delivery-evidence/421fbaec46cf9ee64adb4d8b51c8532d73dc2922/`，
+并逐文件核对哈希。它仅证明该历史 SHA；后续代码的签收必须使用新的同 SHA 报告。
+本地持久目录并不等同于异机备份；需要转移时完整复制目录并按报告中的哈希核对。

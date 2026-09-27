@@ -203,6 +203,9 @@ class PdfTaskStatusResponse(BaseModel):
     image_count: int
     source_sha256: str
     etag: str
+    error_code: str | None = None
+    redacted_summary: str | None = None
+    retryable: bool = False
 
 
 def install_knowledge_routes(app: Any, settings: Settings) -> None:
@@ -381,6 +384,7 @@ def get_pdf_task(
                   t.id AS task_id, t.evidence_object_id, t.state, t.backend,
                   eo.sha256 AS source_sha256,
                   a.id AS attempt_id,
+                  a.failure_code,
                   count(DISTINCT p.id) AS page_count,
                   count(DISTINCT CASE WHEN p.status = 'parsed' THEN p.id END)
                     AS parsed_page_count,
@@ -418,6 +422,25 @@ def get_pdf_task(
             "block_count": int(row["block_count"]),
         }
     )
+    failure_code = row["failure_code"] or (
+        "unsupported_pdf_parser" if str(row["state"]) == "unsupported" else None
+    )
+    failure = failure_from_row(
+        error_class=str(failure_code) if failure_code else None,
+        error_message=(
+            "PDF parsing is unsupported: configure a parser service before retrying this import"
+            if str(row["state"]) == "unsupported"
+            else None
+        ),
+        payload=(
+            {"failure_code": failure_code, "failure_stage": "parse", "retryable": False}
+            if failure_code and str(row["state"]) == "unsupported"
+            else {"failure_code": failure_code}
+            if failure_code
+            else None
+        ),
+        job_status=str(row["state"]),
+    )
     return PdfTaskStatusResponse(
         task_id=str(row["task_id"]),
         evidence_object_id=str(row["evidence_object_id"]),
@@ -431,6 +454,9 @@ def get_pdf_task(
         image_count=int(row["image_count"]),
         source_sha256=str(row["source_sha256"]),
         etag=etag,
+        error_code=failure.code if failure else None,
+        redacted_summary=failure.redacted_summary if failure else None,
+        retryable=bool(failure.retryable if failure else str(row["state"]) in {"failed", "dead"}),
     )
 
 

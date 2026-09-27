@@ -27,7 +27,7 @@ def clean_environment() -> dict[str, str]:
         key: value
         for key, value in os.environ.items()
         if not key.startswith(("ZHIHENG_", "RESTIC_", "PYTEST_", "UV_"))
-        and key not in {"PYTHONPATH", "VIRTUAL_ENV"}
+        and key not in {"PYTHONPATH", "VIRTUAL_ENV", "BROWSER_CHANNEL", "PLAYWRIGHT_MODULE_PATH"}
     }
 
 
@@ -184,7 +184,7 @@ def main() -> int:
     report["artifacts"] = {
         str(path.relative_to(output)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(output.rglob("*"))
-        if path.is_file() and path.name != "report.json"
+        if path.is_file() and path != output / "report.json"
     }
     (output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({"status": report["status"], "report": str(output / "report.json")}))

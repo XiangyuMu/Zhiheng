@@ -12,6 +12,7 @@ from urllib.parse import unquote, urlparse
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -28,7 +29,6 @@ from zhiheng.privacy.erase_journal import ExternalEraseJournal
 from zhiheng.retrieval.repository import CitationContextRepository, LexicalRetriever
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RESTIC_FIXTURE = Path("/tmp/zhiheng-restic-runtime.xgcP3J/restic/0.19.1/bin/restic")
 RESTIC_PASSWORD = "synthetic-restic-restore-password"
 JOURNAL_SECRET = "test-secret-with-enough-length-for-hmac"
 RESTORE_TEXT = "restic restore install must not revive erased private evidence bytes"
@@ -37,13 +37,18 @@ RESTORE_TEXT = "restic restore install must not revive erased private evidence b
 def _restic_binary() -> str:
     binary = os.environ.get("ZHIHENG_RESTIC_BINARY")
     if binary:
+        if not Path(binary).is_file():
+            pytest.fail(f"ZHIHENG_RESTIC_BINARY does not exist: {binary}")
+        if not os.access(binary, os.X_OK):
+            pytest.fail(f"ZHIHENG_RESTIC_BINARY is not executable: {binary}")
         return binary
-    if RESTIC_FIXTURE.exists():
-        return str(RESTIC_FIXTURE)
     discovered = shutil.which("restic")
     if discovered:
         return discovered
-    pytest.skip("restic executable required for restic restore install tests")
+    pytest.skip(
+        "restic executable required for restic restore install tests; "
+        "set ZHIHENG_RESTIC_BINARY or install restic on PATH"
+    )
 
 
 def _session_factory(db_path: Path) -> sessionmaker[Session]:
@@ -57,6 +62,20 @@ def _session_factory(db_path: Path) -> sessionmaker[Session]:
 def _open_session_factory(db_path: Path) -> sessionmaker[Session]:
     settings = Settings(environment="test", database_url=f"sqlite:///{db_path}")
     return create_session_factory(create_sqlite_engine(settings))
+
+
+def _assert_current_schema(db_path: Path) -> None:
+    cfg = Config("alembic.ini")
+    script = ScriptDirectory.from_config(cfg)
+    expected = set(script.get_heads())
+    connection = sqlite3.connect(db_path)
+    try:
+        current = {
+            str(row[0]) for row in connection.execute("SELECT version_num FROM alembic_version")
+        }
+    finally:
+        connection.close()
+    assert current == expected
 
 
 def _ingest(session: Session, artifacts: StoredTextArtifacts) -> str:
@@ -199,6 +218,7 @@ def test_restic_restore_installs_clean_bundle_into_new_target(tmp_path: Path) ->
     )
 
     assert json.loads(result.stdout)["restored_snapshot_id"] == snapshot_id
+    _assert_current_schema(target_db)
     with session_scope(_open_session_factory(target_db)) as session:
         assert session.execute(text("SELECT count(*) FROM serving_chunks")).scalar_one() == 1
         assert (

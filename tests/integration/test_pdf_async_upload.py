@@ -15,6 +15,11 @@ from tests.integration.test_g005_api_impl import _client, _headers, _login
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import new_id, sha256_text
 from zhiheng.db.session import session_scope
+from zhiheng.jobs.knowledge_indexing import (
+    KnowledgeIndexJobExecutor,
+    process_knowledge_jobs_once,
+)
+from zhiheng.jobs.outbox import OutboxRepository
 from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
 from zhiheng.knowledge.pdf_repository import PdfRepository
 
@@ -136,6 +141,42 @@ def test_pdf_upload_is_async_idempotent_and_emits_parse_event(tmp_path: Path) ->
         assert event_payload["output_prefix"] == f"artifact://pdf-attempts/{payload['task_id']}"
         assert event_payload["options"] == {}
         assert event_payload["schema_version"] == "pdf-parser.manifest.v1"
+
+
+def test_pdf_status_exposes_unsupported_worker_diagnostics(tmp_path: Path) -> None:
+    client, session_factory = _client(tmp_path)
+    csrf = _login(client)
+    response = client.post(
+        "/v1/knowledge/pdf-imports",
+        params={"title": "未配置解析器 PDF", "primary_domain_id": "technology.ai"},
+        content=_pdf_bytes(),
+        headers={
+            **_headers(csrf, "pdf-unsupported"),
+            "Content-Type": "application/pdf",
+        },
+    )
+    assert response.status_code == 202
+    task = response.json()
+    with session_scope(session_factory) as session:
+        events = OutboxRepository().claim_pending(session, limit=10)
+        assert len(events) == 1
+        assert OutboxRepository().enqueue_jobs_for_events(session, events) == 1
+
+    completed = process_knowledge_jobs_once(
+        session_factory,
+        KnowledgeIndexJobExecutor(Settings(environment="test")),
+        worker_id="pdf-unsupported-worker",
+        pdf_executor=None,
+    )
+    assert completed == 1
+
+    status = client.get(task["status_url"])
+    assert status.status_code == 200
+    body = status.json()
+    assert body["state"] == "unsupported"
+    assert body["error_code"] == "unsupported_pdf_parser"
+    assert "configure a parser service" in body["redacted_summary"]
+    assert body["retryable"] is False
 
 
 def test_pdf_manifest_persists_attempt_pages_and_blocks(tmp_path: Path) -> None:

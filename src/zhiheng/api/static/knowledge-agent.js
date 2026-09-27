@@ -28,7 +28,7 @@ const processingNames = {
   ready: "已可检索", searchable: "已可检索", completed: "处理完成", retrying: "正在重试",
   parsed: "解析完成", succeeded: "处理完成", partial: "部分完成，可检索已成功页面",
   retryable_failed: "处理失败，可以重试", failed: "处理失败", dead: "处理失败", dead_letter: "处理失败，可以重试",
-  parse_failed: "解析失败，可以重试", cancelled: "处理已取消",
+  parse_failed: "解析失败，可以重试", unsupported: "当前服务版本不支持处理", cancelled: "处理已取消",
 };
 const batchStatusNames = {
   queued: "排队中", processing: "处理中", succeeded: "已完成", partial: "部分完成",
@@ -489,6 +489,11 @@ async function pollPdfTask(id) {
           retryable: Boolean(current.retryable ?? ["failed", "dead"].includes(current.state)),
           terminal: ["parsed", "partial", "failed", "dead", "unsupported"].includes(current.state),
         });
+        if (entry.terminal && (current.error_code || current.redacted_summary)) {
+          entry.label = `${current.error_code || current.state}：${current.redacted_summary || "处理未完成，请补充资料或重新处理。"}`;
+        } else {
+          entry.label = processingNames[current.state] || current.state || entry.label;
+        }
         renderProcessing();
         if (["parsed", "partial", "failed", "dead", "unsupported"].includes(current.state)) {
           if (current.state === "parsed" && current.searchable === true) await loadKnowledge();
@@ -715,7 +720,7 @@ async function loadPersistentImportTasks() {
         label: processingNames[task.status] || task.status,
         retryable: Boolean(task.retryable),
         failure: task.failure,
-        terminal: ["failed", "dead_letter", "partial", "parse_failed"].includes(task.status),
+        terminal: ["failed", "dead_letter", "partial", "parse_failed", "unsupported"].includes(task.status),
         parsed_page_count: task.progress_completed,
         page_count: task.progress_total,
         ready: false,

@@ -92,6 +92,12 @@ fs.mkdirSync(output, { recursive: true });
     await pageB.screenshot({ path: path.join(output, "qualification-second-session.png"), fullPage: true });
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ checks }, null, 2));
     console.log("PASS", checks.join("; "));
+  } catch (error) {
+    fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({
+      status: "failed", checks, error: error.stack || String(error),
+    }, null, 2));
+    await pageB.screenshot({ path: path.join(output, "failure.png"), fullPage: true }).catch(() => {});
+    throw error;
   } finally {
     await contextA.close();
     await contextB.close();

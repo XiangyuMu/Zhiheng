@@ -149,6 +149,12 @@ fs.mkdirSync(output, { recursive: true });
 
     assert.deepEqual(errors, [], "no uncaught browser errors");
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ checks, browserErrors: errors }, null, 2));
+  } catch (error) {
+    fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({
+      status: "failed", checks, error: error.stack || String(error),
+    }, null, 2));
+    await page.screenshot({ path: path.join(output, "failure.png"), fullPage: true }).catch(() => {});
+    throw error;
   } finally {
     await browser.close();
   }

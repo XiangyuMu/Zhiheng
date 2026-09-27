@@ -22,6 +22,12 @@ fs.mkdirSync(output, { recursive: true });
   const evidence = {};
   async function check(label, work) { await work(); checks.push(label); console.log('PASS', label); }
   async function shot(name) { await page.screenshot({ path: path.join(output, `${name}.png`), fullPage: true }); }
+  function writeChecks(status, error) {
+    fs.writeFileSync(path.join(output, 'checks.json'), JSON.stringify({
+      status, checks, evidence, browserErrors: errors,
+      error: error ? error.stack || String(error) : undefined,
+    }, null, 2));
+  }
   async function noOverflow() { assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'body must not scroll horizontally'); }
   async function apiJson(url, options = {}) {
     return page.evaluate(async ({ url, options }) => {
@@ -34,6 +40,24 @@ fs.mkdirSync(output, { recursive: true });
       if (!response.ok) throw new Error(`${response.status}: ${body.detail || 'request failed'}`);
       return body;
     }, { url, options });
+  }
+  async function qualifiedSearchResult(title, query) {
+    let lastSearch;
+    let lastProcessing;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      lastSearch = await apiJson('/v1/knowledge/search?' + new URLSearchParams({ q: query, limit: '5' }));
+      const item = lastSearch.items.find((entry) => entry.title === title);
+      if (item?.knowledge_object_id) {
+        lastProcessing = await apiJson(`/v1/knowledge/${item.knowledge_object_id}/processing`);
+        if (
+          lastProcessing.public_status === 'succeeded'
+          && lastProcessing.job_status === 'completed'
+          && lastProcessing.searchable === true
+        ) return { item, processing: lastProcessing };
+      }
+      await page.waitForTimeout(1500);
+    }
+    throw new Error(`import did not become formally searchable: ${JSON.stringify({ lastSearch, lastProcessing })}`);
   }
   try {
     await page.goto(`${base}/login?next=${encodeURIComponent('/knowledge-agent#research')}`);
@@ -71,12 +95,7 @@ fs.mkdirSync(output, { recursive: true });
       assert(!await page.locator('#import-dialog').isVisible());
     });
     await check('import task reaches formal retrieval qualification through the independent worker', async () => {
-      const search = await apiJson('/v1/knowledge/search?' + new URLSearchParams({
-        q: '中文全文检索 正式视图 原文核验',
-        limit: '5',
-      }));
-      const item = search.items.find((entry) => entry.title === '中文检索研究记录');
-      assert(item, 'imported item must be reachable through the public search API');
+      const { item, processing } = await qualifiedSearchResult('中文检索研究记录', '中文全文检索 正式视图 原文核验');
       assert.equal(item.lifecycle_status, 'formal_current');
       assert(item.knowledge_object_id, 'search result must expose a knowledge object id');
       assert(item.knowledge_version_id, 'search result must expose a version pointer');
@@ -84,7 +103,6 @@ fs.mkdirSync(output, { recursive: true });
       assert.equal(item.media_type, 'text/markdown');
       assert.equal(String(item.content_sha256).length, 64);
 
-      const processing = await apiJson(`/v1/knowledge/${item.knowledge_object_id}/processing`);
       assert.equal(processing.public_status, 'succeeded');
       assert.equal(processing.job_status, 'completed');
       assert.equal(processing.searchable, true);
@@ -112,6 +130,30 @@ fs.mkdirSync(output, { recursive: true });
         original_source_sha256: reader.source.sha256,
         reader_text_contains_original: reader.text.includes('中文全文检索必须回查正式视图'),
       };
+    });
+    await check('real PDF import unsupported state is visible and excluded from search', async () => {
+      const pdfBytes = Buffer.from('JVBERi0xLjMKJeLjz9MKMSAwIG9iago8PAovUHJvZHVjZXIgKHB5cGRmKQo+PgplbmRvYmoKMiAwIG9iago8PAovVHlwZSAvUGFnZXMKL0NvdW50IDEKL0tpZHMgWyA0IDAgUiBdCj4+CmVuZG9iagozIDAgb2JqCjw8Ci9UeXBlIC9DYXRhbG9nCi9QYWdlcyAyIDAgUgo+PgplbmRvYmoKNCAwIG9iago8PAovVHlwZSAvUGFnZQovUmVzb3VyY2VzIDw8Cj4+Ci9NZWRpYUJveCBbIDAuMCAwLjAgMjAwIDIwMCBdCi9QYXJlbnQgMiAwIFIKPj4KZW5kb2JqCnhyZWYKMCA1CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAxNSAwMDAwMCBuIAowMDAwMDAwMDU0IDAwMDAwIG4gCjAwMDAwMDAxMTMgMDAwMDAgbiAKMDAwMDAwMDE2MiAwMDAwMCBuIAp0cmFpbGVyCjw8Ci9TaXplIDUKL1Jvb3QgMyAwIFIKL0luZm8gMSAwIFIKPj4Kc3RhcnR4cmVmCjI1NgolJUVPRgo=', 'base64');
+      await page.locator('.topbar [data-open-import]').click();
+      await page.locator('#import-title').fill('浏览器验收 PDF unsupported');
+      await page.locator('#import-file').setInputFiles({
+        name: 'issue17-unsupported.pdf',
+        mimeType: 'application/pdf',
+        buffer: pdfBytes,
+      });
+      await page.locator('#import-submit').click();
+      await page.waitForFunction(() => location.hash === '#library');
+      const unsupportedRow = page.locator('.processing-item').filter({ hasText: '浏览器验收 PDF unsupported' });
+      await unsupportedRow.filter({ hasText: /不支持|unsupported|PDF parsing is unsupported/ }).waitFor({ timeout: 30000 });
+      assert(await unsupportedRow.getByRole('button', { name: '补充资料' }).isVisible());
+      assert.equal(
+        (await apiJson('/v1/knowledge/search?' + new URLSearchParams({ q: '浏览器验收 PDF unsupported', limit: '5' }))).items.length,
+        0,
+      );
+      evidence.pdfUnsupported = {
+        rowText: await unsupportedRow.innerText(),
+        excludedFromSearch: true,
+      };
+      await shot('pdf-unsupported-desktop');
     });
     await shot('library-desktop');
     await check('library filtering and reader preserve context', async () => {
@@ -265,6 +307,10 @@ fs.mkdirSync(output, { recursive: true });
       }
     });
     assert.deepEqual(errors, [], 'no uncaught browser errors');
-    fs.writeFileSync(path.join(output, 'checks.json'), JSON.stringify({ checks, evidence, browserErrors: errors }, null, 2));
+    writeChecks('passed');
+  } catch (error) {
+    await shot('failure').catch(() => {});
+    writeChecks('failed', error);
+    throw error;
   } finally { await browser.close(); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

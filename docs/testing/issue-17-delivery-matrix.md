@@ -8,10 +8,10 @@
 | 项目 | 当前值 |
 | --- | --- |
 | 交付分支 | `main` |
-| 代码基线 | `3f20805` (`feat: add conclusion extraction quality review loop (#29)`) |
-| 当前工作树 | 不干净；存在未提交的 `scripts/browser_acceptance.sh`、`tests/e2e/check_workspace_full.cjs`、`scripts/delivery_acceptance.py` 和 `tests/unit/test_delivery_acceptance.py` |
-| 本文件范围 | 只记录需求、实现入口、测试入口和证据缺口；不把未提交文件纳入 `3f20805` 的交付结论 |
-| 当前新鲜证据 | 本轮未执行完整门禁、真实浏览器或备份恢复；因此不能声明当前 SHA 已通过 |
+| 验收对象 | 以持久证据目录的 `report.json.sha` 为准；测试前先提交，在同一干净检出运行 |
+| 工作树 | 由报告中的 `clean_before`、`clean_after` 和 `same_sha` 证明，不能沿用文档编写时状态 |
+| 本文件范围 | 映射需求、实现和验收入口；通过结论取自对应 SHA 的原始报告 |
+| 当前证据入口 | `/Users/muxy/Projects/Zhiheng-delivery-evidence/<SHA>/`；完整 pytest、浏览器和提炼评估分开保留 |
 
 证据状态使用以下含义：
 
@@ -42,14 +42,14 @@
 | 13 | 唯一主领域、跨域关联；个人档案与经历是独立记录类型；同一条目不重复存储 | `classification/taxonomy.py`、结论分类 API/审核 | `tests/integration/test_topic_taxonomy.py`、`test_conclusion_classification.py` | **实现入口+测试入口**。需在最终浏览器或 HTTP 证据中证明分类与记录类型同时展示且不产生重复正式条目 |
 | 14 | 新条目分类随审核；已有分类及领域结构的变更需批准，历史可追溯 | `classification/suggestions.py`、分类审核和 ETag | `tests/integration/test_conclusion_classification.py`、`test_topic_taxonomy.py`、`test_classification_node_errors.py` | **实现入口+测试入口**。#15 的动态目录和逐条迁移必须在同一验收中覆盖；当前浏览器脚本没有完整分类迁移操作证据 |
 | 15 | 旧分类升级逐条迁移；保留原文、条目、前提、来源和历史引用；未批准不改变正式归属 | `classification/taxonomy.py`、迁移预览/批准 API | `tests/integration/test_topic_taxonomy.py` | **局部测试入口**。缺少真实浏览器逐条迁移和恢复后引用检查；这是 #7/#15 的交付缺口 |
-| 16 | 认证、并发版本、删除和恢复边界不退化；删除后派生结果不能复活 | 认证/CSRF/ETag、隐私擦除账本、对象和索引清理、恢复重放 | `tests/integration/test_privacy_physical_erase.py`、`test_answer_replay_authority.py`、`test_restic_restore_install.py`、`test_startup_recovery_barrier.py` | **实现入口+大量测试入口**，但 #25/#27 仍是交付阻塞。必须用最终 SHA 重新跑隐私擦除、restic 恢复和旧快照不复活场景 |
+| 16 | 认证、并发版本、删除和恢复边界不退化；删除后派生结果不能复活 | 认证/CSRF/ETag、隐私擦除账本、对象和索引清理、恢复重放 | `tests/integration/test_privacy_physical_erase.py`、`test_answer_replay_authority.py`、`test_restic_restore_install.py`、`test_startup_recovery_barrier.py` | **实现入口+大量测试入口**，历史 `421fbae` 全量已通过；最终 SHA 仍须重跑隐私擦除、restic 恢复和旧快照不复活场景 |
 
 ## 首版新增门禁
 
 | 门禁 | 代码/测试入口 | 当前判断 | 完成交付所需证据 |
 | --- | --- | --- | --- |
-| 干净检出与单 SHA | `docs/adr/0004-main-as-release-branch-and-evidence-gated-delivery.md`、`scripts/delivery_acceptance.py` | 有执行器，但当前工作树不干净；本轮未运行 | 新检出记录 SHA、依赖版本、工作树前后状态，所有步骤均绑定同一 SHA |
-| 编译、Ruff、全量 Mypy | `scripts/delivery_acceptance.py`、`docs/testing/pytest-delivery-gate.md` | 有命令，当前无新鲜结果 | `compileall`、`ruff check .`、`mypy src tests` 全部退出 0；不得用 `type: ignore` 隐藏错误 |
+| 干净检出与单 SHA | `docs/adr/0004-main-as-release-branch-and-evidence-gated-delivery.md`、`scripts/delivery_acceptance.py` | 执行器要求干净检出；实际状态见对应 SHA 的报告 | 新检出记录 SHA、依赖版本、工作树前后状态，所有步骤均绑定同一 SHA |
+| 编译、Ruff、全量 Mypy | `scripts/delivery_acceptance.py`、`docs/testing/pytest-delivery-gate.md` | 编译、规范和类型检查步骤由统一执行器采集 | `compileall`、`ruff check .`、`mypy src tests` 全部退出 0；不得用 `type: ignore` 隐藏错误 |
 | 迁移和启动屏障 | `scripts/upgrade_database.py`、`tests/integration/test_startup_recovery_barrier.py`、`tests/integration/test_worker_runtime.py` | 有实现和回归入口 | 空库迁移、支持版本升级、API/Worker 启动；迁移/恢复失败时两者都拒绝启动并输出可诊断错误 |
 | 真实导入到检索链路 | `scripts/browser_acceptance.sh`、`tests/e2e/check_workspace_full.cjs`、`tests/integration/test_worker_knowledge_indexing.py` | 脚本要求真实 API 与 Worker，尚无本轮运行证据 | 登录 → 粘贴文本 → 持久化任务 → 独立 Worker 消费 → `succeeded` 且原文对象和索引指针存在 → 知识库可见 → 搜索 → 回到原文 |
 | 导入失败语义 | `src/zhiheng/jobs/knowledge_contract.py`、`tests/e2e/test_import_polling.cjs`、`docs/adr/0005-startup-import-qualification-and-browser-failure-semantics.md` | 状态和轮询规则已有测试入口 | `failed`/`unsupported`/`partial` 不进入正式上下文；404 停止轮询；5xx/网络错误有限退避；页面显示稳定错误码和原因 |
@@ -81,7 +81,7 @@
 
 ## 交付前行动
 
-1. 先把当前未提交浏览器/门禁修改按产品范围审查并形成明确提交范围；在此之前不要用工作树运行结果签收 `3f20805`。
+1. 将本轮修改审查并提交；以该 SHA 的干净检出执行全部门禁，不把开发工作树调试运行当作签收。
 2. 在干净检出中依次运行迁移、编译、Ruff、Mypy、`pytest_delivery_gate.py`、浏览器验收和 #29 固定集；为每步保留日志、JUnit、截图、依赖版本和 SHA。
 3. 复核 #25 隐私擦除、#27 全量 pytest 交付门禁和 #29 提炼质量结果；任一失败都保持 Issue #17 未完成。
 4. 对矩阵中标记“部分实现证据”的 #10、#12、#14、#15 补真实 HTTP/浏览器场景，尤其是无关缺失不弹窗、分类逐条迁移和恢复后历史引用。
@@ -89,3 +89,15 @@
 
 只有当所有交付阻塞项有同一最终 SHA 的动态证据、工作树干净且独立审查通过时，Issue #17
 才具备关闭依据。Issue 的开放或关闭状态本身不构成验收证据。
+
+## 本轮补齐场景的证据索引
+
+`tests/e2e/check_delivery_contracts.cjs` 通过真实浏览器操作分类审核、回答和上下文提示。
+其逐项结果在 `browser/delivery-contracts/checks.json`；截图、请求错误及失败信息与结果共同保存。
+具体覆盖以该文件中的逐项断言为准，不把登录后的 fetch 结果冒充 UI 操作。
+导入故障中的网络/HTTP 故障注入与真实 Worker 不支持任务必须分别标记。
+
+统一浏览器报告在 `browser/report.json`，全量 pytest 在 `pytest/evidence.json`。
+即使失败也应保存阶段、退出码、已完成检查及已有日志，失败或缺失子报告不能成为通过。
+分类、暂停和缺失信息等旧表“待补”描述代表本轮之前的证据缺口；只有新脚本实际通过后才解除，
+不能因为脚本文件存在就认定完成。完整证据持久保存方法见 [运行说明](pytest-delivery-gate.md)。

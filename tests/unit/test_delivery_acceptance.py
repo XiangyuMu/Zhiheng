@@ -29,10 +29,12 @@ def test_collector_drops_production_and_test_selection_environment(
         "PYTEST_ADDOPTS",
         "UV_PROJECT_ENVIRONMENT",
         "VIRTUAL_ENV",
+        "BROWSER_CHANNEL",
+        "PLAYWRIGHT_MODULE_PATH",
     ):
         monkeypatch.setenv(key, "must-not-inherit")
     env = collector().clean_environment()
-    assert "must-not-inherit" not in env.values()
+    assert all(value != "must-not-inherit" for value in env.values())
     assert "PATH" in env
 
 
