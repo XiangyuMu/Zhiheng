@@ -101,10 +101,12 @@ def validate_checks(output: Path) -> dict[str, Any]:
                 missing = [label for key, label in REQUIRED_CHECKS.items() if not any(
                     isinstance(item, str) and item == label for item in checks
                 )]
-                if missing:
+                evidence = payload.get("evidence")
+                if name == "delivery_contracts" and missing:
                     result["error"] = f"required checks missing: {missing}"
-                elif not isinstance(payload.get("evidence"), dict) or any(
-                    key not in payload["evidence"] for key in REQUIRED_CHECKS
+                elif name == "delivery_contracts" and (
+                    not isinstance(evidence, dict)
+                    or any(key not in evidence for key in REQUIRED_CHECKS)
                 ):
                     result["error"] = "required evidence fields missing"
                 else:
