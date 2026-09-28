@@ -9,7 +9,9 @@ restic 使用系统安装（macOS：`brew install restic`；Ubuntu：`sudo apt-g
 uv sync --extra dev --frozen
 uv run ruff check .
 uv run mypy src tests
-uv run python scripts/pytest_delivery_gate.py --output "$HOME/.local/share/zhiheng-pytest-evidence" --timeout 7200
+run_id="$(date +%Y%m%d-%H%M%S)-$$"
+mkdir -p "$HOME/.local/share/zhiheng-pytest-evidence/$run_id"
+uv run python scripts/pytest_delivery_gate.py --output "$HOME/.local/share/zhiheng-pytest-evidence/$run_id" --timeout 7200
 ```
 
 每次使用一个尚不存在、位于检出目录之外的输出目录。测试运行所用 SHA、命令、
