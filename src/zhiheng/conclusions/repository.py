@@ -5,7 +5,7 @@ import json
 from collections.abc import Mapping
 from typing import Any, cast
 
-from sqlalchemy import text
+from sqlalchemy import CursorResult, text
 from sqlalchemy.orm import Session
 
 from zhiheng.conclusions.applicability import ConclusionApplicabilityService
@@ -270,6 +270,22 @@ class ConclusionRepository:
             payload["domain_id"] = classification["primary_domain_id"]
             payload["record_type"] = classification["record_type"]
         version = int(item["version"]) + 1
+        # Claim the next version atomically.  Reading the draft above happens
+        # before either request writes; guarding the update with the version
+        # that was read makes a stale concurrent writer fail without leaving a
+        # phantom conclusion_versions row behind.
+        claimed = cast(
+            CursorResult[Any],
+            session.execute(
+                text(
+                    "UPDATE conclusion_entries SET current_version=:v "
+                    "WHERE id=:id AND owner_user_id=:o AND current_version=:old"
+                ),
+                {"id": entry_id, "o": owner, "v": version, "old": int(item["version"])},
+            ),
+        )
+        if claimed.rowcount != 1:
+            raise ValueError("conclusion changed after it was read")
         session.execute(
             text(
                 "INSERT INTO conclusion_versions(entry_id,version,payload_json) VALUES (:id,:v,:p)"
@@ -279,12 +295,6 @@ class ConclusionRepository:
                 "v": version,
                 "p": json_text({**payload, "status": "draft", "version": version}),
             },
-        )
-        session.execute(
-            text(
-                "UPDATE conclusion_entries SET current_version=:v WHERE id=:id AND owner_user_id=:o"
-            ),
-            {"id": entry_id, "o": owner, "v": version},
         )
         result = {
             "id": entry_id,
