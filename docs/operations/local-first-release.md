@@ -141,6 +141,12 @@ uv run --frozen python scripts/upgrade_database.py "$ZHIHENG_DATABASE_PATH"
 从 `restic snapshots --json` 复制完整 64 位 snapshot ID 到提示中：
 
 ```sh
+# 新终端先加载原实例配置和备份凭据，再覆盖恢复目标路径。
+export ZHIHENG_LOCAL_ROOT="$HOME/.local/share/zhiheng"
+. "$ZHIHENG_LOCAL_ROOT/local.env"
+export RESTIC_REPOSITORY="$ZHIHENG_LOCAL_ROOT/restic-repository"
+export RESTIC_PASSWORD_FILE="$ZHIHENG_LOCAL_ROOT/restic-password"
+# local.env 已导出原 ZHIHENG_SECRET_KEY 和最新 ZHIHENG_ERASE_JOURNAL_PATH；不得重新生成。
 printf '输入完整 snapshot ID: '
 read -r ZHIHENG_RESTIC_SNAPSHOT_ID
 export ZHIHENG_RESTIC_SNAPSHOT_ID
