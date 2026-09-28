@@ -1050,6 +1050,39 @@ class PrivacyEraseService:
         )
 
         unresolved = 0
+        legacy_exact_id_runs = (
+            session.execute(
+                text(
+                    """
+                SELECT r.id
+                FROM decision_support_runs r
+                WHERE r.status <> 'privacy_erased'
+                  AND json_valid(r.recommendation_json)
+                  AND json_valid(r.review_json)
+                  AND NOT EXISTS (SELECT 1 FROM decision_run_sources s
+                                  WHERE s.run_id = r.id)
+                  AND (
+                    EXISTS (SELECT 1 FROM json_tree(r.recommendation_json) j
+                            WHERE j.type = 'text' AND j.value = :target_id)
+                    OR EXISTS (SELECT 1 FROM json_tree(r.review_json) j
+                               WHERE j.type = 'text' AND j.value = :target_id)
+                  )
+                """
+                ),
+                {"target_id": target_id},
+            )
+            .scalars()
+            .all()
+        )
+        for derived_id in legacy_exact_id_runs:
+            unresolved += self._record_unresolved_derived(
+                session,
+                request_id=request_id,
+                derived_type="decision_support_run",
+                derived_id=str(derived_id),
+                target_type=target_type,
+                target_id=target_id,
+            )
         legacy_exact_id_receipts = (
             session.execute(
                 text(
