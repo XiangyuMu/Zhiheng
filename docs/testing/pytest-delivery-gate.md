@@ -10,11 +10,11 @@ uv sync --extra dev --frozen
 uv run ruff check .
 uv run mypy src tests
 run_id="$(date +%Y%m%d-%H%M%S)-$$"
-mkdir -p "$HOME/.local/share/zhiheng-pytest-evidence/$run_id"
 uv run python scripts/pytest_delivery_gate.py --output "$HOME/.local/share/zhiheng-pytest-evidence/$run_id" --timeout 7200
 ```
 
-每次使用一个尚不存在、位于检出目录之外的输出目录。测试运行所用 SHA、命令、
+每次使用一个尚不存在、位于检出目录之外的输出目录；脚本会创建该目录及其父目录，
+不要提前运行 `mkdir` 创建输出目录。测试运行所用 SHA、命令、
 依赖版本、耗时、退出码及工作树状态写入 `evidence.json`；`pytest.log` 和
 `pytest.xml` 保留完整输出及 JUnit 结果。超时或中断属于不完整执行，不能认定
 未执行的测试通过，也不能把测试耗时直接当作功能故障。
