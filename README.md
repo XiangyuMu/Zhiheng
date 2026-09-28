@@ -1,39 +1,27 @@
 # 知衡 Zhiheng
 
-知衡是一个只服务个人的自进化知识库 Agent。它围绕个人完整生活管理知识，根据目标调用证据辅助查询与决策，并通过可确认、可追溯、可回滚的记忆机制持续理解用户。
+知衡是单用户个人知识库：保存原始材料，提炼带前提和来源的结论，经用户审核后用于后续回答，
+并管理个人记忆、冲突、分类和隐私擦除。
 
-## 当前阶段
+## 首版使用
 
-项目处于产品定义与架构设计阶段。完整需求见 [产品 PRD](docs/product/PRD.md)，开发节奏见 [Roadmap](docs/ROADMAP.md)。
+项目已具有本地可验证的首版实现。是否交付以最终 `main` 提交的干净检出验收报告为准。
 
-## 核心边界
+1. 按 [本地安装与使用手册](docs/operations/local-first-release.md) 安装依赖、配置隔离数据目录并迁移数据库。
+2. 分别启动 API 和 Worker，在浏览器创建单用户账户，粘贴文本并等待可检索，然后搜索和查看原文。
+3. 在审核中心批准结论；未审核草稿不能进入后续回答。
 
-- 单用户、服务器部署
-- 支持本地模型与外部模型 API
-- 文件、SQLite、全文检索和向量检索混合存储
-- 推断型用户画像必须确认后才能生效
-- 首版不做多用户、个人模型训练和自动对外行动
+## 范围与交付
 
-## GitHub 工作流
+- [0.1.0 发布说明与能力边界](docs/releases/0.1.0.md)
+- [需求—实现—测试映射](docs/testing/issue-17-delivery-matrix.md)
+- [同 SHA 交付门禁和持久证据](docs/testing/pytest-delivery-gate.md)
+- [备份与恢复设计](docs/architecture/deployment-and-recovery.md)
+- [产品规格](docs/product/evolving-knowledge-memory-spec.md)、[领域词汇](CONTEXT.md)、[路线图](docs/ROADMAP.md)
 
-1. 用 Issue 描述需求、缺陷、研究任务或技术债。
-2. 每个 Issue 只对应一个可验证结果，并关联 Roadmap 里程碑。
-3. 从 `main` 创建短生命周期分支，例如 `feat/memory-candidate-review`。
-4. 通过 Pull Request 合并，PR 必须引用 Issue 并附验证证据。
-5. `main` 始终代表可复现、通过验证的稳定状态。
+首版使用规则提炼和确定性分类，结论与分类建议经人工审核后生效；明确且无冲突的个人陈述
+可按既定规则自动记忆。LLM 分类、多用户、开放域质量保证和生产服务器/公网 HTTPS 属于后续增强。
 
-## 文档索引
-
-- [完整产品 PRD](docs/product/PRD.md)
-- [需求访谈摘要](docs/product/discovery/deep-interview-summary.md)
-- [产品与开发路线图](docs/ROADMAP.md)
-- [MVP 技术栈与检索基线 ADR](docs/architecture/adr/0001-mvp-technology-stack.md)
-
-## 状态约定
-
-- `idea`：尚未进入近期计划
-- `ready`：范围和验收标准明确，可以开始
-- `in progress`：正在实施
-- `blocked`：存在明确阻塞因素
-- `in review`：等待验证或合并
-- `done`：验收完成并已合入稳定分支
+任务使用 [GitHub Issues](https://github.com/XiangyuMu/Zhiheng/issues)，每张票据保持可独立验收。
+`main` 是唯一最终交付分支；改动审查并合入后，必须重新验证对应 SHA。参见
+[ADR 0004](docs/adr/0004-main-as-release-branch-and-evidence-gated-delivery.md)。

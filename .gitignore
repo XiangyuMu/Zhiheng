@@ -29,5 +29,9 @@ var/
 *.enc
 *.hmac
 *erase-journal.jsonl*
-.omx/state/
-.omx/tmux-hook.json
+.omx/*
+!.omx/ultragoal/
+.omx/ultragoal/*
+!.omx/ultragoal/brief.md
+!.omx/ultragoal/goals.json
+!.omx/ultragoal/quality-gate.json

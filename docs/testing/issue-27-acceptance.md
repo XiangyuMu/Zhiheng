@@ -8,9 +8,9 @@
 
 可复核摘要见 [issue-27-evidence.json](issue-27-evidence.json)，其中保留测试节点、
 实际命令、环境版本、开始时间、耗时、提交 SHA、失败集合、原始文件 SHA-256。
-本地完整原件位于 `/tmp/zhiheng-issue17-final-evidence/`；临时目录不是长期存储，
-跨机器审计时必须另行保存原件或按 [运行说明](pytest-delivery-gate.md) 重新采集。
-摘要不能替代完整日志，也不保证临时原件永久可用。
+原件最初生成于 `/tmp/zhiheng-issue17-final-evidence/`，后来已复制并核对哈希，
+持久归档位置见 [运行说明](pytest-delivery-gate.md)。临时目录不再是唯一证据来源。
+摘要不能替代完整日志；这些原件仅证明上述历史 SHA，不用于签收新的交付提交。
 
 ## 验收标准与证据
 

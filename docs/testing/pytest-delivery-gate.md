@@ -6,10 +6,10 @@ restic 使用系统安装（macOS：`brew install restic`；Ubuntu：`sudo apt-g
 先运行 `restic version` 确认可用；统一采集只使用 `PATH`，不会读取本机临时目录回退。
 
 ```sh
-uv sync --all-extras --frozen
+uv sync --extra dev --frozen
 uv run ruff check .
 uv run mypy src tests
-uv run python scripts/pytest_delivery_gate.py --output /tmp/zhiheng-pytest-evidence --timeout 7200
+uv run python scripts/pytest_delivery_gate.py --output "$HOME/.local/share/zhiheng-pytest-evidence" --timeout 7200
 ```
 
 每次使用一个尚不存在、位于检出目录之外的输出目录。测试运行所用 SHA、命令、
@@ -36,7 +36,7 @@ CI 上传与提交绑定的 `pytest-delivery` artifact，即使测试失败也�
 ```sh
 release_sha=$(git rev-parse HEAD)
 uv run python scripts/delivery_acceptance.py \
-  --output "/Users/muxy/Projects/Zhiheng-delivery-evidence/${release_sha}" \
+  --output "$HOME/.local/share/zhiheng-delivery/evidence-${release_sha}" \
   --timeout 7200
 ```
 
