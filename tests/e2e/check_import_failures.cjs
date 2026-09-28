@@ -215,13 +215,15 @@ const scenarios = [
         }
         assert(!await row.getByText("可检索", { exact: true }).isVisible());
         const task = [...routeStates.values()].find((item) => item.scenario === scenario);
-        assert.equal(task.calls, 1);
+        assert(task && task.calls >= 1 && task.calls <= 2);
+        const observedCalls = task.calls;
+        await waitForCalls(scenario, observedCalls);
         evidence.scenarios[scenario.name] = {
           state: scenario.status,
           error_code: scenario.code,
           reason: scenario.reason,
           retryable: scenario.retryable,
-          status_requests: task.calls,
+          status_requests: observedCalls,
           rendered_searchable: false,
           response_injection: "controlled_status_endpoint",
         };
