@@ -534,7 +534,13 @@ def _contextual_prompts(
     prompts = service.context_prompts(
         session, query=query, owner_user_id=user_id, include_deferred=True
     )
-    if not prompts and _needs_personal_context(query, result):
+    if (
+        not prompts
+        and _needs_personal_context(query, result)
+        and not service.has_supplemented_missing_prompt(
+            session, owner_user_id=user_id, query=query
+        )
+    ):
         prompts.append(
             service.create_missing_prompt(
                 session,

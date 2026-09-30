@@ -343,6 +343,26 @@ class PersonalUpdateService:
             "actions": ["supplement", "defer", "skip"],
         }
 
+    def has_supplemented_missing_prompt(
+        self, session: Session, *, owner_user_id: str, query: str
+    ) -> bool:
+        state_key = "context.missing." + sha256_json({"query": query})[:24]
+        row = session.execute(
+            text(
+                """
+                SELECT 1
+                FROM personal_prompts
+                WHERE owner_user_id = :owner
+                  AND prompt_kind = 'missing'
+                  AND state_key = :state_key
+                  AND status = 'supplemented'
+                LIMIT 1
+                """
+            ),
+            {"owner": owner_user_id, "state_key": state_key},
+        ).first()
+        return row is not None
+
     def decide_missing_prompt(
         self, session: Session, prompt_id: str, decision: str
     ) -> dict[str, Any]:
