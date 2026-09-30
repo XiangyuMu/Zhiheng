@@ -68,7 +68,8 @@ fs.mkdirSync(output, { recursive: true });
   }
 
   async function answer(page, query) {
-    return call(page, "/v1/answers", { query, conversation_id: crypto.randomUUID() });
+    const conversation = await call(page, "/v1/conversations", { title: query });
+    return call(page, "/v1/answers", { query, conversation_id: conversation.id });
   }
 
   try {
