@@ -28,6 +28,11 @@ def test_relevant_conflict_is_returned_with_sources_and_can_be_deferred(tmp_path
     assert prompt["candidate_source"] == "user_explicit"
     assert prompt["existing_source"] == "explicit_direct"
     assert set(("confirm", "supplement", "defer", "skip")) <= set(prompt["actions"])
+    insufficiencies = response.json()["insufficiencies"]
+    assert any(
+        "条件一" in item and "北京" in item and "上海" in item and "暂缓" in item
+        for item in insufficiencies
+    )
 
     deferred = client.post(
         f"/v1/personal-updates/context-prompts/{prompt['id']}/decision",

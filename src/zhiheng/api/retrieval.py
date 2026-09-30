@@ -451,9 +451,21 @@ def answer_question(
     response.context_prompts = _contextual_prompts(
         session, query=payload.query, user_id=user_id, result=result
     )
-    if any(prompt["kind"] == "conflict" for prompt in response.context_prompts):
+    conflicts = [
+        prompt for prompt in response.context_prompts if prompt["kind"] == "conflict"
+    ]
+    if conflicts:
+        alternatives = []
+        for prompt in conflicts:
+            candidate = prompt.get("candidate", {})
+            existing = prompt.get("existing", {})
+            candidate_value = candidate.get("value", candidate.get("text", ""))
+            existing_value = existing.get("value", existing.get("text", ""))
+            alternatives.append(f"条件一：{candidate_value}；条件二：{existing_value}")
         response.insufficiencies.append(
-            "回答中依赖冲突个人信息的部分暂缓，请先确认或补充；不依赖冲突的信息仍可继续使用。"
+            "回答中依赖冲突个人信息的部分暂缓；可按以下条件分别理解："
+            + "；".join(alternatives)
+            + "。请先确认或补充；不依赖冲突的信息仍可继续使用。"
         )
     authority_digest = _answer_authority_digest(
         session, request.app, payload, response, user_id=user_id

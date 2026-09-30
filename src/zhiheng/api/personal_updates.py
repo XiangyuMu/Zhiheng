@@ -209,7 +209,8 @@ def decide_context_prompt(
         text(
             """
             SELECT state_key FROM personal_prompts
-            WHERE id=:id AND owner_user_id=:owner AND prompt_kind='missing' AND status='pending'
+            WHERE id=:id AND owner_user_id=:owner AND prompt_kind='missing'
+              AND status IN ('pending', 'deferred')
             """
         ),
         {"id": prompt_id, "owner": _user_id},
