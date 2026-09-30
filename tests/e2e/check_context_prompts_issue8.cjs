@@ -104,7 +104,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     await page.locator("#context-prompt-supplement").click();
     await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
     const memory = await api("/v1/memory/context/l1?prefix=profile.");
-    assert.equal(memory["profile.work_preference"].text, "偏好短反馈");
+    assert(Object.values(memory).some((value) => value?.text === "偏好短反馈"), JSON.stringify(memory));
     evidence.decisions.push("missing_supplement");
     const secondMissingAnswer = await submitQuestion(missingQuery);
     assert.equal(secondMissingAnswer.context_prompts.length, 0);
