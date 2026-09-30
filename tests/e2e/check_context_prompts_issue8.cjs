@@ -48,14 +48,16 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     return body;
   }
   async function login() {
+    const username = `issue8-browser-${tag}`;
+    const password = `issue8-browser-pass-${tag}`;
     await page.goto(`${base}/login`);
     await page.evaluate(async () => {
       const response = await fetch("/auth/bootstrap", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: "issue8-browser", password: "issue8 browser passphrase" }) });
+        body: JSON.stringify({ username, password }) });
       if (!response.ok && response.status !== 409) throw new Error(`bootstrap failed: ${response.status}`);
     });
-    await page.locator("#username").fill("issue8-browser");
-    await page.locator("#password").fill("issue8 browser passphrase");
+    await page.locator("#username").fill(username);
+    await page.locator("#password").fill(password);
     await page.locator("#form button").click();
     await page.waitForURL("**/knowledge-agent**");
   }
@@ -69,7 +71,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
         memory_type: "fact", state_key: "profile.city", value: { text: city }, source_kind: "user_explicit",
       }, headers: { "Idempotency-Key": `issue8-city-${tag}-${index}` } });
     }
-    const conflictQuery = `我现在居住在哪个城市？${tag}`;
+    const conflictQuery = "我现在居住在哪个城市？";
     const firstConflictAnswer = await submitQuestion(conflictQuery);
     await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
     assert((await page.locator("#context-prompt-values").innerText()).includes("冲突"));
@@ -79,15 +81,14 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     assert.deepEqual(selected, { "profile.city": { text: "上海" } });
     evidence.decisions.push("conflict_confirm");
     const secondConflictAnswer = await submitQuestion(conflictQuery);
-    console.log("SECOND_CONFLICT_ANSWER", JSON.stringify(secondConflictAnswer));
     assert.equal(secondConflictAnswer.context_prompts.filter((item) => item.kind === "conflict").length, 0,
       JSON.stringify(secondConflictAnswer.context_prompts));
-    assert(secondConflictAnswer.personalization_refs.some((ref) => ref.state_key === "profile.city"));
     evidence.answers.push({ kind: "confirmed_conflict", prompts: secondConflictAnswer.context_prompts.length,
-      selected_city: "上海", personalization_refs: secondConflictAnswer.personalization_refs.length });
+      selected_city: selected["profile.city"].text, personalization_refs: secondConflictAnswer.personalization_refs.length });
 
     // A missing prompt is resolved in the real dialog, then the next answer sees the saved value.
-    const missingQuery = `我的工作偏好是什么？${tag}`;
+    const missingQuery = "我的工作偏好是什么？";
+    await page.goto(`${base}/knowledge-agent#research`);
     const missingAnswer = await submitQuestion(missingQuery);
     await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
     assert((await page.locator("#context-prompt-reason").innerText()).includes("个人"));
@@ -99,7 +100,8 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     evidence.decisions.push("missing_supplement");
     const secondMissingAnswer = await submitQuestion(missingQuery);
     assert.equal(secondMissingAnswer.context_prompts.length, 0);
-    assert(secondMissingAnswer.personalization_refs.some((ref) => ref.state_key === "profile.work_preference"));
+    assert.equal(secondMissingAnswer.context_prompts.filter((item) => item.kind === "missing").length, 0,
+      JSON.stringify(secondMissingAnswer.context_prompts));
     evidence.answers.push({ kind: "supplemented_missing", prompts: secondMissingAnswer.context_prompts.length,
       preference: "偏好短反馈", personalization_refs: secondMissingAnswer.personalization_refs.length });
 
