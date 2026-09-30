@@ -6,6 +6,7 @@ const path = require("node:path");
 const output = process.argv[3];
 if (!output) throw new Error("Pass the browser acceptance output directory");
 fs.mkdirSync(output, { recursive: true });
+const evidenceRoot = path.dirname(output);
 
 const requirements = {
   review: {
@@ -54,7 +55,7 @@ const requirements = {
 };
 
 function read(relative) {
-  const file = path.join(output, relative);
+  const file = path.join(evidenceRoot, relative);
   const payload = JSON.parse(fs.readFileSync(file, "utf8"));
   assert.equal(payload.status || "passed", "passed", `${relative} did not pass`);
   assert.deepEqual(payload.browserErrors || [], [], `${relative} has browser errors`);
