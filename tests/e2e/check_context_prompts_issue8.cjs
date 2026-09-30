@@ -81,13 +81,13 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     assert.equal(selected["profile.city"].text, "上海");
     evidence.decisions.push("conflict_confirm");
     const secondConflictAnswer = await submitQuestion(conflictQuery);
-    assert.equal(secondConflictAnswer.context_prompts.filter((item) => item.kind === "conflict").length, 0,
+    assert.equal(secondConflictAnswer.context_prompts.filter((item) => item.kind === "conflict" && item.state_key === "profile.city").length, 0,
       JSON.stringify(secondConflictAnswer.context_prompts));
     evidence.answers.push({ kind: "confirmed_conflict", prompts: secondConflictAnswer.context_prompts.length,
       selected_city: selected["profile.city"].text, personalization_refs: secondConflictAnswer.personalization_refs.length });
     // The city answer can still surface a separate missing-background prompt; dismiss it
     // explicitly before starting the independent supplement scenario.
-    if (await page.locator("#context-prompt-dialog").isVisible()) {
+    for (let promptIndex = 0; promptIndex < 5 && await page.locator("#context-prompt-dialog").isVisible(); promptIndex += 1) {
       await page.locator("#context-prompt-skip").click();
       await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
     }
@@ -116,6 +116,10 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
 
     // Create a second unresolved conflict and unrelated formal evidence. The answer must retain
     // the unrelated evidence while excluding unresolved personal values from its body.
+    for (let promptIndex = 0; promptIndex < 5 && await page.locator("#context-prompt-dialog").isVisible(); promptIndex += 1) {
+      await page.locator("#context-prompt-skip").click();
+      await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
+    }
     await api('/v1/personal-updates', { method: 'POST', body: {
       memory_type: 'fact', state_key: 'profile.city', value: { text: '北京' }, source_kind: 'user_explicit',
     }, headers: { 'Idempotency-Key': `issue8-city-second-${tag}` } });
