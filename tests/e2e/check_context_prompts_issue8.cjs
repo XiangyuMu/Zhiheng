@@ -47,6 +47,20 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     await page.locator("#answer-result").waitFor({ state: "visible", timeout: 20000 });
     return body;
   }
+  async function dismissVisiblePrompts() {
+    for (let promptIndex = 0; promptIndex < 5; promptIndex += 1) {
+      const dialog = page.locator("#context-prompt-dialog");
+      if (!(await dialog.isVisible())) return;
+      const skip = page.locator("#context-prompt-skip");
+      await skip.waitFor({ state: "visible" });
+      await page.waitForFunction(() => {
+        const button = document.querySelector("#context-prompt-skip");
+        return button instanceof HTMLButtonElement && !button.disabled;
+      });
+      await skip.click();
+      await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
+    }
+  }
   async function login() {
     const username = "issue17-workspace";
     const password = "issue17 workspace passphrase";
@@ -87,10 +101,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
       selected_city: selected["profile.city"].text, personalization_refs: secondConflictAnswer.personalization_refs.length });
     // The city answer can still surface a separate missing-background prompt; dismiss it
     // explicitly before starting the independent supplement scenario.
-    for (let promptIndex = 0; promptIndex < 5 && await page.locator("#context-prompt-dialog").isVisible(); promptIndex += 1) {
-      await page.locator("#context-prompt-skip").click();
-      await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
-    }
+    await dismissVisiblePrompts();
 
     // A missing prompt is resolved in the real dialog, then the next answer sees the saved value.
     const missingQuery = "我的工作偏好是什么？";
@@ -116,10 +127,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
 
     // Create a second unresolved conflict and unrelated formal evidence. The answer must retain
     // the unrelated evidence while excluding unresolved personal values from its body.
-    for (let promptIndex = 0; promptIndex < 5 && await page.locator("#context-prompt-dialog").isVisible(); promptIndex += 1) {
-      await page.locator("#context-prompt-skip").click();
-      await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
-    }
+    await dismissVisiblePrompts();
     await api('/v1/personal-updates', { method: 'POST', body: {
       memory_type: 'fact', state_key: 'profile.city', value: { text: '北京' }, source_kind: 'user_explicit',
     }, headers: { 'Idempotency-Key': `issue8-city-second-${tag}` } });
