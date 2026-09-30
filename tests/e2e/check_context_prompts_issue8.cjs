@@ -48,8 +48,8 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     return body;
   }
   async function login() {
-    const username = `issue8-browser-${tag}`;
-    const password = `issue8-browser-pass-${tag}`;
+    const username = `i8${tag}`;
+    const password = "issue8-browser-passphrase";
     await page.goto(`${base}/login`);
     await page.evaluate(async () => {
       const response = await fetch("/auth/bootstrap", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -89,6 +89,8 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     // A missing prompt is resolved in the real dialog, then the next answer sees the saved value.
     const missingQuery = "我的工作偏好是什么？";
     await page.goto(`${base}/knowledge-agent#research`);
+    await page.locator("#new-conversation").click();
+    await page.waitForTimeout(100);
     const missingAnswer = await submitQuestion(missingQuery);
     await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
     assert((await page.locator("#context-prompt-reason").innerText()).includes("个人"));
