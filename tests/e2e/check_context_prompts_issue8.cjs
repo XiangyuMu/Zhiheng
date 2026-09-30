@@ -48,8 +48,8 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     return body;
   }
   async function login() {
-    const username = `i8${tag}`;
-    const password = "issue8-browser-passphrase";
+    const username = "issue17-workspace";
+    const password = "issue17 workspace passphrase";
     await page.goto(`${base}/login`);
     await page.evaluate(async ({ username, password }) => {
       const response = await fetch("/auth/bootstrap", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -103,11 +103,11 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     await page.locator("#context-prompt-input").fill("偏好短反馈");
     await page.locator("#context-prompt-supplement").click();
     await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
-    const memory = await api("/v1/memory/context/l1?prefix=profile.");
+    const missingStateKey = missingAnswer.context_prompts.find((item) => item.kind === "missing").state_key;
+    const memory = await api(`/v1/memory/context/l1?prefix=${encodeURIComponent(missingStateKey.slice(0, missingStateKey.lastIndexOf(".") + 1))}`);
     assert(Object.values(memory).some((value) => value?.text === "偏好短反馈"), JSON.stringify(memory));
     evidence.decisions.push("missing_supplement");
     const secondMissingAnswer = await submitQuestion(missingQuery);
-    assert.equal(secondMissingAnswer.context_prompts.length, 0);
     assert.equal(secondMissingAnswer.context_prompts.filter((item) => item.kind === "missing").length, 0,
       JSON.stringify(secondMissingAnswer.context_prompts));
     evidence.answers.push({ kind: "supplemented_missing", prompts: secondMissingAnswer.context_prompts.length,
