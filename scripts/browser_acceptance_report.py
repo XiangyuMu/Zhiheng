@@ -32,6 +32,13 @@ ISSUE8_CHECKS = {
     ),
 }
 
+ISSUE9_CHECKS = {
+    "queue": "review queue shows the draft count and full draft detail",
+    "relogin": "unapproved draft is restored after closing and re-login",
+    "conflict": "version conflict is shown in the browser and retry after refresh succeeds",
+    "close": "closing review without an action does not approve the draft",
+}
+
 IMPORT_FAILURE_CHECKS = {
     "failed": "failed status is rendered with bounded polling and recovery semantics",
     "unsupported": "unsupported status is rendered with bounded polling and recovery semantics",
@@ -48,6 +55,7 @@ EXPECTED_CHECKS = {
     "delivery_contracts": Path("delivery-contracts/checks.json"),
     "import_failures": Path("import-failures/checks.json"),
     "context_prompts_issue8": Path("context-prompts-issue8/checks.json"),
+    "review_center_issue9": Path("review-center-issue9/checks.json"),
 }
 
 
@@ -128,6 +136,15 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     ]
                     if missing_issue8:
                         result["error"] = f"required checks missing: {missing_issue8}"
+                        results[name] = result
+                        continue
+                if name == "review_center_issue9":
+                    missing_issue9 = [
+                        label for label in ISSUE9_CHECKS.values()
+                        if not any(isinstance(item, str) and item == label for item in checks)
+                    ]
+                    if missing_issue9:
+                        result["error"] = f"required checks missing: {missing_issue9}"
                         results[name] = result
                         continue
                 missing = [

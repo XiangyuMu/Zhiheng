@@ -42,6 +42,13 @@ ISSUE8_CHECKS = [
     "partial answers retain unrelated evidence while excluding unresolved conflict values",
 ]
 
+ISSUE9_CHECKS = [
+    "review queue shows the draft count and full draft detail",
+    "unapproved draft is restored after closing and re-login",
+    "version conflict is shown in the browser and retry after refresh succeeds",
+    "closing review without an action does not approve the draft",
+]
+
 
 def complete_delivery_checks() -> dict[str, object]:
     return {
@@ -75,6 +82,10 @@ def complete_import_failure_checks() -> dict[str, object]:
 
 def complete_issue8_checks() -> dict[str, object]:
     return {"checks": ISSUE8_CHECKS, "browserErrors": [], "evidence": {}}
+
+
+def complete_issue9_checks() -> dict[str, object]:
+    return {"checks": ISSUE9_CHECKS, "browserErrors": [], "evidence": {}}
 
 
 def write_checks(output: Path, relative: str, payload: object) -> None:
@@ -129,6 +140,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "delivery-contracts/checks.json",
         "import-failures/checks.json",
         "context-prompts-issue8/checks.json",
+        "review-center-issue9/checks.json",
     ):
         write_checks(
             tmp_path,
@@ -139,6 +151,8 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             if relative == "import-failures/checks.json"
             else complete_issue8_checks()
             if relative == "context-prompts-issue8/checks.json"
+            else complete_issue9_checks()
+            if relative == "review-center-issue9/checks.json"
             else {"checks": ["one"], "browserErrors": []},
         )
     (tmp_path / "api.log").write_text("api ready")
@@ -187,6 +201,8 @@ def test_browser_acceptance_report_rejects_bad_child_reports(
         "qualification/checks.json": complete_delivery_checks(),
         "delivery-contracts/checks.json": complete_delivery_checks(),
         "import-failures/checks.json": complete_import_failure_checks(),
+        "context-prompts-issue8/checks.json": complete_issue8_checks(),
+        "review-center-issue9/checks.json": complete_issue9_checks(),
     }
     for path, payload in defaults.items():
         write_checks(tmp_path, path, payload)
@@ -226,6 +242,8 @@ def test_browser_acceptance_report_requires_clean_same_sha(
         "qualification/checks.json",
         "delivery-contracts/checks.json",
         "import-failures/checks.json",
+        "context-prompts-issue8/checks.json",
+        "review-center-issue9/checks.json",
     ):
         write_checks(
             tmp_path,
@@ -234,6 +252,10 @@ def test_browser_acceptance_report_requires_clean_same_sha(
             if relative == "delivery-contracts/checks.json"
             else complete_import_failure_checks()
             if relative == "import-failures/checks.json"
+            else complete_issue8_checks()
+            if relative == "context-prompts-issue8/checks.json"
+            else complete_issue9_checks()
+            if relative == "review-center-issue9/checks.json"
             else {"checks": ["one"], "browserErrors": []},
         )
     module = reporter()
