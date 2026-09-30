@@ -28,7 +28,8 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
       const response = await fetch(url, {
         credentials: "same-origin", ...options,
         headers: { Accept: "application/json", "Content-Type": "application/json",
-          "X-CSRF-Token": csrf, "Idempotency-Key": crypto.randomUUID(), ...(options.headers || {}) },
+          "X-CSRF-Token": csrf, "Idempotency-Key": crypto.randomUUID(), "If-Match": "*",
+          ...(options.headers || {}) },
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
       });
       const text = await response.text();
