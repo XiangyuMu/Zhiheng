@@ -35,6 +35,13 @@ IMPORT_FAILURE_CHECKS = [
     "network_error status is rendered with bounded polling and recovery semantics",
 ]
 
+ISSUE8_CHECKS = [
+    "conflict confirmation is completed through the real browser dialog",
+    "missing information is supplemented through the real browser dialog",
+    "supplemented information is not prompted again on the next answer",
+    "partial answers retain unrelated evidence while excluding unresolved conflict values",
+]
+
 
 def complete_delivery_checks() -> dict[str, object]:
     return {
@@ -64,6 +71,10 @@ def complete_import_failure_checks() -> dict[str, object]:
             }
         },
     }
+
+
+def complete_issue8_checks() -> dict[str, object]:
+    return {"checks": ISSUE8_CHECKS, "browserErrors": [], "evidence": {}}
 
 
 def write_checks(output: Path, relative: str, payload: object) -> None:
@@ -117,6 +128,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "qualification/checks.json",
         "delivery-contracts/checks.json",
         "import-failures/checks.json",
+        "context-prompts-issue8/checks.json",
     ):
         write_checks(
             tmp_path,
@@ -125,6 +137,8 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             if relative == "delivery-contracts/checks.json"
             else complete_import_failure_checks()
             if relative == "import-failures/checks.json"
+            else complete_issue8_checks()
+            if relative == "context-prompts-issue8/checks.json"
             else {"checks": ["one"], "browserErrors": []},
         )
     (tmp_path / "api.log").write_text("api ready")

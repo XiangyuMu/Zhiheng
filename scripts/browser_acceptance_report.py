@@ -23,6 +23,15 @@ REQUIRED_CHECKS = {
     ),
 }
 
+ISSUE8_CHECKS = {
+    "conflict_confirmation": "conflict confirmation is completed through the real browser dialog",
+    "missing_supplement": "missing information is supplemented through the real browser dialog",
+    "supplement_follow_up": "supplemented information is not prompted again on the next answer",
+    "partial_answer": (
+        "partial answers retain unrelated evidence while excluding unresolved conflict values"
+    ),
+}
+
 IMPORT_FAILURE_CHECKS = {
     "failed": "failed status is rendered with bounded polling and recovery semantics",
     "unsupported": "unsupported status is rendered with bounded polling and recovery semantics",
@@ -38,6 +47,7 @@ EXPECTED_CHECKS = {
     "qualification": Path("qualification/checks.json"),
     "delivery_contracts": Path("delivery-contracts/checks.json"),
     "import_failures": Path("import-failures/checks.json"),
+    "context_prompts_issue8": Path("context-prompts-issue8/checks.json"),
 }
 
 
@@ -110,6 +120,16 @@ def validate_checks(output: Path) -> dict[str, Any]:
             elif status is not None and status != "passed":
                 result["error"] = f"child report status is {status}"
             else:
+                if name == "context_prompts_issue8":
+                    required_issue8 = list(ISSUE8_CHECKS.values())
+                    missing_issue8 = [
+                        label for label in required_issue8
+                        if not any(isinstance(item, str) and item == label for item in checks)
+                    ]
+                    if missing_issue8:
+                        result["error"] = f"required checks missing: {missing_issue8}"
+                        results[name] = result
+                        continue
                 missing = [
                     label
                     for key, label in REQUIRED_CHECKS.items()

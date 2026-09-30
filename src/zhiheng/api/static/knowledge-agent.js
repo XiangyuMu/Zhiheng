@@ -207,6 +207,8 @@ function openContextPrompt(prompt) {
     values.append(node("strong", `${prompt.state_key} 存在冲突`));
     values.append(node("p", `已有记录：${JSON.stringify(prompt.existing || {})}`));
     values.append(node("p", `新记录：${JSON.stringify(prompt.candidate || {})}`));
+    values.append(node("p", `已有来源：${prompt.existing_source || "未知"}`));
+    values.append(node("p", `新记录来源：${prompt.candidate_source || "未知"}`));
   } else values.hidden = true;
   input.value = "";
   inputLabel.hidden = prompt.kind !== "missing" && prompt.kind !== "conflict";

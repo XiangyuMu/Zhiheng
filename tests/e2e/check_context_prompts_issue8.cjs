@@ -65,6 +65,8 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
       }
       await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
     }
+    assert(!(await page.locator("#context-prompt-dialog").isVisible()),
+      "context prompt dialog did not close after bounded dismissal");
   }
   async function login() {
     const username = "issue17-workspace";
@@ -112,7 +114,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     const missingQuery = "我的工作偏好是什么？";
     await page.goto(`${base}/knowledge-agent#research`);
     await page.locator("#new-conversation").click();
-    await page.waitForTimeout(100);
+    await page.locator("#question").waitFor({ state: "visible" });
     const missingAnswer = await submitQuestion(missingQuery);
     await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
     assert((await page.locator("#context-prompt-reason").innerText()).includes("个人"));
@@ -158,7 +160,13 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
       stop_reason: partial.stop_reason, insufficiencies: partial.insufficiencies });
 
     assert.deepEqual(browserErrors, []);
-    fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "passed", evidence, browserErrors }, null, 2));
+    fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "passed",
+      checks: [
+        "conflict confirmation is completed through the real browser dialog",
+        "missing information is supplemented through the real browser dialog",
+        "supplemented information is not prompted again on the next answer",
+        "partial answers retain unrelated evidence while excluding unresolved conflict values",
+      ], evidence, browserErrors }, null, 2));
     await page.screenshot({ path: path.join(output, "issue8-context-prompts.png"), fullPage: true });
   } catch (error) {
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "failed", evidence,
