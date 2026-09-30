@@ -69,19 +69,23 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
   }
   try {
     await login();
+    const beforeReview = await api("/v1/review/summary?limit=500");
     const drafts = await Promise.all([0, 1, 2].map(createDraft));
     evidence.drafts = drafts.map((draft) => draft.id);
 
     await page.goto(`${base}/review-center`);
     await page.locator("#total").waitFor({ state: "visible" });
     await page.locator("#queue").filter({ hasText: `Issue 9 草稿 ${tag}-0` }).waitFor();
-    assert(Number(await page.locator("#conclusion-count").innerText()) >= 3);
+    assert(Number(await page.locator("#conclusion-count").innerText())
+      >= Number(beforeReview.counts?.conclusions || 0) + 3);
     await page.locator(`button.queue-item[data-entry-id="${drafts[0].id}"]`).click();
     assert((await page.locator("#detail").innerText()).includes("固定条件"));
 
     // Closing the page and logging in again must leave an unapproved draft intact.
     await page.goto(`${base}/knowledge-agent#research`);
     assert.equal((await api(`/v1/conclusions/${drafts[0].id}`)).status, "draft");
+    await context.clearCookies();
+    await page.evaluate(() => localStorage.clear());
     await login();
     await page.goto(`${base}/review-center`);
     await page.locator(`button.queue-item[data-entry-id="${drafts[0].id}"]`).waitFor();
@@ -100,6 +104,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     await page.getByRole("button", { name: "批准" }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     assert.equal((await api(`/v1/conclusions/${drafts[1].id}`)).status, "formal");
+    assert((await page.locator("#total").innerText()) !== "0");
     evidence.decisions.push("retry_after_refresh_approved");
 
     // Closing a detail without choosing an action must never approve it.

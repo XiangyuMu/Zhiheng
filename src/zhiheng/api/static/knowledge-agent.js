@@ -109,6 +109,17 @@ function mutate(url, payload, ifMatch = "*") {
 function readCookie(name) {
   return document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) || "";
 }
+async function loadReviewCount() {
+  try {
+    const summary = await fetchJson("/v1/review/summary?limit=500");
+    const count = Number(summary.counts?.total || 0);
+    const badge = $("review-nav-count");
+    badge.textContent = count ? String(count) : "";
+    badge.hidden = count === 0;
+  } catch (_) {
+    // The review link remains usable when its optional count request is unavailable.
+  }
+}
 function navigate(screen, focus = false) {
   const aliases = { "knowledge-library": "library", "model-config": "settings" };
   screen = aliases[screen] || screen;
@@ -1279,3 +1290,4 @@ $("logout").addEventListener("click", () => busy($("logout"), "正在退出…",
 fetchJson("/me").then(() => { $("current-user").textContent = "已登录 · 单用户工作空间"; }).catch((error) => { $("current-user").textContent = readableError(error); });
 loadKnowledge();
 loadPersistentImportTasks();
+loadReviewCount();
