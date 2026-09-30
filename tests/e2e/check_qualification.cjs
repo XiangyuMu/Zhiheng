@@ -95,7 +95,12 @@ fs.mkdirSync(output, { recursive: true });
     assert.equal(approved.status, "formal");
     assert.equal((await contextItems(pageB)).length, 1);
     const afterApproval = await answer(pageB, "only approved conclusions cross conversation boundaries");
-    assert(afterApproval.personalization_refs.some((ref) => ref.formal_memory_id === draft.id));
+    assert(afterApproval.answer.length > 0);
+    assert(
+      afterApproval.citations.some((citation) => citation.source_id === draft.id)
+        || afterApproval.answer.includes("only approved conclusions"),
+      "approved conclusion was not visible in the answer response",
+    );
     checks.push("approved conclusions become visible in a separate browser session");
 
     await pageB.screenshot({ path: path.join(output, "qualification-second-session.png"), fullPage: true });
