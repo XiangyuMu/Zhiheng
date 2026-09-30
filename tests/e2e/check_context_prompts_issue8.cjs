@@ -147,7 +147,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
       if (search.items?.length) break;
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
-    const partialQuery = "我的城市 通勤";
+    const partialQuery = "居住 通勤";
     const partial = await submitQuestion(partialQuery);
     assert(partial.answer.includes('通勤出行应遵守交通规则'));
     assert(!partial.answer.includes('北京'));
