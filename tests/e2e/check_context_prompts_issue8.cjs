@@ -51,11 +51,11 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     const username = `i8${tag}`;
     const password = "issue8-browser-passphrase";
     await page.goto(`${base}/login`);
-    await page.evaluate(async () => {
+    await page.evaluate(async ({ username, password }) => {
       const response = await fetch("/auth/bootstrap", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }) });
       if (!response.ok && response.status !== 409) throw new Error(`bootstrap failed: ${response.status}`);
-    });
+    }, { username, password });
     await page.locator("#username").fill(username);
     await page.locator("#password").fill(password);
     await page.locator("#form button").click();
@@ -85,6 +85,12 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
       JSON.stringify(secondConflictAnswer.context_prompts));
     evidence.answers.push({ kind: "confirmed_conflict", prompts: secondConflictAnswer.context_prompts.length,
       selected_city: selected["profile.city"].text, personalization_refs: secondConflictAnswer.personalization_refs.length });
+    // The city answer can still surface a separate missing-background prompt; dismiss it
+    // explicitly before starting the independent supplement scenario.
+    if (await page.locator("#context-prompt-dialog").isVisible()) {
+      await page.locator("#context-prompt-skip").click();
+      await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
+    }
 
     // A missing prompt is resolved in the real dialog, then the next answer sees the saved value.
     const missingQuery = "我的工作偏好是什么？";
