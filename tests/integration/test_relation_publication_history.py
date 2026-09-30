@@ -108,9 +108,7 @@ def test_relation_approval_publishes_versioned_knowledge_through_real_worker(
     )
     old_knowledge_id = str(old_approved["knowledge_id"])
 
-    first_worker_count = _worker_pass(
-        client, f"{relation_kind}-publication-worker-1"
-    )
+    first_worker_count = _worker_pass(client, f"{relation_kind}-publication-worker-1")
     assert first_worker_count >= 1
 
     new = _source_and_draft(
@@ -132,12 +130,11 @@ def test_relation_approval_publishes_versioned_knowledge_through_real_worker(
         headers=_headers(csrf, f"{relation_kind}-relation-approve"),
     )
     assert approved.status_code == 200, approved.text
-    assert approved.json()["knowledge_id"] != old_knowledge_id
+    assert approved.json()["knowledge_id"] == old_knowledge_id
     new_knowledge_id = str(approved.json()["knowledge_id"])
 
     worker_counts = [
-        _worker_pass(client, f"{relation_kind}-publication-worker-{index}")
-        for index in range(2, 7)
+        _worker_pass(client, f"{relation_kind}-publication-worker-{index}") for index in range(2, 7)
     ]
     assert any(count >= 1 for count in worker_counts)
 
@@ -152,15 +149,14 @@ def test_relation_approval_publishes_versioned_knowledge_through_real_worker(
     # A worker pass claims the approval outbox event, enqueues, and consumes
     # the durable index job.  A final idle pass proves a retry does not enqueue
     # another publication.
-    third_worker_count = _worker_pass(
-        client, f"{relation_kind}-publication-worker-7"
-    )
+    third_worker_count = _worker_pass(client, f"{relation_kind}-publication-worker-7")
     assert third_worker_count == 0
 
     with sessions() as session:
-        relation_row = session.execute(
-            text(
-                """
+        relation_row = (
+            session.execute(
+                text(
+                    """
                 SELECT r.kind, r.status, r.left_version, r.right_version,
                        left_entry.source_id AS left_source_id,
                        right_entry.source_id AS right_source_id
@@ -169,21 +165,28 @@ def test_relation_approval_publishes_versioned_knowledge_through_real_worker(
                 JOIN conclusion_entries right_entry ON right_entry.id=r.right_id
                 WHERE r.id=:id
                 """
-            ),
-            {"id": relation["id"]},
-        ).mappings().one()
-        events = session.execute(
-            text(
-                """
+                ),
+                {"id": relation["id"]},
+            )
+            .mappings()
+            .one()
+        )
+        events = (
+            session.execute(
+                text(
+                    """
                 SELECT from_status, to_status, left_version, right_version,
                        left_source_id, right_source_id
                 FROM conclusion_relation_events
                 WHERE relation_id=:id
             ORDER BY rowid
                 """
-            ),
-            {"id": relation["id"]},
-        ).mappings().all()
+                ),
+                {"id": relation["id"]},
+            )
+            .mappings()
+            .all()
+        )
         entries = {
             str(row["id"]): dict(row)
             for row in session.execute(
@@ -214,9 +217,10 @@ def test_relation_approval_publishes_versioned_knowledge_through_real_worker(
                 },
             ).mappings()
         }
-        versions = session.execute(
-            text(
-                """
+        versions = (
+            session.execute(
+                text(
+                    """
                 SELECT kv.knowledge_object_id, kv.version_no, kv.id AS version_id,
                        cv.content_sha256, eo.source_metadata_json
                 FROM knowledge_versions kv
@@ -225,15 +229,19 @@ def test_relation_approval_publishes_versioned_knowledge_through_real_worker(
                 WHERE kv.knowledge_object_id IN (:old_knowledge_id, :new_knowledge_id)
                 ORDER BY kv.knowledge_object_id, kv.version_no
                 """
-            ),
-            {
-                "old_knowledge_id": old_knowledge_id,
-                "new_knowledge_id": new_knowledge_id,
-            },
-        ).mappings().all()
-        jobs = session.execute(
-            text(
-                """
+                ),
+                {
+                    "old_knowledge_id": old_knowledge_id,
+                    "new_knowledge_id": new_knowledge_id,
+                },
+            )
+            .mappings()
+            .all()
+        )
+        jobs = (
+            session.execute(
+                text(
+                    """
                 SELECT COALESCE(
                            json_extract(payload_json, '$.knowledge_object_id'),
                            json_extract(payload_json, '$.aggregate_id')
@@ -248,12 +256,15 @@ def test_relation_approval_publishes_versioned_knowledge_through_real_worker(
                 GROUP BY knowledge_id, job_type, status
                 ORDER BY knowledge_id, status
                 """
-            ),
-            {
-                "old_knowledge_id": old_knowledge_id,
-                "new_knowledge_id": new_knowledge_id,
-            },
-        ).mappings().all()
+                ),
+                {
+                    "old_knowledge_id": old_knowledge_id,
+                    "new_knowledge_id": new_knowledge_id,
+                },
+            )
+            .mappings()
+            .all()
+        )
 
     assert dict(relation_row) == {
         "kind": relation_kind,
@@ -273,30 +284,25 @@ def test_relation_approval_publishes_versioned_knowledge_through_real_worker(
     assert entries[new["id"]]["approved_version"] == 1
     assert entries[new["id"]]["knowledge_id"] == new_knowledge_id
 
-    if relation_kind == "revision":
-        assert knowledge[old_knowledge_id]["lifecycle_status"] == "soft_deleted"
-    else:
-        assert knowledge[old_knowledge_id]["lifecycle_status"] == "formal_current"
+    assert len(knowledge) == 1
     assert knowledge[new_knowledge_id]["lifecycle_status"] == "formal_current"
-    assert {knowledge_id for knowledge_id in knowledge} == {
-        old_knowledge_id,
-        new_knowledge_id,
-    }
     assert len(versions) == 2
-    assert {int(row["version_no"]) for row in versions} == {1}
-    for row in versions:
+    assert [int(row["version_no"]) for row in versions] == [1, 2]
+    assert knowledge[new_knowledge_id]["current_version_id"] == versions[1]["version_id"]
+    for row, entry, kind in zip(versions, (old, new), (None, relation_kind), strict=True):
         metadata = json.loads(str(row["source_metadata_json"]))
-        assert metadata["conclusion_entry_id"] in {old["id"], new["id"]}
-        assert metadata["source_id"]
-        assert metadata["relation_kind"] in {None, relation_kind}
+        assert metadata["conclusion_entry_id"] == entry["id"]
+        assert metadata["source_id"] == entry["source_id"]
+        assert metadata["relation_kind"] == kind
+        reader = client.get(f"/v1/knowledge/{new_knowledge_id}/versions/{row['version_id']}/reader")
+        assert reader.status_code == 200, reader.text
+        assert reader.json()["version_no"] == row["version_no"]
+        assert reader.json()["source"]["metadata"] == metadata
+        assert reader.json()["text"]
 
-    expected_jobs = {
-        (old_knowledge_id, "completed", 2 if relation_kind == "revision" else 1),
-        (new_knowledge_id, "completed", 1),
-    }
+    expected_jobs = {(new_knowledge_id, "completed", 2)}
     assert {
-        (str(row["knowledge_id"]), str(row["status"]), int(row["count"]))
-        for row in jobs
+        (str(row["knowledge_id"]), str(row["status"]), int(row["count"])) for row in jobs
     } == expected_jobs
 
     old_search = client.get(
@@ -309,10 +315,7 @@ def test_relation_approval_publishes_versioned_knowledge_through_real_worker(
     )
     assert old_search.status_code == 200, old_search.text
     assert new_search.status_code == 200, new_search.text
-    old_ids = {item["knowledge_object_id"] for item in old_search.json()["items"]}
-    new_ids = {item["knowledge_object_id"] for item in new_search.json()["items"]}
-    if relation_kind == "revision":
-        assert old_knowledge_id not in old_ids
-    else:
-        assert old_knowledge_id in old_ids
-    assert new_knowledge_id in new_ids
+    assert new_knowledge_id in {item["knowledge_object_id"] for item in new_search.json()["items"]}
+    for item in old_search.json()["items"] + new_search.json()["items"]:
+        if item["knowledge_object_id"] == new_knowledge_id:
+            assert item["knowledge_version_id"] == versions[1]["version_id"]

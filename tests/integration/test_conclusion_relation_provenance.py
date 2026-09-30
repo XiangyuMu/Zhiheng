@@ -100,7 +100,7 @@ def test_relation_approval_preserves_sources_versions_and_review_history(
     )
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "approved"
-    assert approved.json()["knowledge_id"] != approved_old.json()["knowledge_id"]
+    assert approved.json()["knowledge_id"] == approved_old.json()["knowledge_id"]
 
     for entry_id, expected_status in ((old["id"], old_status), (new["id"], "formal")):
         after = client.get(f"/v1/conclusions/{entry_id}").json()

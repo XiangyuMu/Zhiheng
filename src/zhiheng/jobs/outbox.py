@@ -18,6 +18,7 @@ KNOWLEDGE_PARSE_PDF_JOB_TYPE = "knowledge.parse_pdf"
 KNOWLEDGE_INDEX_EVENTS = frozenset(
     {
         "evidence.ingested",
+        "knowledge.version_created",
         "knowledge.soft_deleted",
         "knowledge.restored",
         "knowledge.reindex_requested",

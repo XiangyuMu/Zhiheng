@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
@@ -57,36 +58,67 @@ def _formalize_conclusion(
     artifacts = knowledge_object_store_for_settings(
         request.app.state.knowledge_settings
     ).write_text_artifacts(text_value)
-    stored = KnowledgeRepository().ingest_text(
-        session,
-        TextEvidenceInput(
-            title=str(item["title"]),
-            text=text_value,
-            primary_domain_id=str(item["domain_id"]),
-            record_type=str(item.get("record_type", "knowledge")),
-            object_kind="conclusion",
-            source_kind="user_explicit",
-            source_metadata={
-                "conclusion_entry_id": entry_id,
-                "source_id": item["source"]["id"],
-                "excerpt": item.get("excerpt"),
-                "classification": item.get("classification", {}),
-                "related_domain_ids": item.get("classification", {}).get("related_domain_ids", []),
-                "relation_kind": relation_kind,
-                "related_entry_id": related_entry_id,
-            },
-        ),
-        user_authority=KnowledgeUserAuthority(user),
-        stored_artifacts=artifacts,
+    evidence = TextEvidenceInput(
+        title=str(item["title"]),
+        text=text_value,
+        primary_domain_id=str(item["domain_id"]),
+        record_type=str(item.get("record_type", "knowledge")),
+        object_kind="conclusion",
+        source_kind="user_explicit",
+        source_metadata={
+            "conclusion_entry_id": entry_id,
+            "source_id": item["source"]["id"],
+            "excerpt": item.get("excerpt"),
+            "classification": item.get("classification", {}),
+            "related_domain_ids": item.get("classification", {}).get("related_domain_ids", []),
+            "relation_kind": relation_kind,
+            "related_entry_id": related_entry_id,
+        },
     )
+    knowledge = KnowledgeRepository()
+    if relation_kind in {"supplement", "revision"}:
+        target = (
+            session.execute(
+                text(
+                    "SELECT ko.id, eo.source_metadata_json FROM conclusion_entries e "
+                    "JOIN knowledge_objects ko ON ko.id=e.knowledge_id "
+                    "JOIN knowledge_versions kv ON kv.id=ko.current_version_id "
+                "JOIN content_versions cv ON cv.id=kv.content_version_id "
+                "JOIN evidence_objects eo ON eo.id=cv.evidence_object_id "
+                "WHERE e.id=:id AND e.owner_user_id=:o "
+                "AND ko.lifecycle_status='formal_current' "
+                "AND ko.visibility_scope='formal'"
+                ),
+                {"id": related_entry_id, "o": user},
+            )
+            .mappings()
+            .one_or_none()
+        )
+        metadata: dict[str, Any] = {}
+        if target is not None:
+            try:
+                parsed = json.loads(str(target["source_metadata_json"]))
+                if isinstance(parsed, dict):
+                    metadata = parsed
+            except (TypeError, ValueError):
+                metadata = {}
+        if target is None or metadata.get("conclusion_entry_id") != related_entry_id:
+            raise ValueError("relation is stale; related knowledge version is no longer current")
+        stored = knowledge.append_text_version(
+            session,
+            evidence,
+            knowledge_object_id=str(target["id"]),
+            user_authority=KnowledgeUserAuthority(user),
+            stored_artifacts=artifacts,
+        )
+    else:
+        stored = knowledge.ingest_text(
+            session,
+            evidence,
+            user_authority=KnowledgeUserAuthority(user),
+            stored_artifacts=artifacts,
+        )
     repo.attach_knowledge(session, user, entry_id, stored.knowledge_object_id)
-    if relation_kind == "revision" and related_entry_id is not None:
-        old_knowledge_id = session.execute(
-            text("SELECT knowledge_id FROM conclusion_entries WHERE id=:id AND owner_user_id=:o"),
-            {"id": related_entry_id, "o": user},
-        ).scalar_one_or_none()
-        if old_knowledge_id is not None:
-            KnowledgeRepository().soft_delete_knowledge(session, str(old_knowledge_id))
     return stored.knowledge_object_id
 
 
