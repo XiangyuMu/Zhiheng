@@ -39,6 +39,23 @@ ISSUE9_CHECKS = {
     "close": "closing review without an action does not approve the draft",
 }
 
+ISSUE10_CHECKS = {
+    "review": (
+        "browser review queue covers counts, recovery, stale-version retry, and "
+        "close-without-approval"
+    ),
+    "actions": "browser review actions cover conclusion and relation decisions",
+    "context": (
+        "browser answers cover conflict conditions, missing information, and unrelated continuation"
+    ),
+    "qualification": (
+        "browser qualification isolates unapproved and serves approved conclusions across sessions"
+    ),
+    "failures": (
+        "browser failures distinguish terminal API states from transport and UI retry failures"
+    ),
+}
+
 IMPORT_FAILURE_CHECKS = {
     "failed": "failed status is rendered with bounded polling and recovery semantics",
     "unsupported": "unsupported status is rendered with bounded polling and recovery semantics",
@@ -56,6 +73,7 @@ EXPECTED_CHECKS = {
     "import_failures": Path("import-failures/checks.json"),
     "context_prompts_issue8": Path("context-prompts-issue8/checks.json"),
     "review_center_issue9": Path("review-center-issue9/checks.json"),
+    "issue10_matrix": Path("issue10-matrix/checks.json"),
 }
 
 
@@ -145,6 +163,15 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     ]
                     if missing_issue9:
                         result["error"] = f"required checks missing: {missing_issue9}"
+                        results[name] = result
+                        continue
+                if name == "issue10_matrix":
+                    missing_issue10 = [
+                        label for label in ISSUE10_CHECKS.values()
+                        if not any(isinstance(item, str) and item == label for item in checks)
+                    ]
+                    if missing_issue10:
+                        result["error"] = f"required checks missing: {missing_issue10}"
                         results[name] = result
                         continue
                 missing = [
