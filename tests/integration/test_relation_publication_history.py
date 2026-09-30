@@ -319,3 +319,17 @@ def test_relation_approval_publishes_versioned_knowledge_through_real_worker(
     for item in old_search.json()["items"] + new_search.json()["items"]:
         if item["knowledge_object_id"] == new_knowledge_id:
             assert item["knowledge_version_id"] == versions[1]["version_id"]
+
+    # The public knowledge detail contract must expose the same current version
+    # and provenance that search returned, including the source-backed span.
+    detail = client.get(f"/v1/knowledge/{new_knowledge_id}")
+    assert detail.status_code == 200, detail.text
+    detail_payload = detail.json()
+    assert detail_payload["knowledge_version_id"] == versions[1]["version_id"]
+    assert detail_payload["text"] == new_claim
+    assert detail_payload["searchable"] is True
+    assert detail_payload["source_metadata"]["conclusion_entry_id"] == new["id"]
+    assert detail_payload["source_metadata"]["source_id"] == new["source_id"]
+    assert detail_payload["citations"]
+    assert detail_payload["citations"][0]["start_offset"] == 0
+    assert detail_payload["citations"][0]["end_offset"] == len(new_claim)
