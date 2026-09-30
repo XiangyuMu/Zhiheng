@@ -57,7 +57,12 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
         const button = document.querySelector("#context-prompt-skip");
         return button instanceof HTMLButtonElement && !button.disabled;
       });
-      await skip.click();
+      if (!(await dialog.isVisible()) || !(await skip.isVisible())) continue;
+      try {
+        await skip.click({ timeout: 5000 });
+      } catch (_) {
+        continue;
+      }
       await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
     }
   }
