@@ -60,6 +60,8 @@ def test_conflict_defers_personal_part_and_unrelated_answer_continues(tmp_path: 
     assert response.status_code == 200, response.text
     body = response.json()
     assert '通勤出行应遵守交通规则' in body['answer']
+    assert '北京' not in body['answer']
+    assert '上海' not in body['answer']
     assert body['citations']
     assert body['personalization_refs'] == []
     assert any('北京' in item and '上海' in item and '暂缓' in item

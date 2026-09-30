@@ -108,6 +108,7 @@ run_stage "workspace-full" env ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_wor
 run_stage "review-relations" node tests/e2e/check_review_relations.cjs "${BASE_URL}" "${OUTPUT_DIR}/relations"
 run_stage "qualification" node tests/e2e/check_qualification.cjs "${BASE_URL}" "${OUTPUT_DIR}/qualification"
 run_stage "delivery-contracts" node tests/e2e/check_delivery_contracts.cjs "${BASE_URL}" "${OUTPUT_DIR}/delivery-contracts"
+run_stage "context-prompts-issue8" node tests/e2e/check_context_prompts_issue8.cjs "${BASE_URL}" "${OUTPUT_DIR}/context-prompts-issue8"
 run_stage "import-failures" node tests/e2e/check_import_failures.cjs "${BASE_URL}" "${OUTPUT_DIR}/import-failures"
 
 CURRENT_STAGE="process-liveness"
