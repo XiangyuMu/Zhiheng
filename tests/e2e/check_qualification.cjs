@@ -67,6 +67,10 @@ fs.mkdirSync(output, { recursive: true });
     });
   }
 
+  async function answer(page, query) {
+    return call(page, "/v1/answers", { query, conversation_id: crypto.randomUUID() });
+  }
+
   try {
     await login(pageA);
     await login(pageB);
@@ -82,15 +86,27 @@ fs.mkdirSync(output, { recursive: true });
 
     assert.equal((await contextItems(pageA)).length, 0);
     assert.equal((await contextItems(pageB)).length, 0);
+    const beforeApproval = await answer(pageB, "only approved conclusions cross conversation boundaries");
+    assert.equal(beforeApproval.personalization_refs.length, 0);
     checks.push("unapproved conclusions stay out of both browser sessions");
 
     const approved = await call(pageA, `/v1/conclusions/${draft.id}/approve`, {});
     assert.equal(approved.status, "formal");
     assert.equal((await contextItems(pageB)).length, 1);
+    const afterApproval = await answer(pageB, "only approved conclusions cross conversation boundaries");
+    assert(afterApproval.personalization_refs.some((ref) => ref.formal_memory_id === draft.id));
     checks.push("approved conclusions become visible in a separate browser session");
 
     await pageB.screenshot({ path: path.join(output, "qualification-second-session.png"), fullPage: true });
-    fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ checks }, null, 2));
+    fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({
+      status: "passed",
+      checks,
+      evidence: {
+        draft_id: draft.id,
+        before_approval_refs: beforeApproval.personalization_refs.length,
+        after_approval_refs: afterApproval.personalization_refs.map((ref) => ref.formal_memory_id),
+      },
+    }, null, 2));
     console.log("PASS", checks.join("; "));
   } catch (error) {
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({

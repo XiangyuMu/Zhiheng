@@ -22,6 +22,7 @@ fs.mkdirSync(output, { recursive: true });
   const page = await context.newPage();
   const checks = [];
   const errors = [];
+  const evidence = { relation_ids: [], statuses: [] };
   page.on("pageerror", (error) => errors.push(error.message));
 
   async function check(label, work) {
@@ -117,6 +118,7 @@ fs.mkdirSync(output, { recursive: true });
     });
 
     const deferredRelation = (await apiJson(`/v1/conclusions/${deferred.id}/relations`)).items[0];
+    evidence.relation_ids.push(deferredRelation.id);
     await page.locator(`button.queue-item[data-entry-id="${deferredRelation.id}"]`).click();
     await page.getByRole("button", { name: "稍后处理", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
@@ -127,6 +129,7 @@ fs.mkdirSync(output, { recursive: true });
     });
 
     const rejectedRelation = (await apiJson(`/v1/conclusions/${rejected.id}/relations`)).items[0];
+    evidence.relation_ids.push(rejectedRelation.id);
     await page.locator(`button.queue-item[data-entry-id="${rejectedRelation.id}"]`).click();
     await page.getByRole("button", { name: "拒绝关系", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
@@ -136,19 +139,23 @@ fs.mkdirSync(output, { recursive: true });
     });
 
     const approvedRelation = (await apiJson(`/v1/conclusions/${approved.id}/relations`)).items[0];
+    evidence.relation_ids.push(approvedRelation.id);
     await page.locator(`button.queue-item[data-entry-id="${approvedRelation.id}"]`).click();
     await page.getByRole("button", { name: "批准关系", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     await check("approved relation enters formal searchable knowledge", async () => {
       const relation = (await apiJson(`/v1/conclusions/${approved.id}/relations`)).items[0];
       assert.equal(relation.status, "approved");
+      evidence.statuses.push(relation.status);
       const formal = await apiJson(`/v1/conclusions/${approved.id}`);
       assert.equal(formal.status, "formal");
       assert((await apiJson("/v1/conclusions/context?query=更多样本")).items.length > 0);
     });
 
     assert.deepEqual(errors, [], "no uncaught browser errors");
-    fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ checks, browserErrors: errors }, null, 2));
+    fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({
+      status: "passed", checks, evidence, browserErrors: errors,
+    }, null, 2));
   } catch (error) {
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({
       status: "failed", checks, error: error.stack || String(error),

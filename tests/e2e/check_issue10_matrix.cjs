@@ -59,6 +59,8 @@ function read(relative) {
   const payload = JSON.parse(fs.readFileSync(file, "utf8"));
   assert.equal(payload.status || "passed", "passed", `${relative} did not pass`);
   assert.deepEqual(payload.browserErrors || [], [], `${relative} has browser errors`);
+  assert(payload.evidence && typeof payload.evidence === "object" && Object.keys(payload.evidence).length,
+    `${relative} is missing concrete evidence`);
   return payload;
 }
 
@@ -68,13 +70,17 @@ try {
     const payload = read(requirement.path);
     const checks = payload.checks || [];
     for (const label of requirement.labels) assert(checks.includes(label), `${name}: ${label}`);
-    evidence[name] = { path: requirement.path, checks: requirement.labels };
+    evidence[name] = { path: requirement.path, checks: requirement.labels, facts: payload.evidence };
     if (requirement.relationPath) {
       const relation = read(requirement.relationPath);
       for (const label of requirement.relationLabels) {
         assert((relation.checks || []).includes(label), `actions: ${label}`);
       }
-      evidence.actions.relations = { path: requirement.relationPath, checks: requirement.relationLabels };
+      evidence.actions.relations = {
+        path: requirement.relationPath,
+        checks: requirement.relationLabels,
+        facts: relation.evidence,
+      };
     }
   }
   const checks = [

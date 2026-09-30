@@ -146,10 +146,22 @@ def validate_checks(output: Path) -> dict[str, Any]:
             elif status is not None and status != "passed":
                 result["error"] = f"child report status is {status}"
             else:
+                if name in {
+                    "workspace_full",
+                    "relations",
+                    "qualification",
+                    "context_prompts_issue8",
+                    "review_center_issue9",
+                    "issue10_matrix",
+                } and (not isinstance(payload.get("evidence"), dict) or not payload["evidence"]):
+                    result["error"] = "concrete browser evidence fields missing"
+                    results[name] = result
+                    continue
                 if name == "context_prompts_issue8":
                     required_issue8 = list(ISSUE8_CHECKS.values())
                     missing_issue8 = [
-                        label for label in required_issue8
+                        label
+                        for label in required_issue8
                         if not any(isinstance(item, str) and item == label for item in checks)
                     ]
                     if missing_issue8:
@@ -158,7 +170,8 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         continue
                 if name == "review_center_issue9":
                     missing_issue9 = [
-                        label for label in ISSUE9_CHECKS.values()
+                        label
+                        for label in ISSUE9_CHECKS.values()
                         if not any(isinstance(item, str) and item == label for item in checks)
                     ]
                     if missing_issue9:
@@ -167,7 +180,8 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         continue
                 if name == "issue10_matrix":
                     missing_issue10 = [
-                        label for label in ISSUE10_CHECKS.values()
+                        label
+                        for label in ISSUE10_CHECKS.values()
                         if not any(isinstance(item, str) and item == label for item in checks)
                     ]
                     if missing_issue10:
@@ -269,6 +283,9 @@ def main() -> int:
             "ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs",
             "node tests/e2e/check_review_relations.cjs",
             "node tests/e2e/check_qualification.cjs",
+            "node tests/e2e/check_context_prompts_issue8.cjs",
+            "node tests/e2e/check_review_center_issue9.cjs",
+            "node tests/e2e/check_issue10_matrix.cjs",
         ],
         "versions": {
             "node": command_output(["node", "--version"]),
@@ -292,6 +309,13 @@ def main() -> int:
         "issue_mapping": {
             "#1": ["authenticated research workspace loads", "missing evidence remains explicit"],
             "#2-#10": ["workspace-full", "relation review", "cross-session qualification"],
+            "#10": [
+                "review queue counts and recovery",
+                "version conflict retry and close-without-approval",
+                "context prompt decisions and answer isolation",
+                "cross-session qualification with answer references",
+                "bounded terminal and transport failure polling",
+            ],
             "#15": [
                 "taxonomy APIs are reachable from the authenticated browser",
                 "taxonomy split migration is approved one entry at a time in the browser",
