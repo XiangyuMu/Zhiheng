@@ -149,7 +149,11 @@ def complete_issue12_checks() -> dict[str, object]:
     return {
         "checks": ISSUE12_CHECKS,
         "browserErrors": [],
-        "evidence": {"stale": {"relation_id": "r1"}, "approved": {"relation_id": "r2"}, "answer": {"source_id": "k1"}},
+        "evidence": {
+            "stale": {"relation_id": "r1"},
+            "approved": {"relation_id": "r2"},
+            "answer": {"source_id": "k1"},
+        },
     }
 
 
