@@ -238,6 +238,21 @@ const MINIMAL_PDF = Buffer.from(
         deferred_history_entries: deferredHistory.items.length,
         expired_etag_status: staleApproval.status,
       };
+      let splitState = await apiJson(`/v1/taxonomy/proposals/${proposalResult.id}`);
+      for (const item of splitState.preview.affected_knowledge || []) {
+        if (item.migration_status === "applied") continue;
+        splitState = await apiJson(`/v1/taxonomy/proposals/${proposalResult.id}`);
+        await apiJson(`/v1/taxonomy/proposals/${proposalResult.id}/items/${item.knowledge_object_id}`, {
+          method: "PATCH",
+          headers: { "If-Match": splitState.etag },
+          body: { target_domain_id: businessFinanceDomain },
+        });
+      }
+      splitState = await apiJson(`/v1/taxonomy/proposals/${proposalResult.id}`);
+      const splitApproval = await apiJson(`/v1/taxonomy/proposals/${proposalResult.id}/approve`, {
+        method: "POST", headers: { "If-Match": splitState.etag },
+      });
+      assert.equal(splitApproval.status, "approved");
       const reviewedInNewDomain = await makeConclusion(
         "新增领域结论可以进入审核",
         [{ text: "新增领域已审核通过", confirmed: true }],
