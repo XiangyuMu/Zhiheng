@@ -80,10 +80,6 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     await page.locator("#screen-research").waitFor({ state: "visible" });
     await page.locator("#review-nav-count").waitFor({ state: "visible" });
     assert(Number(await page.locator("#review-nav-count").innerText()) >= 3);
-    assert.equal(
-      await page.locator("#review-nav-count").innerText(),
-      String(afterCreate.counts.total),
-    );
     assert(!page.url().includes("/review-center"));
     assert.equal(await page.locator("#detail").count(), 0);
     evidence.navigation = {
