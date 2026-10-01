@@ -56,6 +56,12 @@ ISSUE10_CHECKS = {
     ),
 }
 
+ISSUE14_CHECKS = {
+    "writes": "real browser writes approve, reject, defer, and revise decisions",
+    "defer": "deferred review remains available after refresh",
+    "retry": "failed review write is visible and succeeds on retry",
+}
+
 IMPORT_FAILURE_CHECKS = {
     "failed": "failed status is rendered with bounded polling and recovery semantics",
     "unsupported": "unsupported status is rendered with bounded polling and recovery semantics",
@@ -74,6 +80,7 @@ EXPECTED_CHECKS = {
     "context_prompts_issue8": Path("context-prompts-issue8/checks.json"),
     "review_center_issue9": Path("review-center-issue9/checks.json"),
     "issue10_matrix": Path("issue10-matrix/checks.json"),
+    "issue14_writes": Path("issue14-writes/checks.json"),
 }
 
 
@@ -153,6 +160,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     "context_prompts_issue8",
                     "review_center_issue9",
                     "issue10_matrix",
+                    "issue14_writes",
                 } and (not isinstance(payload.get("evidence"), dict) or not payload["evidence"]):
                     result["error"] = "concrete browser evidence fields missing"
                     results[name] = result
@@ -186,6 +194,16 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     ]
                     if missing_issue10:
                         result["error"] = f"required checks missing: {missing_issue10}"
+                        results[name] = result
+                        continue
+                if name == "issue14_writes":
+                    missing_issue14 = [
+                        label
+                        for label in ISSUE14_CHECKS.values()
+                        if not any(isinstance(item, str) and item == label for item in checks)
+                    ]
+                    if missing_issue14:
+                        result["error"] = f"required checks missing: {missing_issue14}"
                         results[name] = result
                         continue
                 missing = [
@@ -286,6 +304,7 @@ def main() -> int:
             "node tests/e2e/check_context_prompts_issue8.cjs",
             "node tests/e2e/check_review_center_issue9.cjs",
             "node tests/e2e/check_issue10_matrix.cjs",
+            "node tests/e2e/check_issue14_writes.cjs",
         ],
         "versions": {
             "node": command_output(["node", "--version"]),
@@ -315,6 +334,11 @@ def main() -> int:
                 "context prompt decisions and answer isolation",
                 "cross-session qualification with answer references",
                 "bounded terminal and transport failure polling",
+            ],
+            "#14": [
+                "real browser writes approve, reject, defer, and revise decisions",
+                "deferred review remains available after refresh",
+                "failed review write is visible and succeeds on retry",
             ],
             "#15": [
                 "taxonomy APIs are reachable from the authenticated browser",

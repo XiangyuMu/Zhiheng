@@ -60,6 +60,12 @@ ISSUE10_CHECKS = [
     ("browser failures distinguish terminal API states from transport and UI retry failures"),
 ]
 
+ISSUE14_CHECKS = [
+    "real browser writes approve, reject, defer, and revise decisions",
+    "deferred review remains available after refresh",
+    "failed review write is visible and succeeds on retry",
+]
+
 
 def complete_delivery_checks() -> dict[str, object]:
     return {
@@ -101,6 +107,14 @@ def complete_issue9_checks() -> dict[str, object]:
 
 def complete_issue10_checks() -> dict[str, object]:
     return {"checks": ISSUE10_CHECKS, "browserErrors": [], "evidence": {"scenarios": ["review"]}}
+
+
+def complete_issue14_checks() -> dict[str, object]:
+    return {
+        "checks": ISSUE14_CHECKS,
+        "browserErrors": [],
+        "evidence": {"drafts": {"approve": "draft-1"}},
+    }
 
 
 def write_checks(output: Path, relative: str, payload: object) -> None:
@@ -157,6 +171,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "context-prompts-issue8/checks.json",
         "review-center-issue9/checks.json",
         "issue10-matrix/checks.json",
+        "issue14-writes/checks.json",
     ):
         write_checks(
             tmp_path,
@@ -171,6 +186,8 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             if relative == "review-center-issue9/checks.json"
             else complete_issue10_checks()
             if relative == "issue10-matrix/checks.json"
+            else complete_issue14_checks()
+            if relative == "issue14-writes/checks.json"
             else {"checks": ["one"], "browserErrors": [], "evidence": {"facts": ["observed"]}},
         )
     (tmp_path / "api.log").write_text("api ready")
@@ -264,6 +281,7 @@ def test_browser_acceptance_report_requires_clean_same_sha(
         "context-prompts-issue8/checks.json",
         "review-center-issue9/checks.json",
         "issue10-matrix/checks.json",
+        "issue14-writes/checks.json",
     ):
         write_checks(
             tmp_path,
@@ -278,6 +296,8 @@ def test_browser_acceptance_report_requires_clean_same_sha(
             if relative == "review-center-issue9/checks.json"
             else complete_issue10_checks()
             if relative == "issue10-matrix/checks.json"
+            else complete_issue14_checks()
+            if relative == "issue14-writes/checks.json"
             else {"checks": ["one"], "browserErrors": [], "evidence": {"facts": ["observed"]}},
         )
     module = reporter()
