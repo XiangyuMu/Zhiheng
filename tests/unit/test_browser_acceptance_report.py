@@ -73,6 +73,13 @@ ISSUE11_CHECKS = [
     "login creates a draft, approves it, and preserves upgraded history",
 ]
 
+ISSUE12_CHECKS = [
+    "HTTP approval rejects a relation after the left conclusion version changes",
+    "stale relation HTTP details preserve both versions and proposal history",
+    "approved relation HTTP history records the exact source and version pair",
+    "answer citations use the approved relation's current knowledge and content version",
+]
+
 
 def complete_delivery_checks() -> dict[str, object]:
     return {
@@ -138,6 +145,14 @@ def complete_issue11_checks() -> dict[str, object]:
     }
 
 
+def complete_issue12_checks() -> dict[str, object]:
+    return {
+        "checks": ISSUE12_CHECKS,
+        "browserErrors": [],
+        "evidence": {"stale": {"relation_id": "r1"}, "approved": {"relation_id": "r2"}, "answer": {"source_id": "k1"}},
+    }
+
+
 def write_checks(output: Path, relative: str, payload: object) -> None:
     path = output / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -194,6 +209,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "issue10-matrix/checks.json",
         "issue14-writes/checks.json",
         "issue11-upgrade/checks.json",
+        "issue12-relations/checks.json",
     ):
         write_checks(
             tmp_path,
@@ -212,6 +228,8 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             if relative == "issue14-writes/checks.json"
             else complete_issue11_checks()
             if relative == "issue11-upgrade/checks.json"
+            else complete_issue12_checks()
+            if relative == "issue12-relations/checks.json"
             else {"checks": ["one"], "browserErrors": [], "evidence": {"facts": ["observed"]}},
         )
     (tmp_path / "api.log").write_text("api ready")

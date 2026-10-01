@@ -69,6 +69,13 @@ ISSUE11_CHECKS = {
     "continuity": "login creates a draft, approves it, and preserves upgraded history",
 }
 
+ISSUE12_CHECKS = {
+    "stale": "HTTP approval rejects a relation after the left conclusion version changes",
+    "history_stale": "stale relation HTTP details preserve both versions and proposal history",
+    "history_approved": "approved relation HTTP history records the exact source and version pair",
+    "answer": "answer citations use the approved relation's current knowledge and content version",
+}
+
 IMPORT_FAILURE_CHECKS = {
     "failed": "failed status is rendered with bounded polling and recovery semantics",
     "unsupported": "unsupported status is rendered with bounded polling and recovery semantics",
@@ -89,6 +96,7 @@ EXPECTED_CHECKS = {
     "issue10_matrix": Path("issue10-matrix/checks.json"),
     "issue14_writes": Path("issue14-writes/checks.json"),
     "issue11_upgrade": Path("issue11-upgrade/checks.json"),
+    "issue12_relations": Path("issue12-relations/checks.json"),
 }
 
 
@@ -170,6 +178,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     "issue10_matrix",
                     "issue14_writes",
                     "issue11_upgrade",
+                    "issue12_relations",
                 } and (not isinstance(payload.get("evidence"), dict) or not payload["evidence"]):
                     result["error"] = "concrete browser evidence fields missing"
                     results[name] = result
@@ -237,6 +246,24 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         evidence_payload
                     ):
                         result["error"] = "issue11 migration evidence fields missing"
+                        results[name] = result
+                        continue
+                if name == "issue12_relations":
+                    missing_issue12 = [
+                        label
+                        for label in ISSUE12_CHECKS.values()
+                        if not any(isinstance(item, str) and item == label for item in checks)
+                    ]
+                    if missing_issue12:
+                        result["error"] = f"required checks missing: {missing_issue12}"
+                        results[name] = result
+                        continue
+                    evidence_payload = payload.get("evidence")
+                    if not isinstance(evidence_payload, dict) or any(
+                        not isinstance(evidence_payload.get(key), dict) or not evidence_payload[key]
+                        for key in ("stale", "approved", "answer")
+                    ):
+                        result["error"] = "issue12 relation evidence fields missing"
                         results[name] = result
                         continue
                 missing = [
@@ -340,6 +367,7 @@ def main() -> int:
             "node tests/e2e/check_issue10_matrix.cjs",
             "node tests/e2e/check_issue14_writes.cjs",
             "node tests/e2e/check_issue11_upgrade.cjs",
+            "node tests/e2e/check_issue12_relations.cjs",
         ],
         "versions": {
             "node": command_output(["node", "--version"]),
@@ -378,6 +406,10 @@ def main() -> int:
             "#11": [
                 "supported legacy schema data survives upgrade and remains in the review queue",
                 "login creates a new draft and the upgraded history remains reviewable",
+            ],
+            "#12": [
+                "HTTP stale relation approval preserves both versions and relation history",
+                "approved relation history and answer citations prove the published version",
             ],
             "#15": [
                 "taxonomy APIs are reachable from the authenticated browser",

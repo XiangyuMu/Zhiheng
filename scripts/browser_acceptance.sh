@@ -112,6 +112,7 @@ run_stage "delivery-contracts" node tests/e2e/check_delivery_contracts.cjs "${BA
 run_stage "context-prompts-issue8" node tests/e2e/check_context_prompts_issue8.cjs "${BASE_URL}" "${OUTPUT_DIR}/context-prompts-issue8"
 run_stage "review-center-issue9" node tests/e2e/check_review_center_issue9.cjs "${BASE_URL}" "${OUTPUT_DIR}/review-center-issue9"
 run_stage "issue11-upgrade" node tests/e2e/check_issue11_upgrade.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue11-upgrade"
+run_stage "issue12-relations" node tests/e2e/check_issue12_relations.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue12-relations"
 run_stage "issue14-writes" node tests/e2e/check_issue14_writes.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue14-writes"
 run_stage "import-failures" node tests/e2e/check_import_failures.cjs "${BASE_URL}" "${OUTPUT_DIR}/import-failures"
 run_stage "issue10-matrix" node tests/e2e/check_issue10_matrix.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue10-matrix"
