@@ -10,6 +10,9 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from argon2 import PasswordHasher
+
+from zhiheng.core.ids import new_id
 
 LEGACY_REVISION = "0034_conclusion_applicability"
 
@@ -32,16 +35,23 @@ def main() -> None:
         },
         ensure_ascii=False,
     )
+    user_id = new_id()
+    password_hash = PasswordHasher().hash("issue17 workspace passphrase")
     with sqlite3.connect(path) as connection:
         connection.execute(
+            "INSERT INTO auth_users "
+            "(id, username, password_hash, status) VALUES (?, ?, ?, 'active')",
+            (user_id, "issue17-workspace", password_hash),
+        )
+        connection.execute(
             "INSERT INTO conclusion_sources (id, owner_user_id, body) VALUES (?, ?, ?)",
-            ("issue11-legacy-source", "issue17-workspace", "旧 schema 历史原文"),
+            ("issue11-legacy-source", user_id, "旧 schema 历史原文"),
         )
         connection.execute(
             "INSERT INTO conclusion_entries "
             "(id, owner_user_id, source_id, current_version, approved_version, status) "
             "VALUES (?, ?, ?, 1, 1, 'draft')",
-            ("issue11-legacy-entry", "issue17-workspace", "issue11-legacy-source"),
+            ("issue11-legacy-entry", user_id, "issue11-legacy-source"),
         )
         connection.execute(
             "INSERT INTO conclusion_versions (entry_id, version, payload_json) VALUES (?, 1, ?)",
