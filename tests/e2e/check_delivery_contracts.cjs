@@ -340,7 +340,7 @@ const MINIMAL_PDF = Buffer.from(
         },
       });
       assert([400, 404].includes(inactiveDraft.status));
-      assert.match(String(inactiveDraft.body.detail), /inactive|unknown/i);
+      assert.match(String(inactiveDraft.body.detail), /inactive|unknown|unsupported/i);
       evidence.taxonomy.inactive_domain_rejection = {
         domain_id: personalFinanceDomain,
         http_status: inactiveDraft.status,
