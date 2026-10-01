@@ -40,7 +40,9 @@ const requirements = {
     path: "qualification/checks.json",
     labels: [
       "unapproved conclusions stay out of both browser sessions",
+      "unapproved claim is absent from the answer body and citations",
       "approved conclusions become visible in a separate browser session",
+      "approved conclusion is authorized in the answer context",
     ],
   },
   failures: {

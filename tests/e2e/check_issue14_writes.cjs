@@ -56,8 +56,12 @@ fs.mkdirSync(output, { recursive: true });
   }
   async function submitQuestion(query) {
     await page.locator("#question").fill(query);
+    const responsePromise = page.waitForResponse((response) =>
+      response.url().endsWith("/v1/answers") && response.request().method() === "POST");
     await page.locator("#answer-form button[type=submit]").click();
+    const response = await responsePromise;
     await page.locator("#answer-result").waitFor({ state: "visible", timeout: 20000 });
+    return response.json();
   }
   try {
     await login();
@@ -107,16 +111,22 @@ fs.mkdirSync(output, { recursive: true });
     await api("/v1/personal-updates", { method: "POST", body: { memory_type: "fact", state_key: "profile.issue14_city", value: { text: "北京" }, source_kind: "user_explicit" } });
     await api("/v1/personal-updates", { method: "POST", body: { memory_type: "fact", state_key: "profile.issue14_city", value: { text: "上海" }, source_kind: "user_explicit" } });
     await page.goto(`${base}/knowledge-agent#research`); await page.locator("#new-conversation").click();
-    await submitQuestion("我现在 issue14 居住在哪个城市？");
+    const deferredAnswer = await submitQuestion("我现在 issue14 居住在哪个城市？");
     await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
+    const promptId = deferredAnswer.context_prompts[0].id;
     await page.getByRole("button", { name: "稍后处理" }).click();
     await page.locator("#toast").filter({ hasText: "待办" }).waitFor();
+    const deferredPrompts = await api(`/v1/personal-updates/context-prompts?query=${encodeURIComponent("我现在 issue14 居住在哪个城市？")}`, { method: "GET" });
+    assert.equal(deferredPrompts.items.find((item) => item.id === promptId)?.status, "deferred");
     await context.clearCookies(); await page.evaluate(() => localStorage.clear()); await login();
     await page.goto(`${base}/knowledge-agent#research`); await page.locator("#new-conversation").click();
-    await submitQuestion("我现在 issue14 居住在哪个城市？");
+    const restoredAnswer = await submitQuestion("我现在 issue14 居住在哪个城市？");
+    assert.equal(restoredAnswer.context_prompts.find((item) => item.id === promptId)?.id, promptId);
     await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
     await page.getByRole("button", { name: "跳过" }).click();
     await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
+    const skippedPrompts = await api(`/v1/personal-updates/context-prompts?query=${encodeURIComponent("我现在 issue14 居住在哪个城市？")}`, { method: "GET" });
+    assert(!skippedPrompts.items.some((item) => item.id === promptId));
     evidence.context = { defer: true, skip: true, cross_session: true };
 
     let failed = true;

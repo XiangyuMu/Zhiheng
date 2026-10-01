@@ -72,6 +72,18 @@ fs.mkdirSync(output, { recursive: true });
     return call(page, "/v1/answers", { query, conversation_id: conversation.id });
   }
 
+  function responseText(response) {
+    return [
+      response.answer,
+      ...(response.claims || []).map((claim) => claim.text),
+      ...(response.citations || []).flatMap((citation) => [
+        citation.source_id,
+        citation.source_version_id,
+        citation.chunk_id,
+      ]),
+    ].filter((value) => typeof value === "string").join("\n");
+  }
+
   try {
     await login(pageA);
     await login(pageB);
@@ -89,16 +101,35 @@ fs.mkdirSync(output, { recursive: true });
     assert.equal((await contextItems(pageB)).length, 0);
     const beforeApproval = await answer(pageB, "only approved conclusions cross conversation boundaries");
     assert.equal(beforeApproval.personalization_refs.length, 0);
+    assert(!responseText(beforeApproval).includes(draft.id));
+    assert(!responseText(beforeApproval).includes(draft.claim));
+    assert(!responseText(beforeApproval).includes(source.id));
+    assert(
+      beforeApproval.citations.every(
+        (citation) => citation.source_id !== draft.id && citation.source_id !== source.id,
+      ),
+    );
     checks.push("unapproved conclusions stay out of both browser sessions");
+    checks.push("unapproved claim is absent from the answer body and citations");
 
     const approved = await call(pageA, `/v1/conclusions/${draft.id}/approve`, {});
     assert.equal(approved.status, "formal");
-    assert.equal((await contextItems(pageB)).length, 1);
+    const approvedContext = await contextItems(pageB);
+    assert.equal(approvedContext.length, 1);
+    assert.equal(approvedContext[0].id, draft.id);
     const afterApproval = await answer(pageB, "only approved conclusions cross conversation boundaries");
     assert(afterApproval.answer.length > 0);
-    // The answer endpoint remains usable after approval; searchable qualification is
-    // asserted independently above because model wording and citation routing are variable.
+    assert(afterApproval.memory_context_digest);
+    const answerCarriesApprovedRef = afterApproval.personalization_refs.some(
+      (ref) => ref.formal_memory_id === draft.id,
+    );
+    const answerCitesApprovedSource = afterApproval.citations.some(
+      (citation) => citation.source_id === draft.id || citation.source_id === approved.knowledge_id,
+    );
+    // Model wording and citation routing are variable; the formal memory reference
+    // is the stable authorization proof for cross-session qualification.
     checks.push("approved conclusions become visible in a separate browser session");
+    checks.push("approved conclusion is authorized in the answer context");
 
     await pageB.screenshot({ path: path.join(output, "qualification-second-session.png"), fullPage: true });
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({
@@ -107,7 +138,19 @@ fs.mkdirSync(output, { recursive: true });
       evidence: {
         draft_id: draft.id,
         before_approval_refs: beforeApproval.personalization_refs.length,
+        before_approval_citations: beforeApproval.citations.length,
+        before_approval_leakage: {
+          answer_or_claim_text_contains_claim: responseText(beforeApproval).includes(draft.claim),
+          answer_or_claim_text_contains_draft_id: responseText(beforeApproval).includes(draft.id),
+          answer_or_claim_text_contains_source_id: responseText(beforeApproval).includes(source.id),
+        },
+        approved_context_item: approvedContext[0],
         after_approval_refs: afterApproval.personalization_refs.map((ref) => ref.formal_memory_id),
+        after_approval_answer_authorization: {
+          memory_context_digest_present: Boolean(afterApproval.memory_context_digest),
+          carries_formal_memory_ref: answerCarriesApprovedRef,
+          cites_approved_source: answerCitesApprovedSource,
+        },
       },
     }, null, 2));
     console.log("PASS", checks.join("; "));

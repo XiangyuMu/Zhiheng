@@ -18,7 +18,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
   const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
   const page = await context.newPage();
   const browserErrors = [];
-  const evidence = { drafts: [], decisions: [], recovery: [] };
+  const evidence = { drafts: [], decisions: [], recovery: [], navigation: {}, details: {}, revision: {} };
   page.on("pageerror", (error) => browserErrors.push(error.message));
 
   async function api(url, options = {}) {
@@ -72,14 +72,51 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     const beforeReview = await api("/v1/review/summary?limit=500");
     const drafts = await Promise.all([0, 1, 2].map(createDraft));
     evidence.drafts = drafts.map((draft) => draft.id);
+    const afterCreate = await api("/v1/review/summary?limit=500");
+
+    // A draft must be visible as a count on the ordinary conversation page, without
+    // redirecting the user into the review center or opening a detail automatically.
+    await page.goto(`${base}/knowledge-agent#research`);
+    await page.locator("#screen-research").waitFor({ state: "visible" });
+    await page.locator("#review-nav-count").waitFor({ state: "visible" });
+    assert.equal(
+      await page.locator("#review-nav-count").innerText(),
+      String(afterCreate.counts.total),
+    );
+    assert(!page.url().includes("/review-center"));
+    assert.equal(await page.locator("#detail").count(), 0);
+    evidence.navigation = {
+      research_url: page.url(),
+      review_badge: Number(await page.locator("#review-nav-count").innerText()),
+      review_summary_total: afterCreate.counts.total,
+      review_not_opened_automatically: true,
+    };
 
     await page.goto(`${base}/review-center`);
     await page.locator("#total").waitFor({ state: "visible" });
     await page.locator("#queue").filter({ hasText: `Issue 9 草稿 ${tag}-0` }).waitFor();
+    assert.equal(
+      Number(await page.locator("#conclusion-count").innerText()),
+      Number(afterCreate.counts?.conclusions || 0),
+    );
     assert(Number(await page.locator("#conclusion-count").innerText())
       >= Number(beforeReview.counts?.conclusions || 0) + 3);
     await page.locator(`button.queue-item[data-entry-id="${drafts[0].id}"]`).click();
-    assert((await page.locator("#detail").innerText()).includes("固定条件"));
+    const firstDetail = await page.locator("#detail").innerText();
+    assert(firstDetail.includes(`Issue 9 草稿 ${tag}-0`));
+    assert(firstDetail.includes(`固定条件下复习有效 ${tag}-0`));
+    assert(firstDetail.includes("假设：固定条件"));
+    assert(firstDetail.includes(`Issue 9 浏览器原文 ${tag}-0：固定条件下复习有效。`));
+    assert(firstDetail.includes("education_learning"));
+    assert(firstDetail.includes("暂无关系建议"));
+    evidence.details = {
+      title: `Issue 9 草稿 ${tag}-0`,
+      claim: `固定条件下复习有效 ${tag}-0`,
+      premise: "固定条件",
+      source: `Issue 9 浏览器原文 ${tag}-0：固定条件下复习有效。`,
+      domain: "education_learning",
+      relation_section: "暂无关系建议",
+    };
 
     // Closing the page and logging in again must leave an unapproved draft intact.
     await page.goto(`${base}/knowledge-agent#research`);
@@ -107,16 +144,61 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     assert((await page.locator("#total").innerText()) !== "0");
     evidence.decisions.push("retry_after_refresh_approved");
 
-    // Closing a detail without choosing an action must never approve it.
+    // Open the third draft in the real review UI, cancel revision, wait for a bounded
+    // idle period, and then leave the page without selecting an approval action.
+    await page.locator(`button.queue-item[data-entry-id="${drafts[2].id}"]`).click();
+    const thirdDetail = await page.locator("#detail").innerText();
+    assert(thirdDetail.includes(`Issue 9 草稿 ${tag}-2`));
+    assert(thirdDetail.includes(`固定条件下复习有效 ${tag}-2`));
+    const thirdBefore = await api(`/v1/conclusions/${drafts[2].id}`);
+    page.once("dialog", async (dialog) => {
+      assert.equal(dialog.type(), "prompt");
+      await dialog.dismiss();
+    });
+    await page.getByRole("button", { name: "修订" }).click();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const thirdAfterCancel = await api(`/v1/conclusions/${drafts[2].id}`);
+    assert.equal(thirdAfterCancel.status, "draft");
+    assert.equal(thirdAfterCancel.claim, thirdBefore.claim);
+    assert.equal(thirdAfterCancel.etag, thirdBefore.etag);
+    evidence.revision = {
+      opened_detail: true,
+      prompt_cancelled: true,
+      bounded_idle_ms: 500,
+      before: { status: thirdBefore.status, claim: thirdBefore.claim, etag: thirdBefore.etag },
+      after_cancel: {
+        status: thirdAfterCancel.status,
+        claim: thirdAfterCancel.claim,
+        etag: thirdAfterCancel.etag,
+      },
+    };
+
+    // Navigating away acts as closing the detail. The server-side draft must remain
+    // unchanged, and a fresh session must still be able to reopen it.
     await page.goto(`${base}/knowledge-agent#research`);
-    assert.equal((await api(`/v1/conclusions/${drafts[2].id}`)).status, "draft");
+    const thirdAfterClose = await api(`/v1/conclusions/${drafts[2].id}`);
+    assert.equal(thirdAfterClose.status, "draft");
+    assert.equal(thirdAfterClose.claim, thirdBefore.claim);
+    assert.equal(thirdAfterClose.etag, thirdBefore.etag);
     evidence.recovery.push("close_without_approval_preserved_draft");
+    evidence.recovery.push("revision_cancel_and_idle_preserved_draft");
+    await context.clearCookies();
+    await page.evaluate(() => localStorage.clear());
+    await login();
+    await page.goto(`${base}/review-center`);
+    await page.locator(`button.queue-item[data-entry-id="${drafts[2].id}"]`).waitFor();
+    const thirdAfterRelogin = await api(`/v1/conclusions/${drafts[2].id}`);
+    assert.equal(thirdAfterRelogin.status, "draft");
+    assert.equal(thirdAfterRelogin.claim, thirdBefore.claim);
+    evidence.recovery.push("closed_draft_restored_after_relogin");
     assert.deepEqual(browserErrors, []);
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "passed", checks: [
       "review queue shows the draft count and full draft detail",
+      "ordinary conversation page shows the pending review badge without auto-opening review",
       "unapproved draft is restored after closing and re-login",
       "version conflict is shown in the browser and retry after refresh succeeds",
       "closing review without an action does not approve the draft",
+      "cancelled revision and bounded idle preserve the pending draft",
     ], evidence, browserErrors }, null, 2));
     await page.screenshot({ path: path.join(output, "issue9-review-center.png"), fullPage: true });
   } catch (error) {
