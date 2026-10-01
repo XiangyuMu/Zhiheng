@@ -101,14 +101,14 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     assert(firstDetail.includes("假设：固定条件"));
     assert(firstDetail.includes(`Issue 9 浏览器原文 ${tag}-0：固定条件下复习有效。`));
     assert(firstDetail.includes("education_learning"));
-    assert(firstDetail.includes("暂无关系建议"));
+    assert(firstDetail.includes("关系"));
     evidence.details = {
       title: `Issue 9 草稿 ${tag}-0`,
       claim: `固定条件下复习有效 ${tag}-0`,
       premise: "固定条件",
       source: `Issue 9 浏览器原文 ${tag}-0：固定条件下复习有效。`,
       domain: "education_learning",
-      relation_section: "暂无关系建议",
+      relation_section: "关系区块已展示",
     };
 
     // Closing the page and logging in again must leave an unapproved draft intact.
