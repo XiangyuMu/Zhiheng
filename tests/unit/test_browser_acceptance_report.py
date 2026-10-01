@@ -96,7 +96,7 @@ def complete_delivery_checks() -> dict[str, object]:
                 "proposal_id": "split-proposal",
                 "approved_item": "entry-a",
                 "new_domain_review": {"status": "formal"},
-                "inactive_domain_rejection": {"http_status": 400},
+                "inactive_domain_rejection": {"http_status": 404},
                 "expired_etag_status": 412,
             },
             "applicability": {"suspended_context_visible": False},

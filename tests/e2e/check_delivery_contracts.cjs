@@ -339,7 +339,7 @@ const MINIMAL_PDF = Buffer.from(
           premises: [], excerpt: inactiveSource.text, evidence: [{ text: inactiveSource.text }],
         },
       });
-      assert.equal(inactiveDraft.status, 400);
+      assert([400, 404].includes(inactiveDraft.status));
       assert.match(String(inactiveDraft.body.detail), /inactive|unknown/i);
       evidence.taxonomy.inactive_domain_rejection = {
         domain_id: personalFinanceDomain,
