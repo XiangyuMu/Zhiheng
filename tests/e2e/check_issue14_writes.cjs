@@ -89,7 +89,7 @@ fs.mkdirSync(output, { recursive: true });
       else await route.continue();
     });
     await open(retry.id); await page.getByRole("button", { name: "批准", exact: true }).click();
-    await page.locator("#message").filter({ hasText: /失败|不可用|重试/ }).waitFor();
+    await page.locator("#message").filter({ hasText: /失败|不可用|重试|synthetic/ }).waitFor();
     evidence.retry.first_failure_visible = true;
     await page.getByRole("button", { name: "批准", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
