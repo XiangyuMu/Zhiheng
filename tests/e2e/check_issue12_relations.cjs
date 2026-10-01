@@ -87,7 +87,7 @@ fs.mkdirSync(output, { recursive: true });
     const answer = await ok("/v1/answers", { method: "POST", body: { query: "关系审核基准结论可用于复习并巩固理解", selector: "knowledge.id", structured_value: approved.knowledge_id } });
     const citation = answer.citations.find((item) => item.source_id === approved.knowledge_id);
     const memoryRef = answer.personalization_refs.find((item) => item.formal_memory_id === supplement.id);
-    const answerRow = answer.rows.find((item) => item.knowledge_version_id === reader.knowledge_version_id || item.id === approved.knowledge_id);
+    const answerRow = answer.rows.find((item) => item.source_version_id === reader.knowledge_version_id || item.source_id === approved.knowledge_id);
     assert(citation || memoryRef || answerRow, "answer must expose the relation's published authority");
     if (citation) {
       assert.equal(citation.source_version_id, reader.knowledge_version_id);
