@@ -618,7 +618,7 @@ class ConclusionRepository:
                     FROM conclusion_relation_events
                     WHERE owner_user_id=:o
                       AND relation_id IN ({})
-                    ORDER BY datetime(created_at) ASC, id ASC
+                    ORDER BY created_at ASC, id ASC
                     """.format(",".join(f":relation_{index}" for index in range(len(relation_ids))))
                 ),
                 {
