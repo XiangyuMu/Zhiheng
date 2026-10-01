@@ -78,6 +78,25 @@ const MINIMAL_PDF = Buffer.from(
       return body;
     }, { url, options });
   }
+  async function apiRaw(url, options = {}) {
+    return page.evaluate(async ({ url, options }) => {
+      const csrf = document.cookie.split(";").map((item) => item.trim())
+        .find((item) => item.startsWith("zhiheng_csrf="))?.slice("zhiheng_csrf=".length) || "";
+      const response = await fetch(url, {
+        credentials: "same-origin",
+        ...options,
+        headers: {
+          Accept: "application/json", "Content-Type": "application/json", "X-CSRF-Token": csrf,
+          "Idempotency-Key": crypto.randomUUID(), "If-Match": "*", ...(options.headers || {}),
+        },
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      });
+      const raw = await response.text();
+      let body = {};
+      try { body = raw ? JSON.parse(raw) : {}; } catch (_) { body = { raw }; }
+      return { status: response.status, body };
+    }, { url, options });
+  }
   async function contextPrompts(query) {
     return apiJson(`/v1/personal-updates/context-prompts?query=${encodeURIComponent(query)}`);
   }
@@ -124,7 +143,7 @@ const MINIMAL_PDF = Buffer.from(
     });
     return response.result.knowledge_object_id;
   }
-  async function makeConclusion(claim, premises, key) {
+  async function makeConclusion(claim, premises, key, domain = "education_learning") {
     const source = await apiJson("/v1/conclusions/sources", {
       method: "POST",
       body: { text: `Issue 17 原始对话：${claim}` },
@@ -135,7 +154,7 @@ const MINIMAL_PDF = Buffer.from(
         source_id: source.id,
         title: conclusionTitle,
         claim,
-        domain_id: "education_learning",
+        domain_id: domain,
         premises,
         excerpt: source.text,
         evidence: [{ text: source.text }],
@@ -164,6 +183,7 @@ const MINIMAL_PDF = Buffer.from(
         },
       });
       const proposalResult = proposal.result;
+      const proposalBeforeItemUpdate = await apiJson(`/v1/taxonomy/proposals/${proposalResult.id}`);
       const affectedIds = new Set(
         proposalResult.preview.affected_knowledge.map((item) => item.knowledge_object_id),
       );
@@ -177,6 +197,11 @@ const MINIMAL_PDF = Buffer.from(
       await firstItem.locator("select").selectOption(personalFinanceDomain);
       await firstItem.getByRole("button", { name: "保存" }).click();
       await page.locator("#proposal-message").filter({ hasText: "迁移决定已保存" }).waitFor();
+      const staleApproval = await apiRaw(`/v1/taxonomy/proposals/${proposalResult.id}/approve`, {
+        method: "POST", headers: { "If-Match": proposalBeforeItemUpdate.etag },
+      });
+      assert.equal(staleApproval.status, 412);
+      assert.match(String(staleApproval.body.detail), /stale/i);
       const approved = proposalRow.getByRole("button", { name: "批准已确认迁移" }).first();
       await approved.click();
       await page.locator("#proposal-message").filter({ hasText: /迁移已批准|仍有条目待处理/ }).waitFor();
@@ -211,6 +236,25 @@ const MINIMAL_PDF = Buffer.from(
         deferred_domain: "economics_finance_business",
         history_entries: history.items.length,
         deferred_history_entries: deferredHistory.items.length,
+        expired_etag_status: staleApproval.status,
+      };
+      const reviewedInNewDomain = await makeConclusion(
+        "新增领域结论可以进入审核",
+        [{ text: "新增领域已审核通过", confirmed: true }],
+        "new-domain",
+        personalFinanceDomain,
+      );
+      await page.goto(`${base}/review-center`);
+      await page.locator(`button.queue-item[data-entry-id="${reviewedInNewDomain.id}"]`).click();
+      await page.getByRole("button", { name: "批准", exact: true }).click();
+      await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
+      const reviewedDetail = await apiJson(`/v1/conclusions/${reviewedInNewDomain.id}`);
+      assert.equal(reviewedDetail.status, "formal");
+      assert.equal(reviewedDetail.domain_id, personalFinanceDomain);
+      evidence.taxonomy.new_domain_review = {
+        conclusion_id: reviewedInNewDomain.id,
+        domain_id: reviewedDetail.domain_id,
+        status: reviewedDetail.status,
       };
       const mergedFirst = await makeKnowledge(taxonomyTitleC, personalFinanceDomain);
       const mergedSecond = await makeKnowledge(taxonomyTitleD, businessFinanceDomain);
@@ -233,25 +277,63 @@ const MINIMAL_PDF = Buffer.from(
       await page.locator("#proposal-message").filter({ hasText: "迁移决定已保存" }).waitFor();
       await mergeProposalRow.getByRole("button", { name: "批准已确认迁移" }).first().click();
       await page.locator("#proposal-message").filter({ hasText: /迁移已批准|仍有条目待处理/ }).waitFor();
+      let mergeState = await apiJson(`/v1/taxonomy/proposals/${mergeProposal.result.id}`);
+      for (const item of mergeState.preview.affected_knowledge || []) {
+        if (item.migration_status === "applied") continue;
+        mergeState = await apiJson(`/v1/taxonomy/proposals/${mergeProposal.result.id}`);
+        await apiJson(`/v1/taxonomy/proposals/${mergeProposal.result.id}/items/${item.knowledge_object_id}`, {
+          method: "PATCH",
+          headers: { "If-Match": mergeState.etag },
+          body: { target_domain_id: mergedFinanceDomain },
+        });
+      }
+      mergeState = await apiJson(`/v1/taxonomy/proposals/${mergeProposal.result.id}`);
+      const mergeApproval = await apiJson(`/v1/taxonomy/proposals/${mergeProposal.result.id}/approve`, {
+        method: "POST", headers: { "If-Match": mergeState.etag },
+      });
+      assert.equal(mergeApproval.status, "approved");
       assert.equal(
         (await apiJson(`/v1/knowledge/${mergedFirst}/classifications`)).primary_domain_id,
         mergedFinanceDomain,
       );
       assert.equal(
         (await apiJson(`/v1/knowledge/${mergedSecond}/classifications`)).primary_domain_id,
-        businessFinanceDomain,
+        mergedFinanceDomain,
       );
       const mergeHistory = await apiJson(`/v1/knowledge/${mergedFirst}/classification-history`);
-      const mergeDeferredHistory = await apiJson(`/v1/knowledge/${mergedSecond}/classification-history`);
+      const mergeSecondHistory = await apiJson(`/v1/knowledge/${mergedSecond}/classification-history`);
       assert(mergeHistory.items.some((item) => item.action === "domain_migration_approved"));
-      assert(!mergeDeferredHistory.items.some((item) => item.action === "domain_migration_approved"));
+      assert(mergeSecondHistory.items.some((item) => item.action === "domain_migration_approved"));
       evidence.taxonomy.merge = {
         proposal_id: mergeProposal.result.id,
         approved_item: mergedFirst,
-        deferred_item: mergedSecond,
+        completed_item: mergedSecond,
         approved_domain: mergedFinanceDomain,
         history_entries: mergeHistory.items.length,
       };
+      const inactiveSource = await apiJson("/v1/conclusions/sources", {
+        method: "POST", body: { text: `停用领域拒绝测试 ${runTag}` },
+      });
+      const inactiveDraft = await apiRaw("/v1/conclusions", {
+        method: "POST",
+        body: {
+          source_id: inactiveSource.id,
+          title: `停用领域结论 ${runTag}`,
+          claim: "停用领域不能创建正式结论",
+          domain_id: personalFinanceDomain,
+          premises: [], excerpt: inactiveSource.text, evidence: [{ text: inactiveSource.text }],
+        },
+      });
+      assert.equal(inactiveDraft.status, 400);
+      assert.match(String(inactiveDraft.body.detail), /inactive|unknown/i);
+      evidence.taxonomy.inactive_domain_rejection = {
+        domain_id: personalFinanceDomain,
+        http_status: inactiveDraft.status,
+        error: inactiveDraft.body.detail,
+      };
+      checks.push("new domain conclusion is reviewed and approved through the browser");
+      checks.push("inactive domain rejects conclusion creation after migration");
+      checks.push("expired taxonomy ETag rejects approval");
       await shot("taxonomy-center");
     });
 

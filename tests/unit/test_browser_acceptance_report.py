@@ -26,6 +26,12 @@ REQUIRED_CHECKS = [
     "real Worker unsupported PDF failure is visible with stable code and recovery actions",
 ]
 
+ISSUE15_CHECKS = [
+    "new domain conclusion is reviewed and approved through the browser",
+    "inactive domain rejects conclusion creation after migration",
+    "expired taxonomy ETag rejects approval",
+]
+
 IMPORT_FAILURE_CHECKS = [
     "failed status is rendered with bounded polling and recovery semantics",
     "unsupported status is rendered with bounded polling and recovery semantics",
@@ -83,10 +89,16 @@ ISSUE12_CHECKS = [
 
 def complete_delivery_checks() -> dict[str, object]:
     return {
-        "checks": REQUIRED_CHECKS,
+        "checks": REQUIRED_CHECKS + ISSUE15_CHECKS,
         "browserErrors": [],
         "evidence": {
-            "taxonomy": {"proposal_id": "split-proposal", "approved_item": "entry-a"},
+            "taxonomy": {
+                "proposal_id": "split-proposal",
+                "approved_item": "entry-a",
+                "new_domain_review": {"status": "formal"},
+                "inactive_domain_rejection": {"http_status": 400},
+                "expired_etag_status": 412,
+            },
             "applicability": {"suspended_context_visible": False},
             "missing_information": {"decisions": ["defer", "supplement", "skip"]},
             "import_failure": {"state": "unsupported", "error_code": "unsupported_pdf_parser"},

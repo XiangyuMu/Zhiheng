@@ -76,6 +76,12 @@ ISSUE12_CHECKS = {
     "answer": "answer citations use the approved relation's current knowledge and content version",
 }
 
+ISSUE15_CHECKS = {
+    "new_domain": "new domain conclusion is reviewed and approved through the browser",
+    "inactive_domain": "inactive domain rejects conclusion creation after migration",
+    "expired_etag": "expired taxonomy ETag rejects approval",
+}
+
 IMPORT_FAILURE_CHECKS = {
     "failed": "failed status is rendered with bounded polling and recovery semantics",
     "unsupported": "unsupported status is rendered with bounded polling and recovery semantics",
@@ -264,6 +270,28 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         for key in ("stale", "approved", "answer")
                     ):
                         result["error"] = "issue12 relation evidence fields missing"
+                        results[name] = result
+                        continue
+                if name == "delivery_contracts":
+                    missing_issue15 = [
+                        label
+                        for label in ISSUE15_CHECKS.values()
+                        if not any(isinstance(item, str) and item == label for item in checks)
+                    ]
+                    if missing_issue15:
+                        result["error"] = f"required Issue #15 checks missing: {missing_issue15}"
+                        results[name] = result
+                        continue
+                    taxonomy_evidence = payload.get("evidence", {}).get("taxonomy", {})
+                    if not all(
+                        key in taxonomy_evidence
+                        for key in (
+                            "new_domain_review",
+                            "inactive_domain_rejection",
+                            "expired_etag_status",
+                        )
+                    ):
+                        result["error"] = "Issue #15 taxonomy evidence fields missing"
                         results[name] = result
                         continue
                 missing = [
