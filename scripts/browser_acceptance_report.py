@@ -313,6 +313,7 @@ def main() -> int:
             "npm ci --ignore-scripts --no-audit --no-fund",
             "npx playwright install chromium",
             "uv run python scripts/upgrade_database.py <isolated sqlite path>",
+            "uv run python scripts/prepare_issue11_legacy_db.py <isolated sqlite path>",
             "uv run python scripts/upgrade_database.py <isolated sqlite path> (idempotence check)",
             "uv run uvicorn zhiheng.api.main:app",
             "uv run zhiheng-worker --role worker --idle-seconds 1",
