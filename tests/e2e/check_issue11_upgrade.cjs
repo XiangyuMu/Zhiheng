@@ -62,11 +62,14 @@ fs.mkdirSync(output, { recursive: true });
     assert(legacyDetail.includes("历史结论在升级后仍可读取"));
     await page.locator(`button.queue-item[data-entry-id="${draft.id}"]`).click();
     assert((await page.locator("#detail").innerText()).includes("升级后仍可创建新草稿"));
+    const approvalResponse = page.waitForResponse((response) =>
+      response.url().endsWith(`/v1/conclusions/${draft.id}/approve`) && response.request().method() === "POST");
     await page.getByRole("button", { name: "批准", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
+    const approvalBody = await (await approvalResponse).json();
     const approved = await api(`/v1/conclusions/${draft.id}`);
     assert.equal(approved.status, "formal");
-    assert(approved.knowledge_id);
+    assert(approvalBody.knowledge_id);
     const after = await api("/v1/review/summary?limit=500");
     assert(after.conclusions.some((item) => item.id === "issue11-legacy-entry"));
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({
@@ -81,7 +84,7 @@ fs.mkdirSync(output, { recursive: true });
         new_draft_id: draft.id,
         review_action: "approve",
         approved_status: approved.status,
-        approved_knowledge_id: approved.knowledge_id,
+        approved_knowledge_id: approvalBody.knowledge_id,
         legacy_detail_visible: true,
       },
       browserErrors: errors,
