@@ -148,7 +148,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
       assert.equal(dialog.type(), "prompt");
       await dialog.dismiss();
     });
-    await page.getByRole("button", { name: "修订" }).click();
+    await page.getByRole("button", { name: "修订", exact: true }).click();
     await new Promise((resolve) => setTimeout(resolve, 500));
     const thirdAfterCancel = await api(`/v1/conclusions/${drafts[2].id}`);
     assert.equal(thirdAfterCancel.status, "draft");
