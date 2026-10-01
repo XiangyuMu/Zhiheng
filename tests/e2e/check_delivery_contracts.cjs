@@ -374,8 +374,8 @@ const MINIMAL_PDF = Buffer.from(
       await page.locator("#import-submit").click();
       await page.waitForFunction(() => location.hash === "#library");
       await page.locator("#processing-section").waitFor({ state: "visible", timeout: 20000 });
-      await page.locator(".processing-item").filter({ hasText: "unsupported_pdf_parser" }).waitFor({ timeout: 30000 });
       const item = page.locator(".processing-item").filter({ hasText: "unsupported_pdf_parser" }).first();
+      await item.waitFor({ timeout: 30000 });
       assert((await item.innerText()).includes("configure a parser service"));
       assert(await item.getByRole("button", { name: "补充资料" }).isVisible());
       evidence.import_failure = {
