@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, text
@@ -15,6 +16,11 @@ from zhiheng.core.ids import json_text, new_id, sha256_json
 
 
 class ConclusionRepository:
+    @staticmethod
+    def _event_timestamp() -> str:
+        """Persist ordering precision; SQLite CURRENT_TIMESTAMP only has seconds."""
+        return datetime.now(UTC).isoformat(timespec="microseconds")
+
     @staticmethod
     def _classification_catalog(session: Session) -> tuple[set[str], set[str], set[str]]:
         domain_rows = list(session.execute(text("SELECT id,status FROM domain_catalog")))
@@ -538,8 +544,8 @@ class ConclusionRepository:
                 text(
                     "INSERT INTO conclusion_relation_events "
                     "(id,relation_id,owner_user_id,from_status,to_status,actor_user_id,"
-                    "left_version,right_version,left_source_id,right_source_id) "
-                    "VALUES (:id,:relation,:o,NULL,'proposed',:actor,:lv,:rv,:ls,:rs)"
+                    "left_version,right_version,left_source_id,right_source_id,created_at) "
+                    "VALUES (:id,:relation,:o,NULL,'proposed',:actor,:lv,:rv,:ls,:rs,:created_at)"
                 ),
                 {
                     "id": new_id(),
@@ -550,6 +556,7 @@ class ConclusionRepository:
                     "rv": old_payload.get("version", 1),
                     "ls": item["source"]["id"],
                     "rs": row["source_id"],
+                    "created_at": self._event_timestamp(),
                 },
             )
             proposals.append(
@@ -787,10 +794,10 @@ class ConclusionRepository:
                 )
         session.execute(
             text(
-                "INSERT INTO conclusion_relation_events "
-                "(id,relation_id,owner_user_id,from_status,to_status,actor_user_id,"
-                "left_version,right_version,left_source_id,right_source_id) "
-                "VALUES (:id,:relation,:o,:from_status,:to_status,:actor,:lv,:rv,:ls,:rs)"
+                    "INSERT INTO conclusion_relation_events "
+                    "(id,relation_id,owner_user_id,from_status,to_status,actor_user_id,"
+                "left_version,right_version,left_source_id,right_source_id,created_at) "
+                "VALUES (:id,:relation,:o,:from_status,:to_status,:actor,:lv,:rv,:ls,:rs,:created_at)"
             ),
             {
                 "id": new_id(),
@@ -803,6 +810,7 @@ class ConclusionRepository:
                 "rv": row["right_version"],
                 "ls": row["left_source_id"],
                 "rs": row["right_source_id"],
+                "created_at": self._event_timestamp(),
             },
         )
         result = {
