@@ -3,7 +3,6 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { chromium } = require("playwright");
-const { randomUUID } = require("node:crypto");
 
 const base = process.argv[2];
 const output = process.argv[3];
@@ -55,6 +54,11 @@ fs.mkdirSync(output, { recursive: true });
   async function open(id) {
     await page.locator(`button.queue-item[data-entry-id="${id}"]`).click();
   }
+  async function submitQuestion(query) {
+    await page.locator("#question").fill(query);
+    await page.locator("#answer-form button[type=submit]").click();
+    await page.locator("#answer-result").waitFor({ state: "visible", timeout: 20000 });
+  }
   try {
     await login();
     const approve = await draft("approve");
@@ -68,11 +72,17 @@ fs.mkdirSync(output, { recursive: true });
 
     await open(approve.id); await page.getByRole("button", { name: "批准", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
+    assert.equal((await api(`/v1/conclusions/${approve.id}`)).status, "formal");
     await open(reject.id); await page.getByRole("button", { name: "拒绝", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
+    assert.equal((await api(`/v1/conclusions/${reject.id}`)).status, "rejected");
     await open(defer.id); await page.getByRole("button", { name: "稍后处理", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
-    await page.reload(); await open(defer.id);
+    await context.clearCookies();
+    await page.evaluate(() => localStorage.clear());
+    await login();
+    await page.goto(`${base}/review-center`);
+    await page.locator("#queue").waitFor(); await open(defer.id);
     evidence.statuses.defer_after_refresh = (await api(`/v1/conclusions/${defer.id}`)).status;
     assert.equal(evidence.statuses.defer_after_refresh, "deferred");
 
@@ -82,6 +92,32 @@ fs.mkdirSync(output, { recursive: true });
     const revised = await api(`/v1/conclusions/${revise.id}`);
     assert.equal(revised.claim, "Issue 14 revised claim");
     evidence.statuses.revised = revised.status;
+
+    // A stale ETag must be visible and leave the draft pending until refreshed.
+    const conflict = await draft("conflict");
+    await page.reload(); await open(conflict.id);
+    const stale = await api(`/v1/conclusions/${conflict.id}`);
+    await api(`/v1/conclusions/${conflict.id}`, { method: "PATCH", body: { claim: "Issue 14 external update" }, headers: { "If-Match": stale.etag } });
+    await page.getByRole("button", { name: "批准", exact: true }).click();
+    await page.locator("#message").filter({ hasText: /变化|版本|changed/ }).waitFor();
+    assert.equal((await api(`/v1/conclusions/${conflict.id}`)).status, "draft");
+    evidence.statuses.conflict_preserved = true;
+
+    // Context prompt choices are real browser writes and survive a new session.
+    await api("/v1/personal-updates", { method: "POST", body: { memory_type: "fact", state_key: "profile.issue14_city", value: { text: "北京" }, source_kind: "user_explicit" } });
+    await api("/v1/personal-updates", { method: "POST", body: { memory_type: "fact", state_key: "profile.issue14_city", value: { text: "上海" }, source_kind: "user_explicit" } });
+    await page.goto(`${base}/knowledge-agent#research`); await page.locator("#new-conversation").click();
+    await submitQuestion("我现在 issue14 居住在哪个城市？");
+    await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
+    await page.getByRole("button", { name: "稍后处理" }).click();
+    await page.locator("#toast").filter({ hasText: "待办" }).waitFor();
+    await context.clearCookies(); await page.evaluate(() => localStorage.clear()); await login();
+    await page.goto(`${base}/knowledge-agent#research`); await page.locator("#new-conversation").click();
+    await submitQuestion("我现在 issue14 居住在哪个城市？");
+    await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
+    await page.getByRole("button", { name: "跳过" }).click();
+    await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
+    evidence.context = { defer: true, skip: true, cross_session: true };
 
     let failed = true;
     await page.route(`**/v1/conclusions/${retry.id}/approve`, async (route) => {
@@ -102,7 +138,10 @@ fs.mkdirSync(output, { recursive: true });
       "real browser writes approve, reject, defer, and revise decisions",
       "deferred review remains available after refresh",
       "failed review write is visible and succeeds on retry",
+      "version conflict is visible and preserves the pending draft",
+      "context prompt defer and skip persist across a new browser session",
     ];
+    await page.screenshot({ path: path.join(output, "issue14-writes.png"), fullPage: true });
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "passed", checks, evidence, browserErrors }, null, 2));
   } catch (error) {
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "failed", evidence, browserErrors, error: error.stack || String(error) }, null, 2));

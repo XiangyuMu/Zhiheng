@@ -64,6 +64,8 @@ ISSUE14_CHECKS = [
     "real browser writes approve, reject, defer, and revise decisions",
     "deferred review remains available after refresh",
     "failed review write is visible and succeeds on retry",
+    "version conflict is visible and preserves the pending draft",
+    "context prompt defer and skip persist across a new browser session",
 ]
 
 
@@ -239,6 +241,7 @@ def test_browser_acceptance_report_rejects_bad_child_reports(
         "context-prompts-issue8/checks.json": complete_issue8_checks(),
         "review-center-issue9/checks.json": complete_issue9_checks(),
         "issue10-matrix/checks.json": complete_issue10_checks(),
+        "issue14-writes/checks.json": complete_issue14_checks(),
     }
     for path, payload in defaults.items():
         write_checks(tmp_path, path, payload)
