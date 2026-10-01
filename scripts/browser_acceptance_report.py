@@ -66,7 +66,7 @@ ISSUE14_CHECKS = {
 
 ISSUE11_CHECKS = {
     "legacy": "supported legacy schema data survives upgrade and remains in the review queue",
-    "continuity": "login creates a new draft and the upgraded history remains reviewable",
+    "continuity": "login creates a draft, approves it, and preserves upgraded history",
 }
 
 IMPORT_FAILURE_CHECKS = {
@@ -223,6 +223,20 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     ]
                     if missing_issue11:
                         result["error"] = f"required checks missing: {missing_issue11}"
+                        results[name] = result
+                        continue
+                    required_evidence = {
+                        "legacy_entry_id",
+                        "legacy_source_id",
+                        "new_draft_id",
+                        "approved_status",
+                        "approved_knowledge_id",
+                    }
+                    evidence_payload = payload.get("evidence")
+                    if not isinstance(evidence_payload, dict) or not required_evidence.issubset(
+                        evidence_payload
+                    ):
+                        result["error"] = "issue11 migration evidence fields missing"
                         results[name] = result
                         continue
                 missing = [

@@ -70,7 +70,7 @@ ISSUE14_CHECKS = [
 
 ISSUE11_CHECKS = [
     "supported legacy schema data survives upgrade and remains in the review queue",
-    "login creates a new draft and the upgraded history remains reviewable",
+    "login creates a draft, approves it, and preserves upgraded history",
 ]
 
 
@@ -128,7 +128,13 @@ def complete_issue11_checks() -> dict[str, object]:
     return {
         "checks": ISSUE11_CHECKS,
         "browserErrors": [],
-        "evidence": {"legacy_entry_id": "issue11-legacy-entry"},
+        "evidence": {
+            "legacy_entry_id": "issue11-legacy-entry",
+            "legacy_source_id": "issue11-legacy-source",
+            "new_draft_id": "new-draft",
+            "approved_status": "formal",
+            "approved_knowledge_id": "knowledge",
+        },
     }
 
 

@@ -50,7 +50,7 @@ def main() -> None:
         connection.execute(
             "INSERT INTO conclusion_entries "
             "(id, owner_user_id, source_id, current_version, approved_version, status) "
-            "VALUES (?, ?, ?, 1, 1, 'draft')",
+            "VALUES (?, ?, ?, 1, NULL, 'draft')",
             ("issue11-legacy-entry", user_id, "issue11-legacy-source"),
         )
         connection.execute(

@@ -62,16 +62,28 @@ fs.mkdirSync(output, { recursive: true });
     assert(legacyDetail.includes("历史结论在升级后仍可读取"));
     await page.locator(`button.queue-item[data-entry-id="${draft.id}"]`).click();
     assert((await page.locator("#detail").innerText()).includes("升级后仍可创建新草稿"));
+    await page.getByRole("button", { name: "批准", exact: true }).click();
+    await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
+    const approved = await api(`/v1/conclusions/${draft.id}`);
+    assert.equal(approved.status, "formal");
+    assert(approved.knowledge_id);
     const after = await api("/v1/review/summary?limit=500");
     assert(after.conclusions.some((item) => item.id === "issue11-legacy-entry"));
-    assert(after.conclusions.some((item) => item.id === draft.id));
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({
       status: "passed",
       checks: [
         "supported legacy schema data survives upgrade and remains in the review queue",
-        "login creates a new draft and the upgraded history remains reviewable",
+        "login creates a draft, approves it, and preserves upgraded history",
       ],
-      evidence: { legacy_entry_id: legacy.id, new_draft_id: draft.id, legacy_detail_visible: true },
+      evidence: {
+        legacy_entry_id: legacy.id,
+        legacy_source_id: legacy.source?.id || "issue11-legacy-source",
+        new_draft_id: draft.id,
+        review_action: "approve",
+        approved_status: approved.status,
+        approved_knowledge_id: approved.knowledge_id,
+        legacy_detail_visible: true,
+      },
       browserErrors: errors,
     }, null, 2));
   } catch (error) {
