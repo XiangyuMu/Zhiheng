@@ -120,6 +120,8 @@ fs.mkdirSync(output, { recursive: true });
     evidence.context = { defer: true, skip: true, cross_session: true };
 
     let failed = true;
+    await page.goto(`${base}/review-center`);
+    await page.locator("#queue").waitFor();
     await page.route(`**/v1/conclusions/${retry.id}/approve`, async (route) => {
       if (failed) { failed = false; await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "synthetic review failure" }) }); }
       else await route.continue();
