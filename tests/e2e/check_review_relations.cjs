@@ -138,7 +138,8 @@ fs.mkdirSync(output, { recursive: true });
       assert(Number(await page.locator("#relation-count").innerText()) >= 2);
     });
 
-    const approvedRelation = (await apiJson(`/v1/conclusions/${approved.id}/relations`)).items[0];
+    const approvedRelations = (await apiJson(`/v1/conclusions/${approved.id}/relations`)).items;
+    const approvedRelation = approvedRelations.find((item) => item.status === "proposed") || approvedRelations[0];
     evidence.relation_ids.push(approvedRelation.id);
     await page.locator(`button.queue-item[data-entry-id="${approvedRelation.id}"]`).click();
     await page.getByRole("button", { name: "批准关系", exact: true }).click();
