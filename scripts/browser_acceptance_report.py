@@ -60,6 +60,8 @@ ISSUE14_CHECKS = {
     "writes": "real browser writes approve, reject, defer, and revise decisions",
     "defer": "deferred review remains available after refresh",
     "retry": "failed review write is visible and succeeds on retry",
+    "conflict": "version conflict is visible and preserves the pending draft",
+    "context": "context prompt defer and skip persist across a new browser session",
 }
 
 IMPORT_FAILURE_CHECKS = {
