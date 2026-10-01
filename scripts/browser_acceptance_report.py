@@ -64,6 +64,11 @@ ISSUE14_CHECKS = {
     "context": "context prompt defer and skip persist across a new browser session",
 }
 
+ISSUE11_CHECKS = {
+    "legacy": "supported legacy schema data survives upgrade and remains in the review queue",
+    "continuity": "login creates a new draft and the upgraded history remains reviewable",
+}
+
 IMPORT_FAILURE_CHECKS = {
     "failed": "failed status is rendered with bounded polling and recovery semantics",
     "unsupported": "unsupported status is rendered with bounded polling and recovery semantics",
@@ -83,6 +88,7 @@ EXPECTED_CHECKS = {
     "review_center_issue9": Path("review-center-issue9/checks.json"),
     "issue10_matrix": Path("issue10-matrix/checks.json"),
     "issue14_writes": Path("issue14-writes/checks.json"),
+    "issue11_upgrade": Path("issue11-upgrade/checks.json"),
 }
 
 
@@ -163,6 +169,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     "review_center_issue9",
                     "issue10_matrix",
                     "issue14_writes",
+                    "issue11_upgrade",
                 } and (not isinstance(payload.get("evidence"), dict) or not payload["evidence"]):
                     result["error"] = "concrete browser evidence fields missing"
                     results[name] = result
@@ -206,6 +213,16 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     ]
                     if missing_issue14:
                         result["error"] = f"required checks missing: {missing_issue14}"
+                        results[name] = result
+                        continue
+                if name == "issue11_upgrade":
+                    missing_issue11 = [
+                        label
+                        for label in ISSUE11_CHECKS.values()
+                        if not any(isinstance(item, str) and item == label for item in checks)
+                    ]
+                    if missing_issue11:
+                        result["error"] = f"required checks missing: {missing_issue11}"
                         results[name] = result
                         continue
                 missing = [
@@ -307,6 +324,7 @@ def main() -> int:
             "node tests/e2e/check_review_center_issue9.cjs",
             "node tests/e2e/check_issue10_matrix.cjs",
             "node tests/e2e/check_issue14_writes.cjs",
+            "node tests/e2e/check_issue11_upgrade.cjs",
         ],
         "versions": {
             "node": command_output(["node", "--version"]),
@@ -341,6 +359,10 @@ def main() -> int:
                 "real browser writes approve, reject, defer, and revise decisions",
                 "deferred review remains available after refresh",
                 "failed review write is visible and succeeds on retry",
+            ],
+            "#11": [
+                "supported legacy schema data survives upgrade and remains in the review queue",
+                "login creates a new draft and the upgraded history remains reviewable",
             ],
             "#15": [
                 "taxonomy APIs are reachable from the authenticated browser",
