@@ -78,7 +78,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     // redirecting the user into the review center or opening a detail automatically.
     await page.goto(`${base}/knowledge-agent#research`);
     await page.locator("#screen-research").waitFor({ state: "visible" });
-    await page.locator("#review-nav-count").waitFor({ state: "visible" });
+    await page.waitForFunction((expected) => document.querySelector("#review-nav-count")?.textContent === String(expected), afterCreate.counts.total);
     assert.equal(
       await page.locator("#review-nav-count").innerText(),
       String(afterCreate.counts.total),
