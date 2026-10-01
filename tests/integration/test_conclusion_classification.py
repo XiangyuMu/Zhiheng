@@ -104,3 +104,51 @@ def test_classification_edit_is_idempotent(tmp_path: Path) -> None:
     assert first.status_code == 200
     assert replay.status_code == 200
     assert replay.json() == first.json()
+
+
+def test_dynamic_catalog_domain_is_allowed_but_disabled_domain_is_rejected(tmp_path: Path) -> None:
+    client, factory = _client(tmp_path)
+    csrf = _login(client)
+    with session_scope(factory) as session:
+        session.execute(
+            text(
+                "INSERT INTO domain_catalog "
+                "(id,name,description,sort_order,schema_version,status) "
+                "VALUES ('custom.issue15','Issue 15 自定义领域','',990,2,'active')"
+            )
+        )
+        session.execute(text("INSERT INTO domain_catalog "
+                             "(id,name,description,sort_order,schema_version,status) "
+                             "VALUES ('custom.issue15.disabled','停用领域','',991,2,'disabled')"))
+    source = client.post(
+        "/v1/conclusions/sources",
+        json={"text": "动态领域原始材料"},
+        headers=_headers(csrf, "dynamic-domain-source"),
+    ).json()
+    accepted = client.post(
+        "/v1/conclusions",
+        json={
+            "source_id": source["id"],
+            "title": "动态领域结论",
+            "claim": "动态目录领域可以用于审核",
+            "domain_id": "custom.issue15",
+            "premises": [],
+            "excerpt": "动态目录领域可以用于审核",
+        },
+        headers=_headers(csrf, "dynamic-domain-draft"),
+    )
+    assert accepted.status_code == 200, accepted.text
+    rejected = client.post(
+        "/v1/conclusions",
+        json={
+            "source_id": source["id"],
+            "title": "停用领域结论",
+            "claim": "停用领域不应进入审核",
+            "domain_id": "custom.issue15.disabled",
+            "premises": [],
+            "excerpt": "停用领域不应进入审核",
+        },
+        headers=_headers(csrf, "disabled-domain-draft"),
+    )
+    assert rejected.status_code == 404
+    assert "unsupported" in rejected.text

@@ -67,7 +67,8 @@ def normalize_classification(
     if not value:
         value = suggestion
     primary = str(value.get("primary_domain_id") or fallback_domain_id)
-    if not _is_known_domain(primary) or (
+    primary_is_catalog_domain = allowed_domain_ids is not None and primary in allowed_domain_ids
+    if not (_is_known_domain(primary) or primary_is_catalog_domain) or (
         inactive_domain_ids is not None and primary in inactive_domain_ids
     ) or (
         allowed_domain_ids is not None
@@ -83,7 +84,10 @@ def normalize_classification(
         }
     )
     if any(
-        not _is_known_domain(item)
+        not (
+            _is_known_domain(item)
+            or (allowed_domain_ids is not None and item in allowed_domain_ids)
+        )
         or (inactive_domain_ids is not None and item in inactive_domain_ids)
         or (
             allowed_domain_ids is not None
