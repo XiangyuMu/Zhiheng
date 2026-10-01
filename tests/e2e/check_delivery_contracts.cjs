@@ -252,7 +252,7 @@ const MINIMAL_PDF = Buffer.from(
       const splitApproval = await apiJson(`/v1/taxonomy/proposals/${proposalResult.id}/approve`, {
         method: "POST", headers: { "If-Match": splitState.etag },
       });
-      assert.equal(splitApproval.status, "approved");
+      assert.equal(splitApproval.result.status, "approved");
       const reviewedInNewDomain = await makeConclusion(
         "新增领域结论可以进入审核",
         [{ text: "新增领域已审核通过", confirmed: true }],
@@ -306,7 +306,7 @@ const MINIMAL_PDF = Buffer.from(
       const mergeApproval = await apiJson(`/v1/taxonomy/proposals/${mergeProposal.result.id}/approve`, {
         method: "POST", headers: { "If-Match": mergeState.etag },
       });
-      assert.equal(mergeApproval.status, "approved");
+      assert.equal(mergeApproval.result.status, "approved");
       assert.equal(
         (await apiJson(`/v1/knowledge/${mergedFirst}/classifications`)).primary_domain_id,
         mergedFinanceDomain,
