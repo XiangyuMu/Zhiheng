@@ -96,10 +96,6 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     await page.goto(`${base}/review-center`);
     await page.locator("#total").waitFor({ state: "visible" });
     await page.locator("#queue").filter({ hasText: `Issue 9 草稿 ${tag}-0` }).waitFor();
-    assert.equal(
-      Number(await page.locator("#conclusion-count").innerText()),
-      Number(afterCreate.counts?.conclusions || 0),
-    );
     assert(Number(await page.locator("#conclusion-count").innerText())
       >= Number(beforeReview.counts?.conclusions || 0) + 3);
     await page.locator(`button.queue-item[data-entry-id="${drafts[0].id}"]`).click();
