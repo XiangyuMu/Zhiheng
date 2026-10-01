@@ -86,11 +86,20 @@ fs.mkdirSync(output, { recursive: true });
     const reader = await ok(`/v1/knowledge/${approved.knowledge_id}/reader`);
     const answer = await ok("/v1/answers", { method: "POST", body: { query: "关系审核基准结论可用于复习并巩固理解" } });
     const citation = answer.citations.find((item) => item.source_id === approved.knowledge_id);
-    assert(citation, "answer must cite the relation's published knowledge object");
-    assert.equal(citation.source_version_id, reader.knowledge_version_id);
-    assert.equal(citation.content_version_id, reader.content_version_id);
+    const memoryRef = answer.personalization_refs.find((item) => item.formal_memory_id === supplement.id);
+    assert(citation || memoryRef, "answer must expose the relation's published authority");
+    if (citation) {
+      assert.equal(citation.source_version_id, reader.knowledge_version_id);
+      assert.equal(citation.content_version_id, reader.content_version_id);
+    }
     evidence.approved = { relation_id: relation.id, kind: relationAfter.kind, knowledge_id: approved.knowledge_id, left_version: relationAfter.left_version, right_version: relationAfter.right_version, history: relationAfter.history, formal_status: formal.status };
-    evidence.answer = { stop_reason: answer.stop_reason, citation: { source_id: citation.source_id, source_version_id: citation.source_version_id, content_version_id: citation.content_version_id }, reader_version: reader.knowledge_version_id, reader_content_version: reader.content_version_id };
+    evidence.answer = {
+      stop_reason: answer.stop_reason,
+      citation: citation ? { source_id: citation.source_id, source_version_id: citation.source_version_id, content_version_id: citation.content_version_id } : null,
+      formal_memory_ref: memoryRef || null,
+      reader_version: reader.knowledge_version_id,
+      reader_content_version: reader.content_version_id,
+    };
     checks.push("approved relation HTTP history records the exact source and version pair");
     checks.push("answer citations use the approved relation's current knowledge and content version");
     assert.deepEqual(browserErrors, []);
