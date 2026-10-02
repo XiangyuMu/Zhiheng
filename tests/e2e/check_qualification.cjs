@@ -72,6 +72,22 @@ fs.mkdirSync(output, { recursive: true });
     return call(page, "/v1/answers", { query, conversation_id: conversation.id });
   }
 
+  async function askThroughBrowser(page, query) {
+    await page.goto(`${base}/knowledge-agent`);
+    const responsePromise = page.waitForResponse((response) =>
+      response.url().endsWith("/v1/answers") && response.request().method() === "POST");
+    await page.locator("#question").fill(query);
+    await page.locator("#answer-form button[type=submit]").click();
+    const response = await responsePromise;
+    assert.equal(response.status(), 200);
+    await page.locator("#answer-result").waitFor({ state: "visible" });
+    return response.json();
+  }
+
+  async function drafts(page) {
+    return call(page, "/v1/conclusions/drafts", undefined, "GET");
+  }
+
   function responseText(response) {
     return [
       response.answer,
@@ -87,19 +103,26 @@ fs.mkdirSync(output, { recursive: true });
   try {
     await login(pageA);
     await login(pageB);
-    const source = await call(pageA, "/v1/conclusions/sources", { text: "Issue 17 qualification source" });
-    const draft = await call(pageA, "/v1/conclusions", {
-      source_id: source.id,
-      title: "Issue 17 qualification draft",
-      claim: "only approved conclusions cross conversation boundaries",
-      domain_id: "education_learning",
-      premises: [{ text: "user approval", confirmed: false }],
-      excerpt: source.text,
-    });
+    const claimA = "跨会话测试专属结论 A 只能在用户批准后使用。";
+    const claimB = "跨会话测试专属结论 B 保持未批准状态。";
+    const conversationAnswer = await askThroughBrowser(pageA,
+      `请记录以下判断。结论：${claimA} 前提：用户明确同意。结论：${claimB} 前提：仍处于审核中。`);
+    assert(conversationAnswer.id || conversationAnswer.answer);
+    let extracted = [];
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      extracted = (await drafts(pageA)).items.filter((item) => [claimA, claimB].includes(item.claim));
+      if (extracted.length === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    assert.equal(extracted.length, 2, "the independent worker must persist both conversation drafts");
+    assert(extracted.every((item) => item.status === "draft"));
+    const draft = extracted.find((item) => item.claim === claimA);
+    const rejectedDraft = extracted.find((item) => item.claim === claimB);
+    const source = draft.source;
 
     assert.equal((await contextItems(pageA)).length, 0);
     assert.equal((await contextItems(pageB)).length, 0);
-    const beforeApproval = await answer(pageB, "only approved conclusions cross conversation boundaries");
+    const beforeApproval = await askThroughBrowser(pageB, claimA);
     assert.equal(beforeApproval.personalization_refs.length, 0);
     assert(!responseText(beforeApproval).includes(draft.id));
     assert(!responseText(beforeApproval).includes(draft.claim));
@@ -112,12 +135,23 @@ fs.mkdirSync(output, { recursive: true });
     checks.push("unapproved conclusions stay out of both browser sessions");
     checks.push("unapproved claim is absent from the answer body and citations");
 
-    const approved = await call(pageA, `/v1/conclusions/${draft.id}/approve`, {});
+    await pageA.goto(`${base}/review-center`);
+    await pageA.locator(`[data-entry-id="${draft.id}"]`).click();
+    await pageA.locator("#detail button", { hasText: "批准" }).click();
+    await pageA.waitForFunction((id) => !document.querySelector(`[data-entry-id="${id}"]`), draft.id);
+    const approved = await call(pageA, `/v1/conclusions/${draft.id}`, undefined, "GET");
     assert.equal(approved.status, "formal");
+    await pageA.goto(`${base}/review-center`);
+    await pageA.locator(`[data-entry-id="${rejectedDraft.id}"]`).click();
+    await pageA.locator("#detail button", { hasText: "拒绝" }).click();
+    await pageA.waitForFunction((id) => !document.querySelector(`[data-entry-id="${id}"]`), rejectedDraft.id);
+    const finalContext = await contextItems(pageB);
+    assert.equal(finalContext.length, 1);
+    assert.equal(finalContext[0].id, draft.id);
     const approvedContext = await contextItems(pageB);
     assert.equal(approvedContext.length, 1);
     assert.equal(approvedContext[0].id, draft.id);
-    const afterApproval = await answer(pageB, "only approved conclusions cross conversation boundaries");
+    const afterApproval = await askThroughBrowser(pageB, claimA);
     assert(afterApproval.answer.length > 0);
     assert(afterApproval.memory_context_digest);
     const answerCarriesApprovedRef = afterApproval.personalization_refs.some(
@@ -137,6 +171,9 @@ fs.mkdirSync(output, { recursive: true });
       checks,
       evidence: {
         draft_id: draft.id,
+        rejected_draft_id: rejectedDraft.id,
+        conversation_answer_id: conversationAnswer.id || null,
+        worker_drafts: extracted.map((item) => ({ id: item.id, claim: item.claim, status: item.status })),
         before_approval_refs: beforeApproval.personalization_refs.length,
         before_approval_citations: beforeApproval.citations.length,
         before_approval_leakage: {
@@ -145,6 +182,7 @@ fs.mkdirSync(output, { recursive: true });
           answer_or_claim_text_contains_source_id: responseText(beforeApproval).includes(source.id),
         },
         approved_context_item: approvedContext[0],
+        final_context_items: finalContext.map((item) => item.id),
         after_approval_refs: afterApproval.personalization_refs.map((ref) => ref.formal_memory_id),
         after_approval_answer_authorization: {
           memory_context_digest_present: Boolean(afterApproval.memory_context_digest),
