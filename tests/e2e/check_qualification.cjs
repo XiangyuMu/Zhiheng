@@ -108,6 +108,8 @@ fs.mkdirSync(output, { recursive: true });
     const conversationAnswer = await askThroughBrowser(pageA,
       `请记录以下判断。结论：${claimA} 前提：用户明确同意。结论：${claimB} 前提：仍处于审核中。`);
     assert(conversationAnswer.id || conversationAnswer.answer);
+    const conversationId = await pageA.evaluate(() => localStorage.getItem("zhiheng.conversation_id"));
+    assert(conversationId);
     let extracted = [];
     for (let attempt = 0; attempt < 30; attempt += 1) {
       extracted = (await drafts(pageA)).items.filter((item) => [claimA, claimB].includes(item.claim));
@@ -172,7 +174,7 @@ fs.mkdirSync(output, { recursive: true });
       evidence: {
         draft_id: draft.id,
         rejected_draft_id: rejectedDraft.id,
-        conversation_answer_id: conversationAnswer.id || null,
+        conversation_id: conversationId,
         worker_drafts: extracted.map((item) => ({ id: item.id, claim: item.claim, status: item.status })),
         before_approval_refs: beforeApproval.personalization_refs.length,
         before_approval_citations: beforeApproval.citations.length,
