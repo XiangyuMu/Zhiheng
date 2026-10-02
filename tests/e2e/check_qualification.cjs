@@ -56,15 +56,15 @@ fs.mkdirSync(output, { recursive: true });
     }, { url, body, method });
   }
 
-  async function contextItems(page) {
-    return page.evaluate(async () => {
+  async function contextItems(page, query = "cross conversation boundaries") {
+    return page.evaluate(async (searchQuery) => {
       const response = await fetch(
-        "/v1/conclusions/context?query=" + encodeURIComponent("cross conversation boundaries"),
+        "/v1/conclusions/context?query=" + encodeURIComponent(searchQuery),
         { credentials: "same-origin" },
       );
       if (!response.ok) throw new Error(`context failed: ${response.status}`);
       return (await response.json()).items;
-    });
+    }, query);
   }
 
   async function answer(page, query) {
@@ -120,8 +120,8 @@ fs.mkdirSync(output, { recursive: true });
     const rejectedDraft = extracted.find((item) => item.claim === claimB);
     const source = draft.source;
 
-    assert.equal((await contextItems(pageA)).length, 0);
-    assert.equal((await contextItems(pageB)).length, 0);
+    assert.equal((await contextItems(pageA, claimA)).length, 0);
+    assert.equal((await contextItems(pageB, claimA)).length, 0);
     const beforeApproval = await askThroughBrowser(pageB, claimA);
     assert.equal(beforeApproval.personalization_refs.length, 0);
     assert(!responseText(beforeApproval).includes(draft.id));
@@ -145,10 +145,10 @@ fs.mkdirSync(output, { recursive: true });
     await pageA.locator(`[data-entry-id="${rejectedDraft.id}"]`).click();
     await pageA.locator("#detail button", { hasText: "拒绝" }).click();
     await pageA.waitForFunction((id) => !document.querySelector(`[data-entry-id="${id}"]`), rejectedDraft.id);
-    const finalContext = await contextItems(pageB);
+    const finalContext = await contextItems(pageB, claimA);
     assert.equal(finalContext.length, 1);
     assert.equal(finalContext[0].id, draft.id);
-    const approvedContext = await contextItems(pageB);
+    const approvedContext = await contextItems(pageB, claimA);
     assert.equal(approvedContext.length, 1);
     assert.equal(approvedContext[0].id, draft.id);
     const afterApproval = await askThroughBrowser(pageB, claimA);
