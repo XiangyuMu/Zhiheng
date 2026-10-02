@@ -126,12 +126,12 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     const stale = await api(`/v1/conclusions/${drafts[1].id}`);
     await api(`/v1/conclusions/${drafts[1].id}`, { method: "PATCH", body: { claim: `外部更新 ${tag}` },
       headers: { "If-Match": stale.etag } });
-    await page.getByRole("button", { name: "批准" }).click();
+    await page.locator("#detail").getByRole("button", { name: "批准", exact: true }).click();
     await page.locator("#message").filter({ hasText: /变化|changed|版本/ }).waitFor();
     evidence.decisions.push("version_conflict_shown");
     await page.locator("#refresh").click();
     await page.locator(`button.queue-item[data-entry-id="${drafts[1].id}"]`).click();
-    await page.getByRole("button", { name: "批准" }).click();
+    await page.locator("#detail").getByRole("button", { name: "批准", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     assert.equal((await api(`/v1/conclusions/${drafts[1].id}`)).status, "formal");
     assert((await page.locator("#total").innerText()) !== "0");
