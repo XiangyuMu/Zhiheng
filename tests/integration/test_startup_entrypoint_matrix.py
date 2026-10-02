@@ -13,6 +13,8 @@ from sqlalchemy import text
 
 from zhiheng.api.main import create_app
 from zhiheng.core.config import Settings
+from zhiheng.jobs import configured_pdf_parse_executor
+from zhiheng.worker import main as worker_main
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SECRET = "startup-entrypoint-matrix-secret"
@@ -148,3 +150,19 @@ def test_worker_runtime_rejects_unmigrated_database(tmp_path: Path) -> None:
         assert connection.execute(
             "SELECT count(*) FROM sqlite_master WHERE type='table'"
         ).fetchone() == (0,)
+
+
+def test_worker_pdf_initialization_rejects_malformed_parser_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PDF_DEEPDOC_URL", "not-an-http-url")
+    monkeypatch.setenv("ZHIHENG_PDF_DEEPDOC_TOKEN", "parser-token")
+    settings = Settings(
+        environment="test",
+        secret_key=SECRET,
+    )
+
+    with pytest.raises(ValueError, match=r"HTTP\(S\) URL"):
+        configured_pdf_parse_executor(settings)
+    with pytest.raises(ValueError, match=r"HTTP\(S\) URL"):
+        worker_main._pdf_executor(settings, None)
