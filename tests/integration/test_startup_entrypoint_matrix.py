@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import text
+
+from zhiheng.api.main import create_app
+from zhiheng.core.config import Settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SECRET = "startup-entrypoint-matrix-secret"
@@ -91,3 +98,53 @@ def test_worker_cli_reports_configuration_failure_without_running_jobs(tmp_path:
     assert result.returncode == 2
     assert result.stderr.strip() == "worker startup configuration failed"
     assert not (tmp_path / "startup.db").exists()
+
+
+def test_api_initialization_rejects_malformed_persisted_model_defaults(tmp_path: Path) -> None:
+    database = tmp_path / "migrated.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database}")
+    command.upgrade(config, "head")
+    from sqlalchemy import create_engine
+
+    engine = create_engine(f"sqlite:///{database}")
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO model_route_defaults "
+                    "(id, text_provider_id, text_model_id, etag) "
+                    "VALUES ('broken-startup-route', 'provider', NULL, 'broken')"
+                )
+            )
+        settings = Settings(
+            environment="test",
+            database_url=f"sqlite:///{database}",
+            secret_key=SECRET,
+            answer_provider_id="provider",
+            answer_model_id="model",
+        )
+        with pytest.raises(RuntimeError, match="incomplete route"):
+            create_app(settings)
+    finally:
+        engine.dispose()
+
+
+def test_worker_runtime_rejects_unmigrated_database(tmp_path: Path) -> None:
+    env = _environment(tmp_path)
+    result = subprocess.run(
+        [sys.executable, "-m", "zhiheng.worker.main", "--once"],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "migration" in result.stderr.lower()
+    with sqlite3.connect(tmp_path / "startup.db") as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table'"
+        ).fetchone() == (0,)
