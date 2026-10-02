@@ -522,7 +522,7 @@ def test_restore_timeout_terminates_transport_children(tmp_path: Path) -> None:
     pid_file = tmp_path / "restic.pid"
     binary = tmp_path / "fake-restic"
     child_code = (
-        f"import time, pathlib; time.sleep(10); pathlib.Path({str(marker)!r}).touch(); "
+        f"import time, pathlib; time.sleep(1.5); pathlib.Path({str(marker)!r}).touch(); "
         "time.sleep(60)"
     )
     binary.write_text(
@@ -544,12 +544,12 @@ def test_restore_timeout_terminates_transport_children(tmp_path: Path) -> None:
         tmp_path / "objects",
         journal,
     )
-    env["ZHIHENG_RESTIC_RESTORE_TIMEOUT_SECONDS"] = "5.0"
+    env["ZHIHENG_RESTIC_RESTORE_TIMEOUT_SECONDS"] = "1.0"
     result = _run_restore(env, check=False)
     assert json.loads(result.stderr)["error_code"] == "RESTIC_RESTORE_TIMEOUT"
     with pytest.raises(ProcessLookupError):
         os.kill(int(pid_file.read_text()), 0)
-    time.sleep(10.1)
+    time.sleep(1.6)
     assert not marker.exists()
     assert not list(tmp_path.glob("target.db.restic-restore.*"))
 
