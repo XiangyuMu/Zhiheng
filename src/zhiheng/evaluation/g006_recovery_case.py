@@ -12,11 +12,12 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from alembic import command
-from alembic.config import Config
-
 from zhiheng.core.config import Settings
 from zhiheng.db.session import create_session_factory, create_sqlite_engine
+from zhiheng.evaluation.g006_preparation import (
+    prepare_migrated_database,
+    prepare_restic_repository,
+)
 from zhiheng.knowledge import KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.service import KnowledgeIngestionService
 from zhiheng.memory import MemoryRepository, MemoryValue
@@ -34,10 +35,7 @@ def execute_recovery_case(
         database_url=f"sqlite:///{database}",
         knowledge_object_store_path=str(objects),
     )
-    config = Config(str(project_root / "alembic.ini"))
-    config.set_main_option("script_location", str(project_root / "migrations"))
-    config.set_main_option("sqlalchemy.url", settings.database_url)
-    command.upgrade(config, "head")
+    prepare_migrated_database(project_root, database)
     engine = create_sqlite_engine(settings)
     factory = create_session_factory(engine)
     facts: dict[str, Any] = {}
@@ -106,7 +104,13 @@ def execute_recovery_case(
         snapshot = None
         if binary:
             env["ZHIHENG_RESTIC_BINARY"] = binary
-            _run([binary, "init"], project_root, env)
+            prepare_restic_repository(
+                binary=binary,
+                repository=work_dir / "repository",
+                project_root=project_root,
+                environment=env,
+                run=_run,
+            )
             snapshot = json.loads(
                 _run(
                     [sys.executable, "scripts/backup_restic.py"],

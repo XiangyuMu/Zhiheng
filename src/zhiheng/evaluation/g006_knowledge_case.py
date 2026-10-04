@@ -7,14 +7,13 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import text
 
 from zhiheng.api.retrieval import EvidenceBoundAnswerModel
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import new_id, sha256_json
 from zhiheng.db.session import create_session_factory, create_sqlite_engine
+from zhiheng.evaluation.g006_preparation import prepare_migrated_database
 from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
 from zhiheng.evolution.artifacts import (
     artifact_digest,
@@ -185,10 +184,7 @@ def _seed_knowledge_snapshot(
         database_url=f"sqlite:///{db_path}",
         knowledge_object_store_path=str(object_store_path),
     )
-    config = Config(str(project_root / "alembic.ini"))
-    config.set_main_option("script_location", str(project_root / "migrations"))
-    config.set_main_option("sqlalchemy.url", settings.database_url)
-    command.upgrade(config, "head")
+    prepare_migrated_database(project_root, db_path)
     engine = create_sqlite_engine(settings)
     factory = create_session_factory(engine)
     try:

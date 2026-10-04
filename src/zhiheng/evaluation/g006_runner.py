@@ -13,8 +13,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Never
 
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -33,6 +31,7 @@ from zhiheng.evaluation.g006_memory_recommendation import (
     PendingGoalCandidateRef,
     execute_memory_recommendation_probe,
 )
+from zhiheng.evaluation.g006_preparation import prepare_migrated_database
 from zhiheng.evaluation.g006_recovery_case import execute_recovery_case
 from zhiheng.evaluation.g006_registry import REGISTERED_FIXED_CASES, registered_case
 from zhiheng.evolution.artifacts import (
@@ -360,10 +359,7 @@ class ProtectedFixedSuiteRunner:
         settings = Settings(
             environment="test", database_url=f"sqlite:///{case_dir / 'case.sqlite'}"
         )
-        config = Config(str(self._project_root / "alembic.ini"))
-        config.set_main_option("script_location", str(self._project_root / "migrations"))
-        config.set_main_option("sqlalchemy.url", settings.database_url)
-        command.upgrade(config, "head")
+        prepare_migrated_database(self._project_root, case_dir / "case.sqlite")
         engine = create_sqlite_engine(settings)
         factory = create_session_factory(engine)
         try:
@@ -565,10 +561,7 @@ class ProtectedFixedSuiteRunner:
             database_url=f"sqlite:///{database}",
             external_models_enabled=True,
         )
-        config = Config(str(self._project_root / "alembic.ini"))
-        config.set_main_option("script_location", str(self._project_root / "migrations"))
-        config.set_main_option("sqlalchemy.url", settings.database_url)
-        command.upgrade(config, "head")
+        prepare_migrated_database(self._project_root, database)
         engine = create_sqlite_engine(settings)
         factory = create_session_factory(engine)
         transport = _CountingDenyTransport()

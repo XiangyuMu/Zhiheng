@@ -1,0 +1,32 @@
+{
+  "exit_code": 0,
+  "seconds": 58.030663249999634,
+  "measurements": {
+    "migration": {
+      "count": 95,
+      "seconds": 16.957812212971476
+    },
+    "restic_init": {
+      "count": 8,
+      "seconds": 23.132426666001265
+    },
+    "backup": {
+      "count": 8,
+      "seconds": 6.617682373998832
+    },
+    "restore": {
+      "count": 8,
+      "seconds": 8.474059833002684
+    },
+    "suite": {
+      "count": 8,
+      "seconds": 56.51666799799568
+    }
+  },
+  "platform": "macOS-27.0.1-arm64-arm-64bit",
+  "cpu": "Apple M4",
+  "sha": "36fa91405dbd8800bc0160f616a0904a31e3f541",
+  "cold_process": true,
+  "artifact_kind": "baseline_profile",
+  "command": "PYTHONPATH=src python scripts/profile_g006_preparation.py --output issue-31-profile.json"
+}

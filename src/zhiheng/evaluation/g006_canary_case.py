@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from alembic import command
-from alembic.config import Config
-
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import json_text, new_id
 from zhiheng.db.session import create_session_factory, create_sqlite_engine
+from zhiheng.evaluation.g006_preparation import prepare_migrated_database
 from zhiheng.evolution.artifacts import artifact_digest, validate_strategy_artifact
 from zhiheng.evolution.contracts import (
     EvolutionRole,
@@ -99,7 +98,7 @@ def _run_attempt(
     db_path = work_dir / "canary.sqlite"
     _migrate(project_root=project_root, db_path=db_path)
 
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         connection.execute("PRAGMA foreign_keys=ON")
         controller = ReleaseController.from_db(connection, deployment_secret=_DEPLOYMENT_SECRET)
         stable_before = controller.load_default_head(_TARGET_COMPONENT)
@@ -184,11 +183,7 @@ def _run_attempt(
 
 
 def _migrate(*, project_root: Path, db_path: Path) -> None:
-    config = Config(str(project_root / "alembic.ini"))
-    config.set_main_option("script_location", str(project_root / "migrations"))
-    config.set_main_option("prepend_sys_path", str(project_root / "src"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.upgrade(config, "head")
+    prepare_migrated_database(project_root, db_path)
 
 
 def _insert_negative_canary_probe(
