@@ -14,6 +14,7 @@ import os
 import shutil
 import tempfile
 import threading
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
@@ -48,27 +49,24 @@ def prepare_migrated_database(project_root: Path, database: Path) -> bool:
     project_root = project_root.resolve()
     database = database.resolve()
     key = (str(project_root), _migration_fingerprint(project_root))
+    template_path = _CACHE_ROOT / f"database-{key[1]}.sqlite"
     with _LOCK:
         template = _DATABASE_TEMPLATES.get(key)
-        reused = template is not None and _valid_file_template(template)
-        if not reused:
-            template_path = _CACHE_ROOT / f"database-{key[1]}.sqlite"
-            with _exclusive_destination_lock(template_path):
+        with _exclusive_destination_lock(template_path):
+            reused = template is not None and _valid_file_template(template)
+            if not reused:
                 if template_path.is_file() and _file_template_is_healthy(template_path):
                     template = _Template(template_path, _file_digest(template_path))
                     reused = True
                 else:
-                    _replace_file_template(
-                        template_path,
-                        lambda path: _migrate_database_template(project_root, path),
-                    )
+                    _build_database_template(project_root, template_path)
                     template = _Template(template_path, _file_digest(template_path))
                 _DATABASE_TEMPLATES[key] = template
-        if template is None:
-            raise RuntimeError("database preparation template was not initialized")
-        _assert_file_template_healthy(template.path)
-        database.parent.mkdir(parents=True, exist_ok=True)
-        _install_database_copy(template.path, database, template.digest)
+            if template is None:
+                raise RuntimeError("database preparation template was not initialized")
+            _assert_file_template_healthy(template.path)
+            database.parent.mkdir(parents=True, exist_ok=True)
+            _install_database_copy(template.path, database, template.digest)
     return reused
 
 
@@ -98,28 +96,34 @@ def prepare_restic_repository(
         run=run,
     )
     key = (str(project_root.resolve()), resolved_binary, version, password_fingerprint)
+    template_path = _CACHE_ROOT / f"restic-{hashlib.sha256(repr(key).encode()).hexdigest()}"
     with _LOCK:
         template = _RESTIC_TEMPLATES.get(key)
-        reused = template is not None and _valid_directory_template(template)
-        if not reused:
-            template_path = _CACHE_ROOT / f"restic-{hashlib.sha256(repr(key).encode()).hexdigest()}"
-            with _exclusive_destination_lock(template_path):
-                _replace_directory_template(
-                    template_path,
-                    lambda path: _initialize_empty_restic_repository(
+        with _exclusive_destination_lock(template_path):
+            reused = template is not None and _valid_directory_template(template)
+            if not reused:
+                if template is None and _restic_template_is_healthy(
+                    template_path=template_path,
+                    binary=binary,
+                    project_root=project_root,
+                    environment=environment,
+                    run=run,
+                ):
+                    reused = True
+                else:
+                    _build_restic_template(
+                        template_path=template_path,
                         binary=binary,
-                        repository=path,
                         project_root=project_root,
                         environment=environment,
                         run=run,
-                    ),
-                )
+                    )
                 template = _Template(template_path, _directory_digest(template_path))
                 _RESTIC_TEMPLATES[key] = template
-        if template is None:
-            raise RuntimeError("restic preparation template was not initialized")
-        repository.parent.mkdir(parents=True, exist_ok=True)
-        _install_restic_copy(template.path, repository, template.digest)
+            if template is None:
+                raise RuntimeError("restic preparation template was not initialized")
+            repository.parent.mkdir(parents=True, exist_ok=True)
+            _install_restic_copy(template.path, repository, template.digest)
     return reused
 
 
@@ -175,11 +179,80 @@ def _replace_directory_template(path: Path, build: Callable[[Path], None]) -> No
         raise
 
 
+def _build_database_template(project_root: Path, destination: Path) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.g006-template-",
+        suffix=".sqlite",
+        dir=destination.parent,
+    )
+    os.close(descriptor)
+    staging = Path(temporary_name)
+    installed = False
+    try:
+        _replace_file_template(
+            staging,
+            lambda path: _migrate_database_template(project_root, path),
+        )
+        _install_staged_path(staging, destination)
+        installed = True
+    finally:
+        if not installed:
+            _remove_path(staging)
+
+
+def _build_restic_template(
+    *,
+    template_path: Path,
+    binary: str,
+    project_root: Path,
+    environment: dict[str, str],
+    run: Callable[[list[str], Path, dict[str, str]], str],
+) -> None:
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{template_path.name}.g006-template-", dir=template_path.parent)
+    )
+    installed = False
+    try:
+        _replace_directory_template(
+            staging,
+            lambda path: _initialize_empty_restic_repository(
+                binary=binary,
+                repository=path,
+                project_root=project_root,
+                environment=environment,
+                run=run,
+            ),
+        )
+        _install_staged_path(staging, template_path)
+        _write_digest_manifest(template_path, _directory_digest(template_path))
+        installed = True
+    finally:
+        if not installed:
+            _remove_path(staging)
+
+
 def _remove_path(path: Path) -> None:
     if path.is_dir() and not path.is_symlink():
         shutil.rmtree(path)
     else:
         path.unlink(missing_ok=True)
+
+
+def _install_staged_path(staging: Path, destination: Path) -> None:
+    """Atomically publish a staged file or directory while retaining rollback."""
+
+    backup: Path | None = None
+    if os.path.lexists(destination):
+        backup = destination.with_name(f".{destination.name}.g006-old-{uuid.uuid4().hex}")
+        os.replace(destination, backup)
+    try:
+        os.replace(staging, destination)
+    except BaseException:
+        if backup is not None and not os.path.lexists(destination):
+            os.replace(backup, destination)
+        raise
+    if backup is not None:
+        _remove_path(backup)
 
 
 def _install_database_copy(template: Path, destination: Path, digest: str) -> None:
@@ -248,10 +321,7 @@ def _exclusive_destination_lock(destination: Path) -> Iterator[None]:
     lock = destination.with_name(f".{destination.name}.g006-lock")
     descriptor = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise FileExistsError(f"prepared destination is busy: {destination}") from exc
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
         os.ftruncate(descriptor, 0)
         os.write(descriptor, str(os.getpid()).encode())
         yield
@@ -290,6 +360,55 @@ def _valid_file_template(template: _Template) -> bool:
 
 def _valid_directory_template(template: _Template) -> bool:
     return template.path.is_dir() and _directory_digest(template.path) == template.digest
+
+
+def _restic_template_is_healthy(
+    *,
+    template_path: Path,
+    binary: str,
+    project_root: Path,
+    environment: dict[str, str],
+    run: Callable[[list[str], Path, dict[str, str]], str],
+) -> bool:
+    if not template_path.is_dir():
+        return False
+    manifest = _read_digest_manifest(template_path)
+    if manifest is None or _directory_digest(template_path) != manifest:
+        return False
+    try:
+        _assert_empty_restic_repository(
+            binary=binary,
+            repository=template_path,
+            project_root=project_root,
+            environment=environment,
+            run=run,
+        )
+    except Exception:
+        return False
+    return True
+
+
+def _digest_manifest_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}.g006-digest")
+
+
+def _write_digest_manifest(path: Path, digest: str) -> None:
+    manifest = _digest_manifest_path(path)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{manifest.name}-", dir=manifest.parent)
+    os.close(descriptor)
+    staging = Path(temporary_name)
+    try:
+        staging.write_text(digest, encoding="ascii")
+        os.replace(staging, manifest)
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def _read_digest_manifest(path: Path) -> str | None:
+    try:
+        return _digest_manifest_path(path).read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        return None
 
 
 def _assert_file_template_healthy(path: Path) -> None:

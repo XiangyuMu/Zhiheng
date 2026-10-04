@@ -9,6 +9,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
+from typing import Any
 
 import pytest
 from alembic import command as alembic_command
@@ -254,6 +255,41 @@ def test_database_same_target_cross_process_has_one_winner(
     assert calls["upgrade"] == 1
 
 
+@pytest.mark.skipif(
+    "fork" not in multiprocessing.get_all_start_methods(),
+    reason="cross-process preparation race requires fork support",
+)
+def test_database_different_targets_cross_process_are_independent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    calls = _install_fake_migrator(monkeypatch)
+    root = _project_root(tmp_path)
+    preparation.prepare_migrated_database(root, tmp_path / "template-seed.sqlite")
+    targets = (tmp_path / "independent-a.sqlite", tmp_path / "independent-b.sqlite")
+    context = multiprocessing.get_context("fork")
+    start = context.Event()
+    result_queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_prepare_same_database_target_worker,
+            args=(start, result_queue, root, target),
+        )
+        for target in targets
+    ]
+    for process in processes:
+        process.start()
+    start.set()
+    for process in processes:
+        process.join(timeout=10)
+        assert process.exitcode == 0
+
+    assert [result_queue.get(timeout=2)[0] for _ in processes] == ["ok", "ok"]
+    assert {_value(target) for target in targets} == {"v1"}
+    assert calls["upgrade"] == 1
+
+
 def test_database_copy_failure_leaves_no_partial_destination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -354,6 +390,37 @@ def test_restic_repository_reuses_empty_private_copy_and_recovers_corruption(
             run=run,
         )
     assert (third / "config").read_text(encoding="utf-8") == "config"
+
+
+def test_restic_repository_rebuilds_corrupt_template_without_process_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    root = _project_root(tmp_path)
+    calls, run = _fake_restic_runner()
+    env = {"RESTIC_PASSWORD": "protected-synthetic-backup-password"}
+
+    preparation.prepare_restic_repository(
+        binary="restic",
+        repository=tmp_path / "repo-a",
+        project_root=root,
+        environment=env,
+        run=run,
+    )
+    template = next(iter(preparation._RESTIC_TEMPLATES.values()))
+    (template.path / "config").write_text("corrupt", encoding="utf-8")
+    preparation._RESTIC_TEMPLATES.clear()
+
+    assert preparation.prepare_restic_repository(
+        binary="restic",
+        repository=tmp_path / "repo-b",
+        project_root=root,
+        environment=env,
+        run=run,
+    ) is False
+    assert (tmp_path / "repo-b" / "config").read_text(encoding="utf-8") == "config"
+    assert calls["init"] == 2
 
 
 def test_restic_rebuilds_template_replaced_by_file(
@@ -460,6 +527,46 @@ def test_restic_copy_failure_cleans_lock_and_staging(
     ]
 
 
+def test_restic_copy_cleanup_failure_is_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    root = _project_root(tmp_path)
+    _, run = _fake_restic_runner()
+    env = {"RESTIC_PASSWORD": "protected-synthetic-backup-password"}
+    preparation.prepare_restic_repository(
+        binary="restic",
+        repository=tmp_path / "first-repo",
+        project_root=root,
+        environment=env,
+        run=run,
+    )
+    target = tmp_path / "diagnostic-repo"
+    original_rmtree = shutil.rmtree
+
+    def fail_copytree(*args: object, **kwargs: object) -> None:
+        raise OSError("synthetic directory copy interruption")
+
+    def fail_staging_cleanup(
+        path: str | Path, ignore_errors: bool = False, **kwargs: Any
+    ) -> None:
+        if Path(path).name.startswith(".diagnostic-repo.g006-"):
+            raise OSError("synthetic cleanup interruption")
+        original_rmtree(path, ignore_errors=ignore_errors, **kwargs)
+
+    monkeypatch.setattr(shutil, "copytree", fail_copytree)
+    monkeypatch.setattr(shutil, "rmtree", fail_staging_cleanup)
+    with pytest.raises(RuntimeError, match="failed to clean restic preparation staging"):
+        preparation.prepare_restic_repository(
+            binary="restic",
+            repository=target,
+            project_root=root,
+            environment=env,
+            run=run,
+        )
+
+
 @pytest.mark.skipif(
     "fork" not in multiprocessing.get_all_start_methods(),
     reason="cross-process preparation race requires fork support",
@@ -501,3 +608,35 @@ def test_restic_same_target_cross_process_has_one_winner(
     assert [detail for kind, detail in results if kind == "error"] == ["FileExistsError"]
     assert (target / "config").read_text(encoding="utf-8") == "config"
     assert (tmp_path / ".shared-repo.g006-lock").exists()
+
+
+@pytest.mark.skipif(
+    "fork" not in multiprocessing.get_all_start_methods(),
+    reason="cross-process preparation race requires fork support",
+)
+def test_restic_different_targets_cross_process_are_independent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    root = _project_root(tmp_path)
+    targets = (tmp_path / "independent-a", tmp_path / "independent-b")
+    context = multiprocessing.get_context("fork")
+    start = context.Event()
+    result_queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_prepare_same_restic_target_worker,
+            args=(start, result_queue, root, target),
+        )
+        for target in targets
+    ]
+    for process in processes:
+        process.start()
+    start.set()
+    for process in processes:
+        process.join(timeout=10)
+        assert process.exitcode == 0
+
+    assert [result_queue.get(timeout=2)[0] for _ in processes] == ["ok", "ok"]
+    assert all((target / "config").read_text(encoding="utf-8") == "config" for target in targets)
