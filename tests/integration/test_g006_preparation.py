@@ -21,9 +21,7 @@ from alembic.config import Config
 from zhiheng.evaluation import g006_preparation as preparation
 
 
-def _multiprocess_fake_restic_run(
-    args: list[str], root: Path, env: dict[str, str]
-) -> str:
+def _multiprocess_fake_restic_run(args: list[str], root: Path, env: dict[str, str]) -> str:
     del root
     command = args[1]
     if command == "version":
@@ -430,7 +428,7 @@ def _fake_restic_runner() -> tuple[Counter[str], Callable[[list[str], Path, dict
             (repository / "keys" / "key").write_text("key", encoding="utf-8")
             return ""
         if command == "snapshots":
-            return "[{\"short_id\":\"dirty\"}]" if (repository / "snapshots").exists() else "[]"
+            return '[{"short_id":"dirty"}]' if (repository / "snapshots").exists() else "[]"
         raise AssertionError(args)
 
     return calls, run
@@ -449,33 +447,42 @@ def test_restic_repository_reuses_empty_private_copy_and_recovers_corruption(
     second = tmp_path / "repo-b"
     third = tmp_path / "repo-c"
 
-    assert preparation.prepare_restic_repository(
-        binary="restic",
-        repository=first,
-        project_root=root,
-        environment=env,
-        run=run,
-    ) is False
+    assert (
+        preparation.prepare_restic_repository(
+            binary="restic",
+            repository=first,
+            project_root=root,
+            environment=env,
+            run=run,
+        )
+        is False
+    )
     (first / "snapshots").mkdir()
 
-    assert preparation.prepare_restic_repository(
-        binary="restic",
-        repository=second,
-        project_root=root,
-        environment=env,
-        run=run,
-    ) is True
+    assert (
+        preparation.prepare_restic_repository(
+            binary="restic",
+            repository=second,
+            project_root=root,
+            environment=env,
+            run=run,
+        )
+        is True
+    )
     assert not (second / "snapshots").exists()
 
     template = next(iter(preparation._RESTIC_TEMPLATES.values()))
     (template.path / "config").write_text("corrupt", encoding="utf-8")
-    assert preparation.prepare_restic_repository(
-        binary="restic",
-        repository=third,
-        project_root=root,
-        environment=env,
-        run=run,
-    ) is False
+    assert (
+        preparation.prepare_restic_repository(
+            binary="restic",
+            repository=third,
+            project_root=root,
+            environment=env,
+            run=run,
+        )
+        is False
+    )
 
     assert calls["init"] == 2
     assert calls["snapshots"] == 2
@@ -513,13 +520,16 @@ def test_restic_repository_rebuilds_corrupt_template_without_process_metadata(
     (template.path / "config").write_text("corrupt", encoding="utf-8")
     preparation._RESTIC_TEMPLATES.clear()
 
-    assert preparation.prepare_restic_repository(
-        binary="restic",
-        repository=tmp_path / "repo-b",
-        project_root=root,
-        environment=env,
-        run=run,
-    ) is False
+    assert (
+        preparation.prepare_restic_repository(
+            binary="restic",
+            repository=tmp_path / "repo-b",
+            project_root=root,
+            environment=env,
+            run=run,
+        )
+        is False
+    )
     assert (tmp_path / "repo-b" / "config").read_text(encoding="utf-8") == "config"
     assert calls["init"] == 2
 
@@ -632,13 +642,16 @@ def test_restic_repository_failed_initialization_does_not_poison_cache(
             run=failing_once,
         )
 
-    assert preparation.prepare_restic_repository(
-        binary="restic",
-        repository=tmp_path / "recovered",
-        project_root=root,
-        environment=env,
-        run=failing_once,
-    ) is False
+    assert (
+        preparation.prepare_restic_repository(
+            binary="restic",
+            repository=tmp_path / "recovered",
+            project_root=root,
+            environment=env,
+            run=failing_once,
+        )
+        is False
+    )
     assert calls["init"] == 2
     assert (tmp_path / "recovered" / "config").exists()
 
@@ -722,13 +735,16 @@ def test_restic_copy_validation_failure_is_retryable(
     ]
 
     monkeypatch.setattr(preparation, "_directory_digest", original_digest)
-    assert preparation.prepare_restic_repository(
-        binary="restic",
-        repository=target,
-        project_root=root,
-        environment=env,
-        run=run,
-    ) is True
+    assert (
+        preparation.prepare_restic_repository(
+            binary="restic",
+            repository=target,
+            project_root=root,
+            environment=env,
+            run=run,
+        )
+        is True
+    )
     assert (target / "config").read_text(encoding="utf-8") == "config"
 
 
@@ -753,9 +769,7 @@ def test_restic_copy_cleanup_failure_is_diagnostic(
     def fail_copytree(*args: object, **kwargs: object) -> None:
         raise OSError("synthetic directory copy interruption")
 
-    def fail_staging_cleanup(
-        path: str | Path, ignore_errors: bool = False, **kwargs: Any
-    ) -> None:
+    def fail_staging_cleanup(path: str | Path, ignore_errors: bool = False, **kwargs: Any) -> None:
         if Path(path).name.startswith(".diagnostic-repo.g006-"):
             raise OSError("synthetic cleanup interruption")
         original_rmtree(path, ignore_errors=ignore_errors, **kwargs)

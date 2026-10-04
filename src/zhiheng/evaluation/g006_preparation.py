@@ -496,9 +496,7 @@ def _database_template_is_healthy(path: Path) -> bool:
         return False
     manifest = _read_digest_manifest(path)
     return (
-        manifest is not None
-        and _file_digest(path) == manifest
-        and _file_template_is_healthy(path)
+        manifest is not None and _file_digest(path) == manifest and _file_template_is_healthy(path)
     )
 
 
