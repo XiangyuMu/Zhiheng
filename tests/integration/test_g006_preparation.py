@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import fcntl
 import multiprocessing
+import os
 import shutil
 import sqlite3
+import threading
 import time
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from alembic import command as alembic_command
@@ -119,6 +122,58 @@ def _value(db_path: Path) -> str:
         return str(connection.execute("SELECT value FROM prepared").fetchone()[0])
 
 
+def test_template_lock_setup_failure_does_not_poison_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    destination = tmp_path / "template.sqlite"
+    original_open = cast(Callable[..., int], os.open)
+    failed = False
+
+    def fail_once(path: str | bytes | int, flags: int, mode: int = 0o777) -> int:
+        nonlocal failed
+        if not failed and str(path).endswith(".template.sqlite.g006-lock"):
+            failed = True
+            raise OSError("synthetic lock setup failure")
+        return original_open(path, flags, mode)
+
+    monkeypatch.setattr(os, "open", fail_once)
+    lock = preparation._exclusive_destination_lock(destination)
+    with pytest.raises(OSError, match="synthetic lock setup failure"), lock:
+        pass
+
+    monkeypatch.setattr(os, "open", original_open)
+    with preparation._exclusive_destination_lock(destination):
+        pass
+
+
+def test_shared_template_lock_setup_failure_does_not_poison_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    destination = tmp_path / "template.sqlite"
+    original_flock = fcntl.flock
+    failed = False
+
+    def fail_once(descriptor: int, operation: int) -> None:
+        nonlocal failed
+        if not failed and operation == fcntl.LOCK_SH:
+            failed = True
+            raise OSError("synthetic shared lock setup failure")
+        original_flock(descriptor, operation)
+
+    monkeypatch.setattr(fcntl, "flock", fail_once)
+    lock = preparation._shared_destination_lock(destination)
+    with pytest.raises(OSError, match="synthetic shared lock setup failure"), lock:
+        pass
+
+    monkeypatch.setattr(fcntl, "flock", original_flock)
+    with preparation._shared_destination_lock(destination):
+        pass
+
+
 def test_migrated_database_reuses_private_copy_and_refuses_existing_destination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -183,6 +238,25 @@ def test_migrated_database_rebuilds_template_replaced_by_directory(
     preparation.prepare_migrated_database(root, tmp_path / "second.sqlite")
     assert calls["upgrade"] == 2
     assert _value(tmp_path / "second.sqlite") == "v2"
+
+
+def test_migrated_database_rebuilds_valid_but_modified_template_without_process_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    calls = _install_fake_migrator(monkeypatch)
+    root = _project_root(tmp_path)
+    preparation.prepare_migrated_database(root, tmp_path / "first.sqlite")
+    template = next(iter(preparation._DATABASE_TEMPLATES.values()))
+    with closing(sqlite3.connect(template.path)) as connection:
+        connection.execute("UPDATE prepared SET value = 'tampered'")
+        connection.commit()
+    preparation._DATABASE_TEMPLATES.clear()
+
+    assert preparation.prepare_migrated_database(root, tmp_path / "second.sqlite") is False
+    assert _value(tmp_path / "second.sqlite") == "v2"
+    assert calls["upgrade"] == 2
 
 
 def test_migrated_database_preparation_is_thread_safe(
@@ -312,6 +386,33 @@ def test_database_copy_failure_leaves_no_partial_destination(
     assert not list(tmp_path.glob(".failed.sqlite.g006-*"))
 
 
+def test_database_copy_validation_failure_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    _install_fake_migrator(monkeypatch)
+    root = _project_root(tmp_path)
+    preparation.prepare_migrated_database(root, tmp_path / "template.sqlite")
+    target = tmp_path / "validation.sqlite"
+    original_digest = preparation._file_digest
+
+    def mismatched_digest(path: Path) -> str:
+        if path.name.startswith(".validation.sqlite.g006-"):
+            return "synthetic-mismatch"
+        return original_digest(path)
+
+    monkeypatch.setattr(preparation, "_file_digest", mismatched_digest)
+    with pytest.raises(RuntimeError, match="database copy failed integrity verification"):
+        preparation.prepare_migrated_database(root, target)
+    assert not target.exists()
+    assert not list(tmp_path.glob(".validation.sqlite.g006-*"))
+
+    monkeypatch.setattr(preparation, "_file_digest", original_digest)
+    assert preparation.prepare_migrated_database(root, target) is True
+    assert target.is_file()
+
+
 def _fake_restic_runner() -> tuple[Counter[str], Callable[[list[str], Path, dict[str, str]], str]]:
     calls: Counter[str] = Counter()
 
@@ -423,6 +524,60 @@ def test_restic_repository_rebuilds_corrupt_template_without_process_metadata(
     assert calls["init"] == 2
 
 
+def test_restic_different_targets_copy_in_parallel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    root = _project_root(tmp_path)
+    _, run = _fake_restic_runner()
+    env = {"RESTIC_PASSWORD": "protected-synthetic-backup-password"}
+    preparation.prepare_restic_repository(
+        binary="restic",
+        repository=tmp_path / "seed-repo",
+        project_root=root,
+        environment=env,
+        run=run,
+    )
+    original_install = preparation._install_restic_copy
+    first_entered = threading.Event()
+    both_entered = threading.Event()
+    release = threading.Event()
+    entered = 0
+    entered_lock = threading.Lock()
+
+    def blocking_install(template: Path, destination: Path, digest: str) -> None:
+        nonlocal entered
+        with entered_lock:
+            entered += 1
+            if entered == 1:
+                first_entered.set()
+            elif entered == 2:
+                both_entered.set()
+        assert release.wait(2)
+        original_install(template, destination, digest)
+
+    monkeypatch.setattr(preparation, "_install_restic_copy", blocking_install)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                preparation.prepare_restic_repository,
+                binary="restic",
+                repository=tmp_path / f"parallel-{index}",
+                project_root=root,
+                environment=env,
+                run=run,
+            )
+            for index in range(2)
+        ]
+        assert first_entered.wait(2)
+        parallel = both_entered.wait(2)
+        release.set()
+        assert [future.result() for future in futures] == [True, True]
+
+    assert parallel
+
+
 def test_restic_rebuilds_template_replaced_by_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -525,6 +680,56 @@ def test_restic_copy_failure_cleans_lock_and_staging(
         for path in tmp_path.glob(".failed-repo.g006-*")
         if path.name != ".failed-repo.g006-lock"
     ]
+
+
+def test_restic_copy_validation_failure_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    root = _project_root(tmp_path)
+    _, run = _fake_restic_runner()
+    env = {"RESTIC_PASSWORD": "protected-synthetic-backup-password"}
+    preparation.prepare_restic_repository(
+        binary="restic",
+        repository=tmp_path / "first-repo",
+        project_root=root,
+        environment=env,
+        run=run,
+    )
+    target = tmp_path / "validation-repo"
+    original_digest = preparation._directory_digest
+
+    def mismatched_digest(path: Path) -> str:
+        if path.name.startswith(".validation-repo.g006-"):
+            return "synthetic-mismatch"
+        return original_digest(path)
+
+    monkeypatch.setattr(preparation, "_directory_digest", mismatched_digest)
+    with pytest.raises(RuntimeError, match="repository copy failed integrity verification"):
+        preparation.prepare_restic_repository(
+            binary="restic",
+            repository=target,
+            project_root=root,
+            environment=env,
+            run=run,
+        )
+    assert not target.exists()
+    assert not [
+        path
+        for path in tmp_path.glob(".validation-repo.g006-*")
+        if path.name != ".validation-repo.g006-lock"
+    ]
+
+    monkeypatch.setattr(preparation, "_directory_digest", original_digest)
+    assert preparation.prepare_restic_repository(
+        binary="restic",
+        repository=target,
+        project_root=root,
+        environment=env,
+        run=run,
+    ) is True
+    assert (target / "config").read_text(encoding="utf-8") == "config"
 
 
 def test_restic_copy_cleanup_failure_is_diagnostic(
