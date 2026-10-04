@@ -7,14 +7,15 @@ and their authorization records remain independent.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import importlib.metadata
 import os
 import shutil
 import tempfile
 import threading
-from collections.abc import Callable
-from contextlib import closing
+from collections.abc import Callable, Iterator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,23 +53,22 @@ def prepare_migrated_database(project_root: Path, database: Path) -> bool:
         reused = template is not None and _valid_file_template(template)
         if not reused:
             template_path = _CACHE_ROOT / f"database-{key[1]}.sqlite"
-            _replace_file_template(
-                template_path,
-                lambda path: _migrate_database_template(project_root, path),
-            )
-            template = _Template(template_path, _file_digest(template_path))
-            _DATABASE_TEMPLATES[key] = template
+            with _exclusive_destination_lock(template_path):
+                if template_path.is_file() and _file_template_is_healthy(template_path):
+                    template = _Template(template_path, _file_digest(template_path))
+                    reused = True
+                else:
+                    _replace_file_template(
+                        template_path,
+                        lambda path: _migrate_database_template(project_root, path),
+                    )
+                    template = _Template(template_path, _file_digest(template_path))
+                _DATABASE_TEMPLATES[key] = template
         if template is None:
             raise RuntimeError("database preparation template was not initialized")
         _assert_file_template_healthy(template.path)
-        if database.exists():
-            raise FileExistsError(f"refusing to overwrite prepared database: {database}")
         database.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(template.path, database)
-        _make_private(database)
-        if _file_digest(database) != template.digest:
-            database.unlink(missing_ok=True)
-            raise RuntimeError("prepared database copy failed integrity verification")
+        _install_database_copy(template.path, database, template.digest)
     return reused
 
 
@@ -103,33 +103,23 @@ def prepare_restic_repository(
         reused = template is not None and _valid_directory_template(template)
         if not reused:
             template_path = _CACHE_ROOT / f"restic-{hashlib.sha256(repr(key).encode()).hexdigest()}"
-            _replace_directory_template(
-                template_path,
-                lambda path: _initialize_empty_restic_repository(
-                    binary=binary,
-                    repository=path,
-                    project_root=project_root,
-                    environment=environment,
-                    run=run,
-                ),
-            )
-            template = _Template(template_path, _directory_digest(template_path))
-            _RESTIC_TEMPLATES[key] = template
+            with _exclusive_destination_lock(template_path):
+                _replace_directory_template(
+                    template_path,
+                    lambda path: _initialize_empty_restic_repository(
+                        binary=binary,
+                        repository=path,
+                        project_root=project_root,
+                        environment=environment,
+                        run=run,
+                    ),
+                )
+                template = _Template(template_path, _directory_digest(template_path))
+                _RESTIC_TEMPLATES[key] = template
         if template is None:
             raise RuntimeError("restic preparation template was not initialized")
-        if repository.exists():
-            raise FileExistsError(f"refusing to overwrite prepared restic repository: {repository}")
-        staging = repository.with_name(f".{repository.name}.g006-copy")
-        shutil.rmtree(staging, ignore_errors=True)
-        try:
-            shutil.copytree(template.path, staging)
-            _make_private(staging)
-            if _directory_digest(staging) != template.digest:
-                raise RuntimeError("prepared restic repository copy failed integrity verification")
-            staging.rename(repository)
-        except BaseException:
-            shutil.rmtree(staging, ignore_errors=True)
-            raise
+        repository.parent.mkdir(parents=True, exist_ok=True)
+        _install_restic_copy(template.path, repository, template.digest)
     return reused
 
 
@@ -158,7 +148,7 @@ def _migrate_database_template(project_root: Path, template: Path) -> None:
 
 
 def _replace_file_template(path: Path, build: Callable[[Path], None]) -> None:
-    path.unlink(missing_ok=True)
+    _remove_path(path)
     path.with_suffix(f"{path.suffix}-wal").unlink(missing_ok=True)
     path.with_suffix(f"{path.suffix}-shm").unlink(missing_ok=True)
     try:
@@ -167,23 +157,107 @@ def _replace_file_template(path: Path, build: Callable[[Path], None]) -> None:
         _assert_file_template_healthy(path)
         _make_private(path)
     except BaseException:
-        path.unlink(missing_ok=True)
+        _remove_path(path)
         path.with_suffix(f"{path.suffix}-wal").unlink(missing_ok=True)
         path.with_suffix(f"{path.suffix}-shm").unlink(missing_ok=True)
         raise
 
 
 def _replace_directory_template(path: Path, build: Callable[[Path], None]) -> None:
-    if path.exists():
-        shutil.rmtree(path)
+    _remove_path(path)
     try:
         build(path)
         if not path.is_dir():
             raise RuntimeError(f"template builder did not create directory: {path}")
         _make_private(path)
     except BaseException:
-        shutil.rmtree(path, ignore_errors=True)
+        _remove_path(path)
         raise
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _install_database_copy(template: Path, destination: Path, digest: str) -> None:
+    """Install a verified database copy without exposing a partial target."""
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.g006-",
+        suffix=".sqlite",
+        dir=destination.parent,
+    )
+    os.close(descriptor)
+    staging = Path(temporary_name)
+    installed = False
+    try:
+        shutil.copy2(template, staging)
+        _make_private(staging)
+        if _file_digest(staging) != digest or not _file_template_is_healthy(staging):
+            raise RuntimeError("prepared database copy failed integrity verification")
+        try:
+            os.link(staging, destination)
+        except FileExistsError as exc:
+            raise FileExistsError(
+                f"refusing to overwrite prepared database: {destination}"
+            ) from exc
+        installed = True
+        _make_private(destination)
+    except BaseException:
+        if installed:
+            destination.unlink(missing_ok=True)
+        raise
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def _install_restic_copy(template: Path, destination: Path, digest: str) -> None:
+    """Install a verified restic directory with a cooperative cross-process lock."""
+
+    with _exclusive_destination_lock(destination):
+        if os.path.lexists(destination):
+            raise FileExistsError(
+                f"refusing to overwrite prepared restic repository: {destination}"
+            )
+        staging = Path(
+            tempfile.mkdtemp(prefix=f".{destination.name}.g006-", dir=destination.parent)
+        )
+        installed = False
+        try:
+            shutil.copytree(template, staging, dirs_exist_ok=True)
+            _make_private(staging)
+            if _directory_digest(staging) != digest:
+                raise RuntimeError("prepared restic repository copy failed integrity verification")
+            staging.rename(destination)
+            installed = True
+        finally:
+            if not installed:
+                try:
+                    shutil.rmtree(staging)
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"failed to clean restic preparation staging directory: {staging}"
+                    ) from exc
+
+
+@contextmanager
+def _exclusive_destination_lock(destination: Path) -> Iterator[None]:
+    lock = destination.with_name(f".{destination.name}.g006-lock")
+    descriptor = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise FileExistsError(f"prepared destination is busy: {destination}") from exc
+        os.ftruncate(descriptor, 0)
+        os.write(descriptor, str(os.getpid()).encode())
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 def _initialize_empty_restic_repository(

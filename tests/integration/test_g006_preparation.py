@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import multiprocessing
+import shutil
 import sqlite3
 import time
 from collections import Counter
@@ -13,6 +15,61 @@ from alembic import command as alembic_command
 from alembic.config import Config
 
 from zhiheng.evaluation import g006_preparation as preparation
+
+
+def _multiprocess_fake_restic_run(
+    args: list[str], root: Path, env: dict[str, str]
+) -> str:
+    del root
+    command = args[1]
+    if command == "version":
+        return "restic 0.17.0 compiled with multiprocess-test"
+    repository = Path(env["RESTIC_REPOSITORY"])
+    if command == "init":
+        repository.mkdir(parents=True)
+        (repository / "config").write_text("config", encoding="utf-8")
+        (repository / "keys").mkdir()
+        (repository / "keys" / "key").write_text("key", encoding="utf-8")
+        return ""
+    if command == "snapshots":
+        return "[]"
+    raise AssertionError(args)
+
+
+def _prepare_same_restic_target_worker(
+    start: multiprocessing.synchronize.Event,
+    result_queue: multiprocessing.queues.Queue[tuple[str, str]],
+    root: Path,
+    target: Path,
+) -> None:
+    start.wait()
+    try:
+        preparation.prepare_restic_repository(
+            binary="restic",
+            repository=target,
+            project_root=root,
+            environment={"RESTIC_PASSWORD": "protected-multiprocess-password"},
+            run=_multiprocess_fake_restic_run,
+        )
+    except BaseException as exc:
+        result_queue.put(("error", type(exc).__name__))
+    else:
+        result_queue.put(("ok", "created"))
+
+
+def _prepare_same_database_target_worker(
+    start: multiprocessing.synchronize.Event,
+    result_queue: multiprocessing.queues.Queue[tuple[str, str]],
+    root: Path,
+    target: Path,
+) -> None:
+    start.wait()
+    try:
+        preparation.prepare_migrated_database(root, target)
+    except BaseException as exc:
+        result_queue.put(("error", type(exc).__name__))
+    else:
+        result_queue.put(("ok", "created"))
 
 
 def _project_root(tmp_path: Path) -> Path:
@@ -110,6 +167,23 @@ def test_migrated_database_rebuilds_corrupt_template_and_invalidates_changes(
     assert _value(tmp_path / "third.sqlite") == "v3"
 
 
+def test_migrated_database_rebuilds_template_replaced_by_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    calls = _install_fake_migrator(monkeypatch)
+    root = _project_root(tmp_path)
+    preparation.prepare_migrated_database(root, tmp_path / "first.sqlite")
+    template = next(iter(preparation._DATABASE_TEMPLATES.values()))
+    template.path.unlink()
+    template.path.mkdir()
+
+    preparation.prepare_migrated_database(root, tmp_path / "second.sqlite")
+    assert calls["upgrade"] == 2
+    assert _value(tmp_path / "second.sqlite") == "v2"
+
+
 def test_migrated_database_preparation_is_thread_safe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -141,6 +215,65 @@ def test_migrated_database_preparation_is_thread_safe(
     assert results.count(False) == 1
     assert results.count(True) == 7
     assert {_value(tmp_path / f"thread-{index}.sqlite") for index in range(8)} == {"v1"}
+
+
+@pytest.mark.skipif(
+    "fork" not in multiprocessing.get_all_start_methods(),
+    reason="cross-process preparation race requires fork support",
+)
+def test_database_same_target_cross_process_has_one_winner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    calls = _install_fake_migrator(monkeypatch)
+    root = _project_root(tmp_path)
+    preparation.prepare_migrated_database(root, tmp_path / "template-seed.sqlite")
+    target = tmp_path / "shared.sqlite"
+    context = multiprocessing.get_context("fork")
+    start = context.Event()
+    result_queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_prepare_same_database_target_worker,
+            args=(start, result_queue, root, target),
+        )
+        for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    start.set()
+    for process in processes:
+        process.join(timeout=10)
+        assert process.exitcode == 0
+
+    results = [result_queue.get(timeout=2) for _ in processes]
+    assert [kind for kind, _ in results].count("ok") == 1
+    assert [detail for kind, detail in results if kind == "error"] == ["FileExistsError"]
+    assert _value(target) == "v1"
+    assert calls["upgrade"] == 1
+
+
+def test_database_copy_failure_leaves_no_partial_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    _install_fake_migrator(monkeypatch)
+    root = _project_root(tmp_path)
+    template_destination = tmp_path / "first.sqlite"
+    preparation.prepare_migrated_database(root, template_destination)
+    target = tmp_path / "failed.sqlite"
+
+    def fail_copy(*args: object, **kwargs: object) -> None:
+        raise OSError("synthetic copy interruption")
+
+    monkeypatch.setattr(shutil, "copy2", fail_copy)
+    with pytest.raises(OSError, match="synthetic copy interruption"):
+        preparation.prepare_migrated_database(root, target)
+
+    assert not target.exists()
+    assert not list(tmp_path.glob(".failed.sqlite.g006-*"))
 
 
 def _fake_restic_runner() -> tuple[Counter[str], Callable[[list[str], Path, dict[str, str]], str]]:
@@ -223,6 +356,36 @@ def test_restic_repository_reuses_empty_private_copy_and_recovers_corruption(
     assert (third / "config").read_text(encoding="utf-8") == "config"
 
 
+def test_restic_rebuilds_template_replaced_by_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    root = _project_root(tmp_path)
+    calls, run = _fake_restic_runner()
+    env = {"RESTIC_PASSWORD": "protected-synthetic-backup-password"}
+    preparation.prepare_restic_repository(
+        binary="restic",
+        repository=tmp_path / "first-repo",
+        project_root=root,
+        environment=env,
+        run=run,
+    )
+    template = next(iter(preparation._RESTIC_TEMPLATES.values()))
+    shutil.rmtree(template.path)
+    template.path.write_text("wrong template shape", encoding="utf-8")
+
+    preparation.prepare_restic_repository(
+        binary="restic",
+        repository=tmp_path / "second-repo",
+        project_root=root,
+        environment=env,
+        run=run,
+    )
+    assert calls["init"] == 2
+    assert (tmp_path / "second-repo" / "config").read_text(encoding="utf-8") == "config"
+
+
 def test_restic_repository_failed_initialization_does_not_poison_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -256,3 +419,85 @@ def test_restic_repository_failed_initialization_does_not_poison_cache(
     ) is False
     assert calls["init"] == 2
     assert (tmp_path / "recovered" / "config").exists()
+
+
+def test_restic_copy_failure_cleans_lock_and_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    root = _project_root(tmp_path)
+    _, run = _fake_restic_runner()
+    env = {"RESTIC_PASSWORD": "protected-synthetic-backup-password"}
+    preparation.prepare_restic_repository(
+        binary="restic",
+        repository=tmp_path / "first-repo",
+        project_root=root,
+        environment=env,
+        run=run,
+    )
+    target = tmp_path / "failed-repo"
+
+    def fail_copytree(*args: object, **kwargs: object) -> None:
+        raise OSError("synthetic directory copy interruption")
+
+    monkeypatch.setattr(shutil, "copytree", fail_copytree)
+    with pytest.raises(OSError, match="synthetic directory copy interruption"):
+        preparation.prepare_restic_repository(
+            binary="restic",
+            repository=target,
+            project_root=root,
+            environment=env,
+            run=run,
+        )
+
+    assert not target.exists()
+    assert (tmp_path / ".failed-repo.g006-lock").exists()
+    assert not [
+        path
+        for path in tmp_path.glob(".failed-repo.g006-*")
+        if path.name != ".failed-repo.g006-lock"
+    ]
+
+
+@pytest.mark.skipif(
+    "fork" not in multiprocessing.get_all_start_methods(),
+    reason="cross-process preparation race requires fork support",
+)
+def test_restic_same_target_cross_process_has_one_winner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    root = _project_root(tmp_path)
+    env = {"RESTIC_PASSWORD": "protected-multiprocess-password"}
+    preparation.prepare_restic_repository(
+        binary="restic",
+        repository=tmp_path / "template-seed",
+        project_root=root,
+        environment=env,
+        run=_multiprocess_fake_restic_run,
+    )
+    target = tmp_path / "shared-repo"
+    context = multiprocessing.get_context("fork")
+    start = context.Event()
+    result_queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_prepare_same_restic_target_worker,
+            args=(start, result_queue, root, target),
+        )
+        for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    start.set()
+    for process in processes:
+        process.join(timeout=10)
+        assert process.exitcode == 0
+
+    results = [result_queue.get(timeout=2) for _ in processes]
+    assert [kind for kind, _ in results].count("ok") == 1
+    assert [detail for kind, detail in results if kind == "error"] == ["FileExistsError"]
+    assert (target / "config").read_text(encoding="utf-8") == "config"
+    assert (tmp_path / ".shared-repo.g006-lock").exists()
