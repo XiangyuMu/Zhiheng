@@ -155,7 +155,8 @@ Record the current environment, then preserve both completed reviews. Write
 `artifacts` map uses archive-relative paths and SHA-256 values, including the
 unaltered acceptance `report.json`, profile, environment, and reviews. Verify
 every digest by reading the archived file, as well as each child report's
-manifest. Reject a missing file or mismatch. The archive summary excludes
+manifest. API/Worker shutdown must finish before the browser report hashes
+logs, so shutdown messages cannot invalidate its checksums. Reject a missing file or mismatch. The archive summary excludes
 itself to avoid a circular digest. Copy the historical directory together with
 the final archive when transferring evidence.
 

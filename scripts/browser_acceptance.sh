@@ -31,6 +31,7 @@ finalize() {
   if [[ -z "${GIT_SHA}" ]]; then
     GIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
   fi
+  cleanup
   python3 "${ROOT_DIR}/scripts/browser_acceptance_report.py" \
     --output "${OUTPUT_DIR}" \
     --commit "${GIT_SHA}" \
@@ -38,7 +39,6 @@ finalize() {
     --stage "${CURRENT_STAGE}" \
     --exit-code "${exit_code}" \
     --repo "${ROOT_DIR}" || report_code=$?
-  cleanup
   if [[ "${exit_code}" -eq 0 && "${report_code}" -ne 0 ]]; then
     exit "${report_code}"
   fi
