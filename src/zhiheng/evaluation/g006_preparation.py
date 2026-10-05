@@ -422,15 +422,25 @@ def _shared_destination_lock(destination: Path) -> Iterator[None]:
     try:
         yield
     finally:
+        cleanup_error: BaseException | None = None
         with state.condition:
             state.readers -= 1
             if state.readers == 0:
                 shared_descriptor = state.shared_descriptor
                 state.shared_descriptor = None
                 if shared_descriptor is not None:
-                    fcntl.flock(shared_descriptor, fcntl.LOCK_UN)
-                    os.close(shared_descriptor)
+                    try:
+                        fcntl.flock(shared_descriptor, fcntl.LOCK_UN)
+                    except BaseException as exc:
+                        cleanup_error = exc
+                    try:
+                        os.close(shared_descriptor)
+                    except BaseException as exc:
+                        if cleanup_error is None:
+                            cleanup_error = exc
                 state.condition.notify_all()
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 def _initialize_empty_restic_repository(
@@ -478,16 +488,13 @@ def _restic_template_is_healthy(
     manifest = _read_digest_manifest(template_path)
     if manifest is None or _directory_digest(template_path) != manifest:
         return False
-    try:
-        _assert_empty_restic_repository(
-            binary=binary,
-            repository=template_path,
-            project_root=project_root,
-            environment=environment,
-            run=run,
-        )
-    except Exception:
-        return False
+    _assert_empty_restic_repository(
+        binary=binary,
+        repository=template_path,
+        project_root=project_root,
+        environment=environment,
+        run=run,
+    )
     return True
 
 

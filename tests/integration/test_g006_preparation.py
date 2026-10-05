@@ -172,6 +172,68 @@ def test_shared_template_lock_setup_failure_does_not_poison_retry(
         pass
 
 
+@pytest.mark.parametrize("cleanup_failure", ["unlock", "close"])
+def test_shared_template_lock_cleanup_failure_notifies_waiters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_failure: str,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    destination = tmp_path / "template.sqlite"
+    state = preparation._process_template_lock(destination)
+    original_flock = fcntl.flock
+    original_close = os.close
+    failed = False
+
+    def fail_unlock_once(descriptor: int, operation: int) -> None:
+        nonlocal failed
+        if not failed and operation == fcntl.LOCK_UN:
+            failed = True
+            raise OSError("synthetic shared unlock failure")
+        original_flock(descriptor, operation)
+
+    def fail_close_once(descriptor: int) -> None:
+        nonlocal failed
+        if not failed:
+            failed = True
+            original_close(descriptor)
+            raise OSError("synthetic shared close failure")
+        original_close(descriptor)
+
+    def acquire_exclusive() -> None:
+        with preparation._exclusive_destination_lock(destination):
+            pass
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = None
+    expected_error = f"synthetic shared {cleanup_failure} failure"
+    try:
+        with (
+            pytest.raises(OSError, match=expected_error),
+            preparation._shared_destination_lock(destination),
+        ):
+            future = executor.submit(acquire_exclusive)
+            for _ in range(100):
+                waiters = cast(Any, state.condition)._waiters
+                if waiters:
+                    break
+                time.sleep(0.01)
+            else:
+                raise AssertionError("exclusive lock waiter did not block on shared lock")
+            if cleanup_failure == "unlock":
+                monkeypatch.setattr(fcntl, "flock", fail_unlock_once)
+            else:
+                monkeypatch.setattr(os, "close", fail_close_once)
+        assert future is not None
+        future.result(timeout=2)
+    finally:
+        monkeypatch.setattr(fcntl, "flock", original_flock)
+        monkeypatch.setattr(os, "close", original_close)
+        with state.condition:
+            state.condition.notify_all()
+        executor.shutdown(wait=True)
+
+
 def test_migrated_database_reuses_private_copy_and_refuses_existing_destination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -532,6 +594,54 @@ def test_restic_repository_rebuilds_corrupt_template_without_process_metadata(
     )
     assert (tmp_path / "repo-b" / "config").read_text(encoding="utf-8") == "config"
     assert calls["init"] == 2
+
+
+def test_restic_template_probe_failure_is_not_silently_rebuilt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reset_preparation_cache(monkeypatch, tmp_path)
+    root = _project_root(tmp_path)
+    calls, successful_run = _fake_restic_runner()
+    env = {"RESTIC_PASSWORD": "protected-synthetic-backup-password"}
+    preparation.prepare_restic_repository(
+        binary="restic",
+        repository=tmp_path / "repo-a",
+        project_root=root,
+        environment=env,
+        run=successful_run,
+    )
+    preparation._RESTIC_TEMPLATES.clear()
+
+    def probe_fails_once(args: list[str], root: Path, env: dict[str, str]) -> str:
+        if args[1] == "snapshots" and calls["snapshots"] == 1:
+            calls["snapshots"] += 1
+            raise RuntimeError("synthetic snapshots probe failure")
+        return successful_run(args, root, env)
+
+    with pytest.raises(RuntimeError, match="synthetic snapshots probe failure"):
+        preparation.prepare_restic_repository(
+            binary="restic",
+            repository=tmp_path / "repo-b",
+            project_root=root,
+            environment=env,
+            run=probe_fails_once,
+        )
+
+    assert calls["init"] == 1
+    assert not (tmp_path / "repo-b").exists()
+    assert (
+        preparation.prepare_restic_repository(
+            binary="restic",
+            repository=tmp_path / "repo-c",
+            project_root=root,
+            environment=env,
+            run=successful_run,
+        )
+        is True
+    )
+    assert calls["init"] == 1
+    assert (tmp_path / "repo-c" / "config").read_text(encoding="utf-8") == "config"
 
 
 def test_restic_different_targets_copy_in_parallel(

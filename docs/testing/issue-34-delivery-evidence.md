@@ -8,7 +8,9 @@ commit SHA and its top-level report repeats the same SHA.
 
 ## Resolving the final release key
 
-The release key is the commit that introduced this index. Resolve it from a
+The release key is the last commit that updated this index. All final code
+fixes must be included in that commit or an ancestor; updating product code
+afterward requires updating this index and generating a new archive. Resolve it from a
 clean checkout instead of using a mutable branch name:
 
 ```sh
@@ -33,12 +35,16 @@ The final entry must contain the following files and directories:
 
 | Path | Evidence |
 | --- | --- |
-| `report.json` | Same-SHA aggregate status, environment, step exit codes, elapsed time, and artifact digests |
-| `versions.log` | Python, uv, npm, Playwright, restic, and package versions |
+| `report.json` | Same-SHA acceptance status, step exit codes, elapsed time, and artifact digests |
+| `versions.log` | Installed Python package versions (`uv pip freeze`) |
+| `environment.json` | OS, CPU, Python, uv, Node, npm, Playwright, and restic versions |
+| `archive-summary.json` | SHA, independent functional/performance verdicts, historical archive reference, and SHA-256 digests of every archived file except itself |
+| `g006-profile.json`, `g006-profile.log` | Fresh final-SHA profile with candidate/stage evaluation and authorization evidence |
+| `reviews/standards.md`, `reviews/spec.md` | Final review scope, SHA, findings, and verdict |
 | `compile.log` | Clean-checkout compilation result |
 | `ruff.log` | Ruff result |
 | `mypy.log` | Full source and test Mypy result |
-| `pytest/evidence.json` | Same-SHA pytest status, count, skip count, required groups, and runner wall clock |
+| `pytest/evidence.json` | Same-SHA pytest status, environment, required groups, and runner wall clock (counts in JUnit) |
 | `pytest/pytest.log` | Complete natural pytest output |
 | `pytest/pytest.xml` | JUnit report for every test case |
 | `pytest/pytest-outcomes.jsonl` | Incremental per-test outcomes and failure diagnostics |
@@ -46,8 +52,10 @@ The final entry must contain the following files and directories:
 | `browser/workspace-full/`, `browser/import-polling.log` | Login, text import, Worker consumption, succeeded state, search, and source return evidence |
 | `browser/*.log` and child `checks.json` files | API, Worker, migration, screenshots, and all browser acceptance scenarios |
 
-The acceptance runner is the source of the layout and must be run from a
-clean checkout. The output directory must not exist before the run:
+The acceptance runner generates the acceptance reports. The environment,
+profile, review records, and archive summary are added afterward without
+rewriting the original acceptance reports. Run from a clean checkout whose
+HEAD equals `release_sha`. The output directory must not exist before the run:
 
 ```sh
 release_sha="$(git log -1 --format=%H -- docs/testing/issue-34-delivery-evidence.md)"
@@ -67,7 +75,18 @@ separate from final delivery evidence:
 
 | Commit SHA | Artifact | Meaning |
 | --- | --- | --- |
-| `b492d19de9538b0e893ca28989a230cc47bab262` | `issue31/profile-b492d19.json` | Cold-process G006 profile for the implementation commit; `exit_code=0`, 8 suites, 8 backups, 8 restores, 23.950 seconds |
+| `b492d19de9538b0e893ca28989a230cc47bab262` | `historical/b492d19de9538b0e893ca28989a230cc47bab262/profile-b492d19.json` | Cold-process G006 profile for the implementation commit; `exit_code=0`, 8 suites, 8 backups, 8 restores, 23.950 seconds |
+
+The historical archive identifier is
+`historical/b492d19de9538b0e893ca28989a230cc47bab262/` relative to
+`ZHIHENG_DELIVERY_EVIDENCE_ROOT`. It contains both original files and
+`manifest.json`. Verified checksums:
+
+- `profile-b492d19.json`: `eeffc6f23af887d3142b58e0804089ad753c69008002592845e9affd248fa59d`
+- `profile-b492d19.log`: `a1a62f58546bd5a9ad202e33695ba36b3fd2a02171b7881ecfbe5dfccb87371f`
+
+The historical profile reports macOS 27.0.1 arm64 / Apple M4. It is a
+profile-only measurement; it does not prove a full delivery run at that SHA.
 
 That profile is evidence for `b492d19` only. It must never be copied into the
 final SHA directory or presented as proof for a later commit. The tracked
@@ -88,8 +107,9 @@ auditable:
 | G006 evidence isolation | Every candidate/stage has its own evaluation run, artifact digest, trajectory, canary observation, and authorization binding |
 | Backup and recovery | Real isolated backup, restore, erase, and post-restore retrieval evidence; no cross-candidate or cross-stage result reuse |
 
-Functional correctness and the 900-second performance budget are reported as
-separate fields. A passing functional report does not satisfy the performance
+In `archive-summary.json`, `functional_gate` records acceptance/profile
+results, and `pytest_budget` separately records the runner wall time, the
+900-second limit, and its verdict. `review_gate` records both review verdicts. A passing functional report does not satisfy the performance
 budget, and a fast report does not prove functional correctness.
 
 The startup matrix treats dependency `SyntaxWarning` lines as incidental
@@ -111,3 +131,34 @@ Run the Standards + Spec review against `git diff a12e588...${release_sha}`
 and retain both review results beside the archive manifest. Do not close Issue
 #34 or call the release complete until the index, aggregate report, and review
 all identify the same SHA.
+
+## Completing and verifying an archive
+
+After acceptance, run the profile on the same clean checkout:
+
+```sh
+uv run python scripts/profile_g006_preparation.py \
+  --output "${ZHIHENG_DELIVERY_EVIDENCE_ROOT}/${release_sha}/g006-profile.json" \
+  > "${ZHIHENG_DELIVERY_EVIDENCE_ROOT}/${release_sha}/g006-profile.log" 2>&1
+```
+
+Record the command exit code. Check that the profile SHA equals `release_sha`,
+its exit code is zero, and it contains fresh `suite_evidence`,
+`execution_evidence`, and `authorization_evidence`. Inspect the candidate/stage
+bindings, unique run/trajectory identifiers, report digests, canary observations,
+and authorized release identifiers. A previous profile cannot fill missing
+fields in the final run.
+
+Record the current environment, then preserve both completed reviews. Write
+`archive-summary.json` last, with `sha`, `environment`, `functional_gate`,
+`pytest_budget`, `review_gate`, `historical_archive`, and `artifacts`. Its
+`artifacts` map uses archive-relative paths and SHA-256 values, including the
+unaltered acceptance `report.json`, profile, environment, and reviews. Verify
+every digest by reading the archived file, as well as each child report's
+manifest. Reject a missing file or mismatch. The archive summary excludes
+itself to avoid a circular digest. Copy the historical directory together with
+the final archive when transferring evidence.
+
+The index defines the archive key and verification contract; measured final
+counts, timings, environment, and verdicts live in that key's archive summary.
+This avoids modifying the tested commit merely to paste its generated results.

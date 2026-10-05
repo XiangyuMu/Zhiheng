@@ -109,6 +109,9 @@ def test_execution_evidence_deduplicates_and_preserves_bindings(profile: Any) ->
     evidence: list[dict[str, Any]] = []
     result = {
         "id": "run-1",
+        "release_id": "release-a",
+        "binding_digest": "sha256:candidate-binding",
+        "artifact_digest": "sha256:artifact-a",
         "stage": "replay",
         "binding": {"candidate_id": "candidate-a"},
         "trajectory_ids": ["trajectory-1"],
@@ -137,6 +140,9 @@ def test_execution_evidence_deduplicates_and_preserves_bindings(profile: Any) ->
         {
             "kind": "release",
             "run_id": "run-1",
+            "release_id": "release-a",
+            "binding_digest": "sha256:candidate-binding",
+            "artifact_digest": "sha256:artifact-a",
             "candidate_id": "candidate-a",
             "stage": "replay",
             "trajectory_ids": ["trajectory-1"],

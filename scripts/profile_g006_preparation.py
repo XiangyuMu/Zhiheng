@@ -148,6 +148,9 @@ def _record_execution_evidence(kind: str, result: Any, evidence: Evidence) -> No
         {
             "kind": kind,
             "run_id": run_id,
+            "release_id": result.get("release_id"),
+            "binding_digest": result.get("binding_digest"),
+            "artifact_digest": result.get("artifact_digest"),
             "candidate_id": binding.get("candidate_id"),
             "stage": result.get("stage"),
             "trajectory_ids": result.get("trajectory_ids", []),
