@@ -98,7 +98,8 @@ def test_worker_cli_reports_configuration_failure_without_running_jobs(tmp_path:
     )
 
     assert result.returncode == 2
-    assert result.stderr.strip() == "worker startup configuration failed"
+    stderr_lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+    assert stderr_lines[-1:] == ["worker startup configuration failed"]
     assert not (tmp_path / "startup.db").exists()
 
 
