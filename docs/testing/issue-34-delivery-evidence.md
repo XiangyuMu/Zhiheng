@@ -92,6 +92,10 @@ Functional correctness and the 900-second performance budget are reported as
 separate fields. A passing functional report does not satisfy the performance
 budget, and a fast report does not prove functional correctness.
 
+The startup matrix treats dependency `SyntaxWarning` lines as incidental
+stderr noise while asserting the final stable Worker configuration error line;
+this keeps the clean-checkout contract independent of the Python patch level.
+
 ## Verification procedure
 
 After archiving, verify the binding from a clean checkout:
