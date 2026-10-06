@@ -137,7 +137,10 @@ import sqlite3
 from urllib.parse import unquote, urlparse
 path = unquote(urlparse(os.environ["ZHIHENG_DATABASE_URL"]).path)
 with sqlite3.connect(path) as db:
-    print(db.execute("SELECT id FROM model_provider_configs WHERE display_name='Issue 40 Legacy Provider'").fetchone()[0])
+    row = db.execute("SELECT id FROM model_provider_configs WHERE id='issue38-legacy-provider'").fetchone()
+    if row is None:
+        raise SystemExit("legacy Provider fixture issue38-legacy-provider is missing")
+    print(row[0])
 PY
 )"
 export ZHIHENG_ANSWER_MODEL_ID="model-a"

@@ -321,6 +321,8 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         or not isinstance(leakage.get("ciphertexts_scanned"), int)
                         or leakage.get("ciphertexts_scanned", 0) <= 0
                         or not isinstance(leakage.get("screenshot"), str)
+                        or not isinstance(leakage.get("scanned_database_files"), list)
+                        or not leakage.get("scanned_database_files")
                     ):
                         result["error"] = "provider restart leakage evidence is incomplete"
                         results[name] = result

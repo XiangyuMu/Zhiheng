@@ -23,43 +23,11 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
   let browser;
   let context;
   let page;
-  providerServer = https.createServer({
-    key: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_KEY),
-    cert: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_CERT),
-  }, (request, response) => {
-    if (request.url === "/models") {
-      receivedAuth.push(request.headers.authorization || "");
-      if (!request.headers.authorization) {
-        response.writeHead(401, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: "missing authorization" }));
-        return;
-      }
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: [{ id: "model-a" }] }));
-      return;
-    }
-    response.writeHead(404);
-    response.end();
-  });
-  await new Promise((resolve) => providerServer.listen(0, "127.0.0.1", resolve));
-  const providerPort = providerServer.address().port;
-  const providerUrl = `https://127.0.0.1:${providerPort}`;
-  browser = await chromium.launch({ headless: true, channel: "chromium" });
-  context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
-  page = await context.newPage();
   const errors = [];
   const responses = [];
   const observedApiBodies = [];
   const responseBodyReads = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  page.on("response", (response) => {
-    responses.push(response);
-    if (["xhr", "fetch"].includes(response.request().resourceType())
-      && response.url().includes("/v1/model-config")) {
-      responseBodyReads.push(response.text().then((body) => ({ url: response.url(), body }))
-        .catch((error) => ({ url: response.url(), error })));
-    }
-  });
+  let providerUrl;
   async function login() {
     await page.goto(`${base}/login`);
     await page.evaluate(async () => {
@@ -88,6 +56,38 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
   }
   const evidence = {};
   try {
+    providerServer = https.createServer({
+      key: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_KEY),
+      cert: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_CERT),
+    }, (request, response) => {
+      if (request.url === "/models") {
+        receivedAuth.push(request.headers.authorization || "");
+        if (!request.headers.authorization) {
+          response.writeHead(401, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: "missing authorization" }));
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ data: [{ id: "model-a" }] }));
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+    await new Promise((resolve) => providerServer.listen(0, "127.0.0.1", resolve));
+    const providerPort = providerServer.address().port;
+    providerUrl = `https://127.0.0.1:${providerPort}`;
+    browser = await chromium.launch({ headless: true, channel: "chromium" });
+    context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
+    page = await context.newPage();
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("response", (response) => {
+      responses.push(response);
+      if (["xhr", "fetch"].includes(response.request().resourceType())) {
+        responseBodyReads.push(response.text().then((body) => ({ url: response.url(), body }))
+          .catch((error) => ({ url: response.url(), error })));
+      }
+    });
     await login();
     await page.goto(`${base}/knowledge-agent#settings`);
     await page.locator("#model-provider-form").waitFor({ state: "hidden" });

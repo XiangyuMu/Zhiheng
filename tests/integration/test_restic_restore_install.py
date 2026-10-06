@@ -561,6 +561,8 @@ def test_restic_restore_real_api_worker_starts_and_serves_knowledge_without_keyr
     journal_path = tmp_path / "real-target" / "erase-journal.jsonl"
     _empty_journal(journal_path)
     evidence_root = os.environ.get("ZHIHENG_DELIVERY_EVIDENCE")
+    if os.environ.get("ZHIHENG_REQUIRE_DELIVERY_EVIDENCE") == "1" and not evidence_root:
+        pytest.fail("ZHIHENG_DELIVERY_EVIDENCE is required for delivery evidence")
     unavailable_restore = _run_restore(
         _restore_env(repository, binary, snapshot_id, target_db, target_objects, journal_path)
     )
@@ -912,6 +914,10 @@ def test_restic_restore_real_api_worker_starts_and_serves_knowledge_without_keyr
                     },
                     files=(available_api_log, available_worker_log, available_restore_log),
                 )
+    if evidence_root:
+        evidence_path = Path(evidence_root) / "issue39-restic-restore"
+        for scenario in ("missing-keyring", "available-keyring"):
+            assert (evidence_path / scenario / "metadata.json").is_file()
 
 
 def test_restic_restore_supports_real_search_and_original_source_resolution(

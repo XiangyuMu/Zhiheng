@@ -21,6 +21,7 @@ fs.mkdirSync(output, { recursive: true });
     : "Bearer sk-issue40-reentry-key";
   let providerServer;
   const evidence = {};
+  const responseBodyReads = [];
   async function leakageEvidence(keys, logNames, apiBodies) {
     const root = process.env.ZHIHENG_ACCEPTANCE_OUTPUT || output;
     const logs = logNames.map((name) => {
@@ -46,7 +47,13 @@ with sqlite3.connect(sys.argv[1]) as db:
       storage: `${JSON.stringify(localStorage)}${JSON.stringify(sessionStorage)}`,
     }));
     const accessibility = await page.locator("body").ariaSnapshot();
-    const outputs = [browserValues.visible, accessibility, browserValues.inputs, browserValues.storage, ...apiBodies];
+    const capturedResponses = await Promise.all(responseBodyReads);
+    for (const result of capturedResponses) {
+      if (result.error) throw new Error(`could not read response body for ${result.url}: ${result.error}`);
+    }
+    const responseBodies = capturedResponses.map((result) => result.body);
+    const outputs = [browserValues.visible, accessibility, browserValues.inputs,
+      browserValues.storage, ...apiBodies, ...responseBodies];
     const screenshotPath = `${output}/provider-restart.png`;
     await page.screenshot({ path: screenshotPath, fullPage: true });
     const screenshot = fs.readFileSync(screenshotPath);
@@ -67,12 +74,14 @@ with sqlite3.connect(sys.argv[1]) as db:
       accessibility: true,
       input_values: true,
       storage: true,
-      http_responses: apiBodies.length,
+      http_responses: responseBodies.length,
+      http_response_urls: capturedResponses.map((result) => result.url),
       audit: true,
       api_log: true,
       worker_log: true,
       database: true,
       wal_shm: databaseFiles.length >= 1,
+      scanned_database_files: databaseFiles,
       screenshot: "provider-restart.png",
       legacy_key_scanned: true,
       ciphertexts_scanned: ciphertexts.length,
@@ -82,6 +91,12 @@ with sqlite3.connect(sys.argv[1]) as db:
   browser = await chromium.launch({ headless: true, channel: "chromium" });
   context = await browser.newContext();
   page = await context.newPage();
+  page.on("response", (response) => {
+    if (["xhr", "fetch"].includes(response.request().resourceType())) {
+      responseBodyReads.push(response.text().then((body) => ({ url: response.url(), body }))
+        .catch((error) => ({ url: response.url(), error })));
+    }
+  });
   providerServer = https.createServer({
     key: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_KEY),
     cert: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_CERT),
