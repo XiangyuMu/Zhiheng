@@ -258,7 +258,10 @@ def test_gateway_answer_model_rejects_unknown_memory_sensitivity_before_gateway(
     assert transport.calls == []
 
 
-def test_retrieval_retry_keeps_unresolved_dispatch_binding(tmp_path: Path) -> None:
+def test_retrieval_retry_keeps_unresolved_dispatch_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "synthetic-gateway-secret")
     _, settings, session_factory = _migrated_session_factory(tmp_path)
     crashing = SystemExitTransport()
     gateway = ModelGateway._for_test(

@@ -507,7 +507,10 @@ def test_model_gateway_commits_dispatching_before_network_and_sends_only_redacte
     assert probe_count == 1
 
 
-def test_model_gateway_records_failed_audit_after_transport_exception(tmp_path: Path) -> None:
+def test_model_gateway_records_failed_audit_after_transport_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "synthetic-gateway-secret")
     _, settings, session_factory = _migrated_session_factory(tmp_path)
     failing = FailingTransport()
     gateway = ModelGateway._for_test(
@@ -543,7 +546,10 @@ def test_model_gateway_records_failed_audit_after_transport_exception(tmp_path: 
     assert audit == ("failed", "RuntimeError", "provider_call_failed")
 
 
-def test_model_gateway_blocks_automatic_retry_after_unknown_dispatch_crash(tmp_path: Path) -> None:
+def test_model_gateway_blocks_automatic_retry_after_unknown_dispatch_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "synthetic-gateway-secret")
     _, settings, session_factory = _migrated_session_factory(tmp_path)
     crashing = SystemExitTransport()
     gateway = ModelGateway._for_test(
@@ -911,8 +917,9 @@ def test_model_gateway_validates_endpoint_origin_and_external_https(tmp_path: Pa
 
 
 def test_existing_approval_binds_model_policy_endpoint_payload_expiry_and_one_shot(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "synthetic-gateway-secret")
     _, settings, session_factory = _migrated_session_factory(tmp_path)
     payload_hash = sha256_text("sanitized prompt")
     spy = SpyTransport(db_path=tmp_path / "zhiheng.db", calls=[])

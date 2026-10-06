@@ -21,4 +21,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    view_sql: list[tuple[str, str]] = []
+    if bind.dialect.name == "sqlite":
+        view_sql = [
+            (str(row[0]), str(row[1]))
+            for row in bind.execute(
+                sa.text("SELECT name, sql FROM sqlite_master WHERE type='view' AND sql IS NOT NULL")
+            ).fetchall()
+        ]
+        for view_name, _statement in reversed(view_sql):
+            op.execute(f'DROP VIEW IF EXISTS "{view_name}"')
     op.drop_column("model_connectivity_audits", "secret_version")
+    for _view_name, statement in view_sql:
+        op.execute(statement)
