@@ -23,7 +23,6 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
   let browser;
   let context;
   let page;
-  try {
   providerServer = https.createServer({
     key: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_KEY),
     cert: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_CERT),
@@ -88,6 +87,7 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     return body;
   }
   const evidence = {};
+  try {
     await login();
     await page.goto(`${base}/knowledge-agent#settings`);
     await page.locator("#model-provider-form").waitFor({ state: "hidden" });
