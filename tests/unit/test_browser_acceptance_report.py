@@ -88,6 +88,7 @@ ISSUE12_CHECKS = [
 
 PROVIDER_SECRET_CHECKS = [
     "real browser creates encrypted Provider key without rendering plaintext",
+    "refresh and API listing retain only configured state and short fingerprint",
     "browser rotation creates a new version and deletion disables the Provider",
     "browser migrates a legacy env reference to local encrypted storage",
     "synthetic key and complete ciphertext are absent from page, storage, and "
@@ -183,6 +184,7 @@ def complete_provider_secret_checks() -> dict[str, object]:
         "browserErrors": [],
         "evidence": {
             "create": {"secret_status": "configured"},
+            "refresh": {"secret_status": "configured"},
             "rotation": {"secret_version": 2, "enabled": False},
             "migration": {"secret_source": "local"},
             "leakage": {"page": True, "storage": True, "model_config_responses": 27},

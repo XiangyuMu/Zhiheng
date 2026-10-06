@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -62,6 +63,9 @@ def _snapshot(tmp_path: Path) -> tuple[Path, Path, Path]:
 def _add_provider_secret_record(snapshot: Path) -> None:
     connection = sqlite3.connect(snapshot)
     try:
+        instance_id = connection.execute(
+            "SELECT instance_id FROM provider_secret_instances WHERE singleton_id='default'"
+        ).fetchone()[0]
         connection.execute(
             """
             INSERT INTO model_provider_configs (
@@ -81,10 +85,25 @@ def _add_provider_secret_record(snapshot: Path) -> None:
               ciphertext_b64, aad_json, secret_fingerprint, status
             ) VALUES (
               'secret-backup', 'provider-backup', 1, 'AES-256-GCM',
-              'bm9uY2U=', 'Y2lwaGVydGV4dA==', '{\"provider_id\":\"provider-backup\"}',
+              :nonce, :ciphertext, :aad,
               'fingerprint', 'active'
             )
-            """
+            """,
+            {
+                "nonce": base64.b64encode(b"0123456789ab").decode(),
+                "ciphertext": base64.b64encode(b"0123456789abcdef").decode(),
+                "aad": json.dumps(
+                    {
+                        "algorithm": "AES-256-GCM",
+                        "instance_id": instance_id,
+                        "provider_id": "provider-backup",
+                        "secret_id": "secret-backup",
+                        "version": 1,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            },
         )
         connection.commit()
     finally:
@@ -158,14 +177,27 @@ def test_provider_secret_records_are_verified_and_preserved_in_backup(tmp_path: 
             "SELECT secret_version, algorithm, nonce_b64, ciphertext_b64, aad_json "
             "FROM provider_secret_records"
         ).fetchone()
+        restored_instance_id = connection.execute(
+            "SELECT instance_id FROM provider_secret_instances WHERE singleton_id='default'"
+        ).fetchone()[0]
     finally:
         connection.close()
     assert row == (
         1,
         "AES-256-GCM",
-        "bm9uY2U=",
-        "Y2lwaGVydGV4dA==",
-        '{"provider_id":"provider-backup"}',
+        base64.b64encode(b"0123456789ab").decode(),
+        base64.b64encode(b"0123456789abcdef").decode(),
+        json.dumps(
+            {
+                "algorithm": "AES-256-GCM",
+                "instance_id": restored_instance_id,
+                "provider_id": "provider-backup",
+                "secret_id": "secret-backup",
+                "version": 1,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
     )
 
     connection = sqlite3.connect(bundle / "database.sqlite")
@@ -175,6 +207,19 @@ def test_provider_secret_records_are_verified_and_preserved_in_backup(tmp_path: 
     finally:
         connection.close()
     with pytest.raises(ValueError, match="checksum"):
+        verify_backup_bundle(bundle)
+
+
+def test_provider_recovery_metadata_must_match_database(tmp_path: Path) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_provider_secret_record(snapshot)
+    bundle = tmp_path / "bundle-with-mismatched-provider-metadata"
+    stage_backup(snapshot, root, bundle)
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["provider_secret_recovery"]["encrypted_records_in_database"] = False
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="does not match database"):
         verify_backup_bundle(bundle)
 
 

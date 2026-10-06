@@ -119,9 +119,11 @@ def _restore_from_env() -> None:
                 )
                 _replay_latest_journal_again(restored_database, object_root, journal, records)
                 _compact_and_verify_database(restored_database)
-                recovery_metadata = json.loads(
+                manifest_payload = json.loads(
                     (bundle / "manifest.json").read_text(encoding="utf-8")
-                ).get("provider_secret_recovery")
+                )
+                format_version = manifest_payload["format_version"]
+                recovery_metadata = manifest_payload.get("provider_secret_recovery")
                 _refuse_sqlite_sidecars(database)
                 _replace_database(restored_database, database)
             _fsync_directory(database.parent)
@@ -129,7 +131,7 @@ def _restore_from_env() -> None:
             json.dumps(
                 {
                     "restored_snapshot_id": snapshot_id,
-                    "format_version": 2,
+                    "format_version": format_version,
                     "provider_secret_recovery": recovery_metadata,
                 }
             )

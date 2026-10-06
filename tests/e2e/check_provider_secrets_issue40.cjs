@@ -67,6 +67,13 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     assert(provider && provider.secret_status === "configured");
     assert(!JSON.stringify(providers).includes(syntheticKey));
     evidence.create = { provider_id: provider.provider_id, secret_status: provider.secret_status, fingerprint: provider.secret_fingerprint };
+    await page.reload();
+    const refreshed = await api("/v1/model-config/providers");
+    const refreshedProvider = refreshed.find((item) => item.provider_id === provider.provider_id);
+    assert.equal(refreshedProvider.secret_status, "configured");
+    assert.equal(refreshedProvider.secret_fingerprint, provider.secret_fingerprint);
+    assert(!JSON.stringify(refreshedProvider).includes(syntheticKey));
+    evidence.refresh = { secret_status: refreshedProvider.secret_status, fingerprint: refreshedProvider.secret_fingerprint };
 
     const createdCard = page.locator("li.provider-card").filter({ hasText: "Issue 40 Browser Provider" });
     await createdCard.getByRole("button", { name: "编辑", exact: true }).click();
@@ -113,6 +120,7 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     evidence.leakage = { page: true, storage: true, model_config_responses: responses.length };
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "passed", checks: [
       "real browser creates encrypted Provider key without rendering plaintext",
+      "refresh and API listing retain only configured state and short fingerprint",
       "refresh and API listing retain only configured state and short fingerprint",
       "browser rotation creates a new version and deletion disables the Provider",
       "browser migrates a legacy env reference to local encrypted storage",

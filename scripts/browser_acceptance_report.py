@@ -99,6 +99,7 @@ PROVIDER_SECRET_CHECKS = {
         "synthetic key and complete ciphertext are absent from page, storage, and "
         "model-config responses"
     ),
+    "refresh": "refresh and API listing retain only configured state and short fingerprint",
 }
 
 EXPECTED_CHECKS = {
@@ -209,6 +210,24 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     ]
                     if missing_provider:
                         result["error"] = f"required checks missing: {missing_provider}"
+                        results[name] = result
+                        continue
+                    evidence_payload = payload.get("evidence")
+                    if not isinstance(evidence_payload, dict) or any(
+                        key not in evidence_payload
+                        or not isinstance(evidence_payload[key], dict)
+                        or not evidence_payload[key]
+                        for key in PROVIDER_SECRET_CHECKS
+                    ):
+                        result["error"] = "provider secret evidence fields missing"
+                        results[name] = result
+                        continue
+                    leakage = evidence_payload["leakage"]
+                    if any(
+                        leakage.get(key) is not True
+                        for key in ("page", "storage")
+                    ) or not isinstance(leakage.get("model_config_responses"), int):
+                        result["error"] = "provider leakage evidence is incomplete"
                         results[name] = result
                         continue
                 if name == "context_prompts_issue8":

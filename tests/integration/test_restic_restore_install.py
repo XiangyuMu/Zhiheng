@@ -163,7 +163,11 @@ def _make_backup(
         text=True,
         check=True,
     )
-    snapshot_id = json.loads(result.stdout)["snapshot_id"]
+    backup_payload = json.loads(result.stdout)
+    assert backup_payload["format_version"] == 2
+    if provider_secret_store is not None:
+        assert backup_payload["provider_secret_recovery"]["encrypted_records_in_database"] is True
+    snapshot_id = backup_payload["snapshot_id"]
     assert isinstance(snapshot_id, str)
     return repository, snapshot_id, knowledge_object_id
 

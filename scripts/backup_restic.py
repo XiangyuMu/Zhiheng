@@ -40,7 +40,16 @@ def main() -> None:
         ]
         if len(summaries) != 1 or not summaries[0].get("snapshot_id"):
             raise RuntimeError("restic did not return one completed snapshot")
-        print(json.dumps({"snapshot_id": summaries[0]["snapshot_id"], "format_version": 1}))
+        manifest = json.loads((parent / "bundle" / "manifest.json").read_text(encoding="utf-8"))
+        print(
+            json.dumps(
+                {
+                    "snapshot_id": summaries[0]["snapshot_id"],
+                    "format_version": manifest["format_version"],
+                    "provider_secret_recovery": manifest.get("provider_secret_recovery"),
+                }
+            )
+        )
 
 
 if __name__ == "__main__":

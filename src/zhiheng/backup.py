@@ -5,6 +5,7 @@ This is a local staging primitive, not a complete encrypted backup workflow.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -135,6 +136,9 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
         raise ValueError("invalid provider secret recovery metadata")
     if recovery is not None and recovery["encrypted_records_in_database"]:
         _verify_provider_secret_records(root / "database.sqlite")
+    database_has_secrets = _has_provider_secret_records(root / "database.sqlite")
+    if recovery is not None and recovery["encrypted_records_in_database"] != database_has_secrets:
+        raise ValueError("provider secret recovery metadata does not match database")
     expected_files = {"manifest.json", "database.sqlite"}
     artifacts: list[BackupArtifact] = []
     for item in payload["artifacts"]:
@@ -190,15 +194,35 @@ def _verify_provider_secret_records(database: Path) -> None:
         }
         if tables != {"provider_secret_instances", "provider_secret_records"}:
             raise ValueError("provider secret tables are missing from restored database")
+        instance = connection.execute(
+            "SELECT instance_id FROM provider_secret_instances WHERE singleton_id='default'"
+        ).fetchone()
+        if instance is None or not isinstance(instance[0], str) or not instance[0]:
+            raise ValueError("provider secret instance metadata is incomplete")
+        instance_id = instance[0]
         rows = connection.execute(
-            "SELECT secret_version, algorithm, nonce_b64, ciphertext_b64, aad_json "
-            "FROM provider_secret_records"
+            "SELECT id, provider_id, secret_version, algorithm, nonce_b64, ciphertext_b64, "
+            "aad_json FROM provider_secret_records"
         ).fetchall()
-        for version, algorithm, nonce, ciphertext, aad in rows:
+        for secret_id, provider_id, version, algorithm, nonce, ciphertext, aad in rows:
             if not isinstance(version, int) or version < 1 or algorithm != "AES-256-GCM":
                 raise ValueError("restored provider secret metadata is invalid")
-            if not all(isinstance(value, str) and value for value in (nonce, ciphertext, aad)):
+            try:
+                nonce_bytes = base64.b64decode(nonce, validate=True)
+                ciphertext_bytes = base64.b64decode(ciphertext, validate=True)
+                aad_payload = json.loads(aad)
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("restored provider secret ciphertext is invalid") from exc
+            if len(nonce_bytes) != 12 or len(ciphertext_bytes) < 16:
                 raise ValueError("restored provider secret ciphertext is incomplete")
+            if aad_payload != {
+                "algorithm": algorithm,
+                "instance_id": instance_id,
+                "provider_id": provider_id,
+                "secret_id": secret_id,
+                "version": version,
+            }:
+                raise ValueError("restored provider secret authenticated data is invalid")
     finally:
         connection.close()
 
