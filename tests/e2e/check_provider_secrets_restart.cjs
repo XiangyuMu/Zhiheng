@@ -92,7 +92,8 @@ with sqlite3.connect(sys.argv[1]) as db:
   context = await browser.newContext();
   page = await context.newPage();
   page.on("response", (response) => {
-    if (["xhr", "fetch"].includes(response.request().resourceType())) {
+    if (["xhr", "fetch"].includes(response.request().resourceType())
+      && response.url().includes("/v1/")) {
       responseBodyReads.push(response.text().then((body) => ({ url: response.url(), body }))
         .catch((error) => ({ url: response.url(), error })));
     }
