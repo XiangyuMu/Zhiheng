@@ -187,3 +187,7 @@ Ruff/Mypy 和固定集提炼。验收机器需保持唤醒，暂停或系统休�
 核对 `report.json` 的 SHA、干净状态、无跳过、所有阶段通过，以及 `browser/report.json` 中完整的工具版本。
 日志和截图仅使用合成数据，完整证据存于持久目录；将报告与 [需求矩阵](../testing/issue-17-delivery-matrix.md)
 一起交付，不能以本说明或历史绿色测试替代。
+
+### Provider secret recovery
+
+Provider keys are encrypted in the database with an instance master key held by the native keyring. Backups contain ciphertext and version metadata but never the master key. Restore the database and object store first; then make the native keyring entry available. If it cannot be recovered, the API and Worker still serve knowledge data while the affected Provider reports `unavailable` and must be re-entered in Settings.

@@ -61,3 +61,7 @@ Linux Secret Service requires a working user D-Bus session and secret service.
 An unavailable or locked backend is an observable credential error; tests must
 not reinterpret it as an empty credential store or create replacement master
 keys during reads.
+
+## Browser and recovery evidence
+
+Issue #40 is exercised by `tests/e2e/check_provider_secrets_issue40.cjs`, which drives the settings page through real API calls for creation, rotation, deletion, and legacy migration. `scripts/browser_acceptance.sh` exports only a synthetic legacy fixture value for that run and stores the resulting checks under the acceptance output directory. The backup manifest records encrypted Provider rows and the external native-keyring dependency; missing keyring material is an unavailable Provider state, not a startup or knowledge-search failure.

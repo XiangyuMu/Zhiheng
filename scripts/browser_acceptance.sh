@@ -69,6 +69,7 @@ run_stage "playwright-install" npx playwright install chromium
 export ZHIHENG_DATABASE_URL="sqlite:///${DB_PATH}"
 export ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH="${OBJECT_STORE}"
 export ZHIHENG_SECRET_KEY="issue17-acceptance-secret-key"
+export ZHIHENG_PRIVATE_ISSUE40_LEGACY="issue40-browser-legacy-key"
 export ZHIHENG_ENVIRONMENT="test"
 export ZHIHENG_API_HOST="127.0.0.1"
 export ZHIHENG_API_PORT="${PORT}"
@@ -116,6 +117,7 @@ run_stage "issue12-relations" node tests/e2e/check_issue12_relations.cjs "${BASE
 run_stage "issue14-writes" node tests/e2e/check_issue14_writes.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue14-writes"
 run_stage "import-failures" node tests/e2e/check_import_failures.cjs "${BASE_URL}" "${OUTPUT_DIR}/import-failures"
 run_stage "issue10-matrix" node tests/e2e/check_issue10_matrix.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue10-matrix"
+run_stage "provider-secrets-issue40" node tests/e2e/check_provider_secrets_issue40.cjs "${BASE_URL}" "${OUTPUT_DIR}/provider-secrets-issue40"
 
 CURRENT_STAGE="process-liveness"
 if ! kill -0 "${API_PID}" 2>/dev/null || ! kill -0 "${WORKER_PID}" 2>/dev/null; then
