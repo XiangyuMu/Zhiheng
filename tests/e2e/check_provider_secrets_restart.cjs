@@ -75,7 +75,7 @@ fs.mkdirSync(output, { recursive: true });
       });
       return { status: response.status, body: await response.json() };
     }, { providerId: provider.provider_id, csrf });
-    assert.equal(connectivity.status, 200);
+    assert.equal(connectivity.status, 200, JSON.stringify(connectivity.body));
     assert.equal(connectivity.body.status, "succeeded");
     assert.deepEqual(receivedAuth.at(-1), "Bearer sk-issue40-reentry-key");
     const search = await page.evaluate(async () => {
