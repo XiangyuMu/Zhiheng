@@ -904,7 +904,11 @@ def test_restic_restore_real_api_worker_starts_and_serves_knowledge_without_keyr
                         "database": str(available_target_db),
                         "object_store": str(available_target_objects),
                         "provider_status": "configured",
-                        "provider_requests": provider_requests,
+                        "provider_request_count": len(provider_requests),
+                        "all_authorization_headers_matched_expected": all(
+                            header == "Bearer sk-restic-provider-secret"
+                            for header in provider_requests
+                        ),
                     },
                     files=(available_api_log, available_worker_log, available_restore_log),
                 )
