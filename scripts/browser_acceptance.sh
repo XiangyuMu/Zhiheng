@@ -83,6 +83,7 @@ export ZHIHENG_PRIVATE_ISSUE40_LEGACY="issue40-browser-legacy-key"
 export ZHIHENG_ENVIRONMENT="test"
 export ZHIHENG_API_HOST="127.0.0.1"
 export ZHIHENG_API_PORT="${PORT}"
+export ZHIHENG_EXTERNAL_MODELS_ENABLED="true"
 CURRENT_STAGE="migration"
 uv run python scripts/prepare_issue11_legacy_db.py "${DB_PATH}" >"${OUTPUT_DIR}/migration.log" 2>&1
 uv run python scripts/upgrade_database.py "${DB_PATH}" >>"${OUTPUT_DIR}/migration.log" 2>&1

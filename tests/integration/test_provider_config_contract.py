@@ -756,12 +756,31 @@ def test_rotated_key_is_the_only_key_sent_to_provider_http_transport(
     provider = created.json()
     app: Any = client.app
     with app.state.session_factory() as session:
+        old_secret_ref = str(
+            session.execute(
+                text("SELECT secret_ref FROM model_provider_configs WHERE id=:id"),
+                {"id": provider["provider_id"]},
+            ).scalar_one()
+        )
+    rotated = client.patch(
+        f"/v1/model-config/providers/{provider['provider_id']}",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": provider["etag"],
+            "Idempotency-Key": "http-rotation-replace",
+        },
+        json={"api_key": "sk-issue37-http-key-rotated"},
+    )
+    assert rotated.status_code == 200
+    with app.state.session_factory() as session:
         secret_ref = str(
             session.execute(
                 text("SELECT secret_ref FROM model_provider_configs WHERE id=:id"),
                 {"id": provider["provider_id"]},
             ).scalar_one()
         )
+    with pytest.raises(PermissionError):
+        store.resolve(old_secret_ref, provider_id=provider["provider_id"])
     headers_seen: list[str] = []
 
     class FakeResponse:
@@ -798,8 +817,9 @@ def test_rotated_key_is_the_only_key_sent_to_provider_http_transport(
         ),
     )
     assert response.text == "ok"
-    assert headers_seen == ["{'Authorization': 'Bearer sk-issue37-http-key'}"]
+    assert headers_seen == ["{'Authorization': 'Bearer sk-issue37-http-key-rotated'}"]
     assert "sk-issue37-http-key" not in json.dumps(provider)
+    assert "Bearer sk-issue37-http-key'}" not in headers_seen[0]
 
 
 def test_legacy_environment_secret_migrates_once_and_survives_environment_removal(
@@ -1158,6 +1178,46 @@ def test_provider_update_rejects_stale_etag(tmp_path: Path) -> None:
     assert client.get("/v1/model-config/providers").json()[0]["display_name"] == "Updated"
 
 
+def test_concurrent_secret_replacements_allow_only_one_etag_winner(tmp_path: Path) -> None:
+    store = ProviderSecretStore(master_key_backend=InMemoryMasterKeyBackend())
+    client = _empty_client(tmp_path, store)
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "etag-secret-create"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "ETag Secret Provider",
+            "base_url": "https://models.example.test/v1",
+            "api_key": "sk-issue37-etag-old",
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    provider = created.json()
+    headers = {
+        "X-CSRF-Token": csrf,
+        "If-Match": provider["etag"],
+    }
+    first = client.patch(
+        f"/v1/model-config/providers/{provider['provider_id']}",
+        headers={**headers, "Idempotency-Key": "etag-secret-first"},
+        json={"api_key": "sk-issue37-etag-first"},
+    )
+    second = client.patch(
+        f"/v1/model-config/providers/{provider['provider_id']}",
+        headers={**headers, "Idempotency-Key": "etag-secret-second"},
+        json={"api_key": "sk-issue37-etag-second"},
+    )
+    assert sorted((first.status_code, second.status_code)) == [200, 412]
+    current = client.get("/v1/model-config/providers").json()[0]
+    assert current["secret_version"] == 2
+    assert current["secret_fingerprint"] in {
+        first.json().get("secret_fingerprint"),
+        second.json().get("secret_fingerprint"),
+    }
+
+
 def test_connectivity_probe_rejects_malformed_or_missing_model_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1196,6 +1256,66 @@ def test_connectivity_probe_rejects_malformed_or_missing_model_response(
         model_id="model-a",
     )
     assert missing_model[:2] == ("failed", "model_not_found")
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_code"),
+    [
+        (401, "authentication_failed"),
+        (403, "authentication_failed"),
+        (429, "rate_limited"),
+        (500, "http_error"),
+    ],
+)
+def test_connectivity_probe_diagnoses_http_failures_without_secret_leaks(
+    monkeypatch: pytest.MonkeyPatch, status_code: int, expected_code: str
+) -> None:
+    secret = "sk-issue37-diagnostic-secret"
+    monkeypatch.setenv("ZHIHENG_PRIVATE_ISSUE37_DIAGNOSTIC", secret)
+
+    class Response:
+        def __init__(self) -> None:
+            self.status_code = status_code
+
+        def json(self) -> object:
+            return {"error": secret}
+
+        def __str__(self) -> str:
+            return secret
+
+    monkeypatch.setattr("zhiheng.models._transports.httpx.get", lambda *a, **k: Response())
+    result = probe_provider_connectivity(
+        endpoint_url="https://models.example.test/v1",
+        provider_kind="openai-compatible",
+        secret_ref="env:ZHIHENG_PRIVATE_ISSUE37_DIAGNOSTIC",
+        model_id="model-a",
+    )
+    assert result[:2] == ("failed", expected_code)
+    assert secret not in json.dumps(result, ensure_ascii=False)
+
+
+def test_connectivity_probe_diagnoses_timeout_and_tls_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "sk-issue37-transport-secret"
+    monkeypatch.setenv("ZHIHENG_PRIVATE_ISSUE37_TRANSPORT", secret)
+    for error, expected_code in (
+        (httpx.TimeoutException("timed out"), "timeout"),
+        (httpx.ConnectError("certificate verify failed: tls", request=None), "tls_error"),
+    ):
+        def raise_error(*args: object, _error: Exception = error, **kwargs: object) -> object:
+            del args, kwargs
+            raise _error
+
+        monkeypatch.setattr("zhiheng.models._transports.httpx.get", raise_error)
+        result = probe_provider_connectivity(
+            endpoint_url="https://models.example.test/v1",
+            provider_kind="openai-compatible",
+            secret_ref="env:ZHIHENG_PRIVATE_ISSUE37_TRANSPORT",
+            model_id="model-a",
+        )
+        assert result[:2] == ("failed", expected_code)
+        assert secret not in json.dumps(result, ensure_ascii=False)
 
 
 @pytest.mark.parametrize(
