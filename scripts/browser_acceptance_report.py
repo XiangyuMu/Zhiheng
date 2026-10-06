@@ -117,6 +117,7 @@ EXPECTED_CHECKS = {
     "issue11_upgrade": Path("issue11-upgrade/checks.json"),
     "issue12_relations": Path("issue12-relations/checks.json"),
     "provider_secrets_issue40": Path("provider-secrets-issue40/checks.json"),
+    "provider_restart": Path("provider-restart/checks.json"),
 }
 
 
@@ -200,6 +201,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     "issue11_upgrade",
                     "issue12_relations",
                     "provider_secrets_issue40",
+                    "provider_restart",
                 } and (not isinstance(payload.get("evidence"), dict) or not payload["evidence"]):
                     result["error"] = "concrete browser evidence fields missing"
                     results[name] = result

@@ -265,6 +265,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "issue11-upgrade/checks.json",
         "issue12-relations/checks.json",
         "provider-secrets-issue40/checks.json",
+        "provider-restart/checks.json",
     ):
         write_checks(
             tmp_path,
