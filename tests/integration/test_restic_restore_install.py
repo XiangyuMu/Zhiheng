@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
 import pytest
@@ -392,11 +393,12 @@ def test_restic_restore_preserves_provider_ciphertext_and_supports_reentry(
 
     def fake_get(*args: object, **kwargs: object) -> ProviderResponse:
         del args
-        seen_headers.update(kwargs["headers"])
+        seen_headers.update(cast(dict[str, str], kwargs["headers"]))
         return ProviderResponse()
 
     monkeypatch.setattr("zhiheng.models._transports.httpx.get", fake_get)
-    with reentry.app.state.session_factory() as session:
+    reentry_app: Any = reentry.app
+    with reentry_app.state.session_factory() as session:
         route = session.execute(
             text(
                 "SELECT endpoint_url, provider_kind, secret_ref FROM model_provider_configs "
@@ -409,7 +411,7 @@ def test_restic_restore_preserves_provider_ciphertext_and_supports_reentry(
         secret_ref=str(route[2]),
         provider_id="provider-restic",
         model_id="model-a",
-        secret_store=reentry.app.state.provider_secret_store,
+        secret_store=reentry_app.state.provider_secret_store,
     )
     assert status[:2] == ("succeeded", "ok")
     assert seen_headers == {"Authorization": "Bearer sk-restic-reentered-secret"}
