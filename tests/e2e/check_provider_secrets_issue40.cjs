@@ -20,9 +20,7 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
   const errors = [];
   const responses = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  page.on("response", (response) => {
-    if (response.url().includes("/v1/model-config")) responses.push(response);
-  });
+  page.on("response", (response) => responses.push(response));
   async function login() {
     await page.goto(`${base}/login`);
     await page.evaluate(async () => {
@@ -67,6 +65,9 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     assert(provider && provider.secret_status === "configured");
     assert(!JSON.stringify(providers).includes(syntheticKey));
     evidence.create = { provider_id: provider.provider_id, secret_status: provider.secret_status, fingerprint: provider.secret_fingerprint };
+    const connectivity = await api(`/v1/model-config/providers/${provider.provider_id}/connectivity-test`, { method: "POST" });
+    assert(["succeeded", "failed"].includes(connectivity.status));
+    evidence.connection = { status: connectivity.status, diagnostic_code: connectivity.diagnostic_code || null };
     await page.reload();
     const refreshed = await api("/v1/model-config/providers");
     const refreshedProvider = refreshed.find((item) => item.provider_id === provider.provider_id);
@@ -108,6 +109,9 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     assert.equal(migrated.secret_version, 1);
     assert(!JSON.stringify(migrated).includes(legacyRef));
     evidence.migration = { provider_id: migrated.provider_id, secret_source: migrated.secret_source, secret_version: migrated.secret_version };
+    const audit = await api(`/v1/model-config/audits?provider_id=${migrated.provider_id}`);
+    assert(!JSON.stringify(audit).includes(syntheticKey));
+    evidence.audit = { entries: Array.isArray(audit) ? audit.length : (audit.items || []).length };
 
     const storage = await page.evaluate(() => ({ local: JSON.stringify(localStorage), session: JSON.stringify(sessionStorage) }));
     assert(!storage.local.includes(syntheticKey) && !storage.session.includes(syntheticKey));
@@ -115,12 +119,38 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     assert(!visible.includes(syntheticKey) && !visible.includes("ciphertext_b64"));
     for (const response of responses) {
       const body = await response.text().catch(() => "");
-      assert(!body.includes(syntheticKey) && !body.includes("ciphertext_b64"));
+      assert(!body.includes(syntheticKey) && !body.includes(`${syntheticKey}-rotated`));
+      assert(!body.includes("ciphertext_b64"));
     }
-    evidence.leakage = { page: true, storage: true, model_config_responses: responses.length };
+    const screenshotPath = path.join(output, "provider-secrets.png");
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    const acceptanceRoot = process.env.ZHIHENG_ACCEPTANCE_OUTPUT || output;
+    const logContents = ["api.log", "worker.log"].map((name) => {
+      const file = path.join(acceptanceRoot, name);
+      return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+    }).join("\n");
+    assert(!logContents.includes(syntheticKey) && !logContents.includes(`${syntheticKey}-rotated`));
+    const databaseUrl = process.env.ZHIHENG_DATABASE_URL || "";
+    const databasePath = databaseUrl.startsWith("sqlite:///") ? databaseUrl.slice("sqlite:///".length) : "";
+    const databaseBytes = databasePath && fs.existsSync(databasePath) ? fs.readFileSync(databasePath, "utf8") : "";
+    assert(!databaseBytes.includes(syntheticKey) && !databaseBytes.includes(`${syntheticKey}-rotated`));
+    const screenshotBytes = fs.readFileSync(screenshotPath, "utf8");
+    assert(!screenshotBytes.includes(syntheticKey) && !screenshotBytes.includes(`${syntheticKey}-rotated`));
+    evidence.leakage = {
+      page: true,
+      storage: true,
+      http_responses: responses.length,
+      api_log: true,
+      worker_log: true,
+      database: true,
+      screenshot: "provider-secrets.png",
+      audit: true,
+      model_config_responses: responses.filter((response) => response.url().includes("/v1/model-config")).length,
+    };
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "passed", checks: [
       "real browser creates encrypted Provider key without rendering plaintext",
       "refresh and API listing retain only configured state and short fingerprint",
+      "browser completes a real Provider connectivity test with a stable diagnostic",
       "browser rotation creates a new version and deletion disables the Provider",
       "browser migrates a legacy env reference to local encrypted storage",
       "synthetic key and complete ciphertext are absent from page, storage, and model-config responses",

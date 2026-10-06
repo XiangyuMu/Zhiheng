@@ -91,6 +91,7 @@ PROVIDER_SECRET_CHECKS = [
     "refresh and API listing retain only configured state and short fingerprint",
     "browser rotation creates a new version and deletion disables the Provider",
     "browser migrates a legacy env reference to local encrypted storage",
+    "browser completes a real Provider connectivity test with a stable diagnostic",
     "synthetic key and complete ciphertext are absent from page, storage, and "
     "model-config responses",
 ]
@@ -185,9 +186,20 @@ def complete_provider_secret_checks() -> dict[str, object]:
         "evidence": {
             "create": {"secret_status": "configured"},
             "refresh": {"secret_status": "configured"},
+            "connection": {"status": "failed", "diagnostic_code": "network_error"},
             "rotation": {"secret_version": 2, "enabled": False},
             "migration": {"secret_source": "local"},
-            "leakage": {"page": True, "storage": True, "model_config_responses": 27},
+            "leakage": {
+                "page": True,
+                "storage": True,
+                "api_log": True,
+                "worker_log": True,
+                "database": True,
+                "audit": True,
+                "screenshot": "provider-secrets.png",
+                "http_responses": 31,
+                "model_config_responses": 27,
+            },
         },
     }
 

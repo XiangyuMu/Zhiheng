@@ -30,6 +30,7 @@ from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextE
 from zhiheng.knowledge.object_store import LocalKnowledgeObjectStore, StoredTextArtifacts
 from zhiheng.privacy.erase_journal import ExternalEraseJournal
 from zhiheng.retrieval.repository import CitationContextRepository, LexicalRetriever
+from zhiheng.models._transports import probe_provider_connectivity
 from zhiheng.secrets import InMemoryMasterKeyBackend, ProviderSecretStore
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -272,7 +273,7 @@ def test_restic_restore_installs_clean_bundle_into_new_target(tmp_path: Path) ->
 
 
 def test_restic_restore_preserves_provider_ciphertext_and_supports_reentry(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     binary = _restic_binary()
     master_keys = InMemoryMasterKeyBackend()
@@ -318,6 +319,28 @@ def test_restic_restore_preserves_provider_ciphertext_and_supports_reentry(
     assert providers.status_code == 200
     assert providers.json()[0]["secret_status"] == "configured"
 
+    with sqlite3.connect(target_db) as connection:
+        connection.execute(
+            "UPDATE provider_secret_records SET ciphertext_b64='AAAA' "
+            "WHERE provider_id='provider-restic'"
+        )
+        connection.commit()
+    broken = TestClient(
+        create_app(
+            settings,
+            secret_store=ProviderSecretStore(master_key_backend=master_keys),
+        )
+    )
+    assert broken.get("/healthz").status_code == 200
+    broken_login = broken.post(
+        "/auth/login",
+        json={"username": "restore-owner", "password": "restore-owner-password"},
+    )
+    assert broken_login.status_code == 200
+    assert broken.get("/v1/model-config/providers").json()[0]["secret_status"] == "unavailable"
+    with session_scope(_open_session_factory(target_db)) as session:
+        assert LexicalRetriever().search(session, "restore install")
+
     unavailable = TestClient(
         create_app(
             settings,
@@ -357,6 +380,39 @@ def test_restic_restore_preserves_provider_ciphertext_and_supports_reentry(
     )
     assert replaced.status_code == 200, replaced.text
     assert replaced.json()["secret_status"] == "configured"
+
+    class ProviderResponse:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"data": [{"id": "model-a"}]}
+
+    seen_headers: dict[str, str] = {}
+
+    def fake_get(*args: object, **kwargs: object) -> ProviderResponse:
+        del args
+        seen_headers.update(kwargs["headers"])
+        return ProviderResponse()
+
+    monkeypatch.setattr("zhiheng.models._transports.httpx.get", fake_get)
+    with reentry.app.state.session_factory() as session:
+        route = session.execute(
+            text(
+                "SELECT endpoint_url, provider_kind, secret_ref FROM model_provider_configs "
+                "WHERE id='provider-restic'"
+            )
+        ).one()
+    status = probe_provider_connectivity(
+        endpoint_url=str(route[0]),
+        provider_kind=str(route[1]),
+        secret_ref=str(route[2]),
+        provider_id="provider-restic",
+        model_id="model-a",
+        secret_store=reentry.app.state.provider_secret_store,
+    )
+    assert status[:2] == ("succeeded", "ok")
+    assert seen_headers == {"Authorization": "Bearer sk-restic-reentered-secret"}
 
 
 def test_restic_restore_supports_real_search_and_original_source_resolution(
