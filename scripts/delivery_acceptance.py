@@ -95,6 +95,8 @@ def main() -> int:
     sha = git(repo, "rev-parse", "HEAD")
     env = clean_environment()
     env["ZHIHENG_ACCEPTANCE_OUTPUT"] = str(output / "browser")
+    env["ZHIHENG_DELIVERY_EVIDENCE"] = str(output / "recovery")
+    env["ZHIHENG_REQUIRE_DELIVERY_EVIDENCE"] = "1"
     report: dict[str, Any] = {
         "sha": sha,
         "status": "running",
