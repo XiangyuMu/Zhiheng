@@ -57,6 +57,21 @@ def main() -> None:
             "INSERT INTO conclusion_versions (entry_id, version, payload_json) VALUES (?, 1, ?)",
             ("issue11-legacy-entry", payload),
         )
+        connection.execute(
+            "INSERT INTO model_provider_configs "
+            "(id, provider_kind, display_name, enabled, policy_json, secret_ref, "
+            "model_allowlist_json, endpoint_url, endpoint_origin, policy_revision) "
+            "VALUES (?, 'openai-compatible', ?, 1, '{}', ?, ?, ?, ?, ?)",
+            (
+                "issue38-legacy-provider",
+                "Issue 38 Legacy Provider",
+                "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY",
+                '["model-a"]',
+                "https://models.example.test/v1",
+                "https://models.example.test",
+                "legacy-provider-revision",
+            ),
+        )
 
 
 if __name__ == "__main__":

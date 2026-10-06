@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
+import socket
 import sqlite3
+import ssl
 import subprocess
 import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
+import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -247,6 +254,70 @@ def _digest(path: Path) -> str:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
+def _free_loopback_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+def _wait_for_api(
+    process: subprocess.Popen[str], base_url: str, log_path: Path
+) -> None:
+    deadline = time.monotonic() + 30
+    with httpx.Client(base_url=base_url, timeout=1.0) as client:
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise AssertionError(f"API exited during startup; see {log_path}")
+            try:
+                if client.get("/healthz").status_code == 200:
+                    return
+            except httpx.HTTPError:
+                pass
+            time.sleep(0.2)
+    raise AssertionError(f"API did not become ready; see {log_path}")
+
+
+def _write_unavailable_keyring(path: Path) -> None:
+    backend = path / "keyring" / "backends"
+    backend.mkdir(parents=True)
+    (path / "keyring" / "__init__.py").write_text("")
+    (backend / "__init__.py").write_text("")
+    implementation = """
+class Keyring:
+    def get_password(self, service, username):
+        raise RuntimeError('synthetic missing native keyring')
+    def set_password(self, service, username, value):
+        raise RuntimeError('synthetic missing native keyring')
+"""
+    (backend / "macOS.py").write_text(implementation)
+    (backend / "SecretService.py").write_text(implementation)
+
+
+def _write_available_keyring(path: Path, key: bytes, key_file: Path) -> None:
+    backend = path / "keyring" / "backends"
+    encoded = base64.b64encode(key).decode("ascii")
+    backend.mkdir(parents=True, exist_ok=True)
+    (path / "keyring" / "__init__.py").write_text("")
+    (backend / "__init__.py").write_text("")
+    implementation = f"""
+import json
+from pathlib import Path
+class Keyring:
+    def get_password(self, service, username):
+        path = Path({str(key_file)!r})
+        if not path.exists():
+            return None
+        return json.loads(path.read_text()).get(f"{{service}}:{{username}}")
+    def set_password(self, service, username, value):
+        Path({str(key_file)!r}).write_text(json.dumps({{f"{{service}}:{{username}}": value}}))
+"""
+    (backend / "macOS.py").write_text(implementation)
+    (backend / "SecretService.py").write_text(implementation)
+    key_file.write_text(
+        json.dumps({"zhiheng.provider-secrets:default": encoded}), encoding="utf-8"
+    )
+
+
 def test_restic_restore_installs_clean_bundle_into_new_target(tmp_path: Path) -> None:
     binary = _restic_binary()
     repository, snapshot_id, _ = _make_backup(tmp_path, binary)
@@ -415,6 +486,267 @@ def test_restic_restore_preserves_provider_ciphertext_and_supports_reentry(
     )
     assert status[:2] == ("succeeded", "ok")
     assert seen_headers == {"Authorization": "Bearer sk-restic-reentered-secret"}
+
+
+def test_restic_restore_real_api_worker_serves_knowledge_without_keyring(
+    tmp_path: Path,
+) -> None:
+    """The restore boundary must be proven with real serving processes and HTTP."""
+    binary = _restic_binary()
+    master_key = b"r" * 32
+    source_store = ProviderSecretStore(master_key_backend=InMemoryMasterKeyBackend(key=master_key))
+    repository, snapshot_id, knowledge_object_id = _make_backup(
+        tmp_path, binary, provider_secret_store=source_store
+    )
+    target_db = tmp_path / "real-target" / "zhiheng.db"
+    target_objects = tmp_path / "real-target" / "objects"
+    journal_path = tmp_path / "real-target" / "erase-journal.jsonl"
+    _empty_journal(journal_path)
+    _run_restore(
+        _restore_env(repository, binary, snapshot_id, target_db, target_objects, journal_path)
+    )
+    # The restored fixture is intentionally public to the authenticated
+    # acceptance session; ownership isolation is covered by the retrieval
+    # contract tests and must not hide the restore serving assertion here.
+    with sqlite3.connect(target_db) as connection:
+        connection.execute("UPDATE knowledge_objects SET owner_user_id=NULL")
+        connection.commit()
+
+    unavailable_keyring = tmp_path / "unavailable-keyring"
+    _write_unavailable_keyring(unavailable_keyring)
+    port = _free_loopback_port()
+    env = _restore_env(repository, binary, snapshot_id, target_db, target_objects, journal_path)
+    env.update(
+        {
+            "PYTHONPATH": f"{unavailable_keyring}:{REPO_ROOT / 'src'}",
+            "ZHIHENG_DATABASE_URL": f"sqlite:///{target_db}",
+            "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH": str(target_objects),
+            "ZHIHENG_ENVIRONMENT": "test",
+            "ZHIHENG_SECRET_KEY": JOURNAL_SECRET,
+            "ZHIHENG_API_HOST": "127.0.0.1",
+            "ZHIHENG_API_PORT": str(port),
+        }
+    )
+    api_log = tmp_path / "real-api.log"
+    worker_log = tmp_path / "real-worker.log"
+    with api_log.open("w") as api_handle, worker_log.open("w") as worker_handle:
+        api = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "zhiheng.api.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=api_handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        worker: subprocess.Popen[str] | None = None
+        try:
+            base_url = f"http://127.0.0.1:{port}"
+            _wait_for_api(api, base_url, api_log)
+            worker = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "zhiheng.worker.main",
+                    "--role",
+                    "worker",
+                    "--idle-seconds",
+                    "1",
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                stdout=worker_handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            with httpx.Client(base_url=base_url, timeout=10.0) as client:
+                bootstrap = client.post(
+                    "/auth/bootstrap",
+                    json={"username": "synthetic-test-user", "password": "restore-password"},
+                )
+                assert bootstrap.status_code in {200, 409}, bootstrap.text
+                login = client.post(
+                    "/auth/login",
+                    json={"username": "synthetic-test-user", "password": "restore-password"},
+                )
+                assert login.status_code == 200, login.text
+                listing = client.get("/v1/model-config/providers")
+                assert listing.status_code == 200
+                assert listing.json()[0]["secret_status"] == "unavailable"
+                search = client.get("/v1/knowledge/search", params={"q": "restore install"})
+                assert search.status_code == 200, search.text
+                items = search.json()["items"]
+                assert items, search.text
+                item = next(
+                    entry
+                    for entry in items
+                    if entry["knowledge_object_id"] == knowledge_object_id
+                )
+                reader = client.get(f"/v1/knowledge/{item['knowledge_object_id']}/reader")
+                assert reader.status_code == 200, reader.text
+                assert RESTORE_TEXT in reader.json()["text"]
+            assert api.poll() is None
+            assert worker.poll() is None
+        finally:
+            if worker is not None:
+                worker.terminate()
+                worker.wait(timeout=10)
+            api.terminate()
+            api.wait(timeout=10)
+
+    available_keyring = tmp_path / "available-keyring"
+    keyring_file = tmp_path / "master-key.json"
+    _write_available_keyring(available_keyring, master_key, keyring_file)
+    with sqlite3.connect(target_db) as connection:
+        instance_id = str(
+            connection.execute(
+                "SELECT instance_id FROM provider_secret_instances WHERE singleton_id='default'"
+            ).fetchone()[0]
+        )
+    keyring_file.write_text(
+        json.dumps(
+            {f"zhiheng.provider-secrets:{instance_id}": base64.b64encode(master_key).decode()}
+        ),
+        encoding="utf-8",
+    )
+    provider_requests: list[str] = []
+
+    class ProviderHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - stdlib handler protocol
+            if self.path != "/models":
+                self.send_response(404)
+                self.end_headers()
+                return
+            provider_requests.append(self.headers.get("Authorization", ""))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"data":[{"id":"model-a"}]}')
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    provider_server = ThreadingHTTPServer(("127.0.0.1", 0), ProviderHandler)
+    cert_path = tmp_path / "provider.crt"
+    key_path = tmp_path / "provider.key"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-keyout",
+            str(key_path),
+            "-out",
+            str(cert_path),
+            "-subj",
+            "/CN=127.0.0.1",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls_context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+    provider_server.socket = tls_context.wrap_socket(provider_server.socket, server_side=True)
+    provider_thread = threading.Thread(target=provider_server.serve_forever, daemon=True)
+    provider_thread.start()
+    available_port = _free_loopback_port()
+    available_env = env | {
+        "PYTHONPATH": f"{available_keyring}:{REPO_ROOT / 'src'}",
+        "ZHIHENG_API_PORT": str(available_port),
+        "SSL_CERT_FILE": str(cert_path),
+    }
+    available_api_log = tmp_path / "available-api.log"
+    available_worker_log = tmp_path / "available-worker.log"
+    with available_api_log.open("w") as api_handle, available_worker_log.open("w") as worker_handle:
+        available_api = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "uvicorn",
+                "zhiheng.api.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(available_port),
+            ],
+            cwd=REPO_ROOT,
+            env=available_env,
+            stdout=api_handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        available_worker: subprocess.Popen[str] | None = None
+        try:
+            available_base_url = f"http://127.0.0.1:{available_port}"
+            _wait_for_api(available_api, available_base_url, available_api_log)
+            available_worker = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "zhiheng.worker.main",
+                    "--role",
+                    "worker",
+                    "--idle-seconds",
+                    "1",
+                ],
+                cwd=REPO_ROOT,
+                env=available_env,
+                stdout=worker_handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            with httpx.Client(base_url=available_base_url, timeout=10.0) as client:
+                login = client.post(
+                    "/auth/login",
+                    json={"username": "synthetic-test-user", "password": "restore-password"},
+                )
+                assert login.status_code == 200, login.text
+                csrf = login.json()["csrf_token"]
+                listing = client.get("/v1/model-config/providers")
+                assert listing.status_code == 200
+                restored_provider = listing.json()[0]
+                assert restored_provider["secret_status"] == "configured"
+                patched = client.patch(
+                    "/v1/model-config/providers/provider-restic",
+                    headers={
+                        "X-CSRF-Token": csrf,
+                        "If-Match": restored_provider["etag"],
+                        "Idempotency-Key": "restic-real-provider-endpoint",
+                    },
+                    json={"base_url": f"https://127.0.0.1:{provider_server.server_port}"},
+                )
+                assert patched.status_code == 200, patched.text
+                connectivity = client.post(
+                    "/v1/model-config/providers/provider-restic/connectivity-test",
+                    headers={"X-CSRF-Token": csrf, "Idempotency-Key": "restic-real-probe"},
+                )
+                assert connectivity.status_code == 200, connectivity.text
+                assert connectivity.json()["status"] == "succeeded"
+                assert provider_requests == ["Bearer sk-restic-provider-secret"]
+        finally:
+            if available_worker is not None:
+                available_worker.terminate()
+                available_worker.wait(timeout=10)
+            available_api.terminate()
+            available_api.wait(timeout=10)
+            provider_server.shutdown()
+            provider_server.server_close()
+            provider_thread.join(timeout=10)
 
 
 def test_restic_restore_supports_real_search_and_original_source_resolution(

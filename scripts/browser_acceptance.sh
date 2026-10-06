@@ -131,6 +131,16 @@ run_stage "provider-secrets-issue40" node tests/e2e/check_provider_secrets_issue
 
 CURRENT_STAGE="provider-restart"
 unset ZHIHENG_PRIVATE_ISSUE40_LEGACY
+export ZHIHENG_ANSWER_PROVIDER_ID="$(uv run python - <<'PY'
+import os
+import sqlite3
+from urllib.parse import unquote, urlparse
+path = unquote(urlparse(os.environ["ZHIHENG_DATABASE_URL"]).path)
+with sqlite3.connect(path) as db:
+    print(db.execute("SELECT id FROM model_provider_configs WHERE display_name='Issue 40 Legacy Provider'").fetchone()[0])
+PY
+)"
+export ZHIHENG_ANSWER_MODEL_ID="model-a"
 kill "${WORKER_PID}" 2>/dev/null || true
 kill "${API_PID}" 2>/dev/null || true
 wait "${WORKER_PID}" 2>/dev/null || true
@@ -165,7 +175,7 @@ with sqlite3.connect(database_path) as connection:
     connection.execute(
         "UPDATE provider_secret_records SET ciphertext_b64='AAAA' "
         "WHERE provider_id IN (SELECT id FROM model_provider_configs "
-        "WHERE display_name='Issue 40 Legacy Provider')"
+        "WHERE display_name='Issue 38 Legacy Provider')"
     )
 PY
 kill "${WORKER_PID}" 2>/dev/null || true

@@ -138,13 +138,15 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     assert.equal(deleted.secret_status, "missing");
     evidence.deletion = { enabled: deleted.enabled, secret_status: deleted.secret_status };
 
-    const legacy = await api("/v1/model-config/providers", { method: "POST", body: {
-      provider_kind: "openai-compatible", display_name: "Issue 40 Legacy Provider",
-      base_url: providerUrl, secret_ref: legacyRef,
-      text_models: ["model-a"], enabled: true,
-    }});
+    const allProviders = await api("/v1/model-config/providers");
+    const legacy = allProviders.find((item) => item.display_name === "Issue 38 Legacy Provider")
+      || await api("/v1/model-config/providers", { method: "POST", body: {
+        provider_kind: "openai-compatible", display_name: "Issue 38 Legacy Provider",
+        base_url: providerUrl, secret_ref: legacyRef,
+        text_models: ["model-a"], enabled: true,
+      }});
     await page.reload();
-    const legacyCard = page.locator("li.provider-card").filter({ hasText: "Issue 40 Legacy Provider" });
+    const legacyCard = page.locator("li.provider-card").filter({ hasText: "Issue 38 Legacy Provider" });
     await legacyCard.getByRole("button", { name: "迁移到本地加密", exact: true }).click();
     await page.getByText("密钥已迁移到本地加密存储").waitFor();
     const migrated = (await api("/v1/model-config/providers")).find((item) => item.provider_id === legacy.provider_id);

@@ -291,10 +291,40 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         )
                         results[name] = result
                         continue
+                    leakage = evidence_payload.get("leakage")
+                    required_leakage = (
+                        "page",
+                        "input_values",
+                        "storage",
+                        "audit",
+                        "api_log",
+                        "worker_log",
+                        "database",
+                        "wal_shm",
+                        "legacy_key_scanned",
+                    )
+                    if (
+                        not isinstance(leakage, dict)
+                        or any(leakage.get(key) is not True for key in required_leakage)
+                        or not isinstance(leakage.get("http_responses"), int)
+                        or leakage.get("http_responses", 0) <= 0
+                        or not isinstance(leakage.get("ciphertexts_scanned"), int)
+                        or leakage.get("ciphertexts_scanned", 0) <= 0
+                        or not isinstance(leakage.get("screenshot"), str)
+                    ):
+                        result["error"] = "provider restart leakage evidence is incomplete"
+                        results[name] = result
+                        continue
+                    restart_screenshot = output / relative.parent / str(leakage["screenshot"])
+                    if not restart_screenshot.is_file() or restart_screenshot.stat().st_size == 0:
+                        result["error"] = "provider restart screenshot is missing or empty"
+                        results[name] = result
+                        continue
                     if name == "provider_migration_restart":
                         if (
                             evidence_payload.get("pre_reentry_status") != "configured"
                             or evidence_payload.get("connectivity") != "succeeded"
+                            or evidence_payload.get("model_call") != "succeeded"
                             or evidence_payload.get("legacy_environment_removed") is not True
                             or evidence_payload.get("search_status") != 200
                         ):

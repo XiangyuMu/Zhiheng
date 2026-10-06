@@ -233,6 +233,21 @@ def complete_provider_migration_restart_checks() -> dict[str, object]:
             "connectivity": "succeeded",
             "search_status": 200,
             "legacy_environment_removed": True,
+            "model_call": "succeeded",
+            "leakage": {
+                "page": True,
+                "input_values": True,
+                "storage": True,
+                "audit": True,
+                "api_log": True,
+                "worker_log": True,
+                "database": True,
+                "wal_shm": True,
+                "http_responses": 5,
+                "legacy_key_scanned": True,
+                "ciphertexts_scanned": 3,
+                "screenshot": "provider-migration-restart.png",
+            },
         },
     }
 
@@ -247,6 +262,20 @@ def complete_provider_restart_checks() -> dict[str, object]:
             "post_reentry_status": "configured",
             "connectivity": "succeeded",
             "search_status": 200,
+            "leakage": {
+                "page": True,
+                "input_values": True,
+                "storage": True,
+                "audit": True,
+                "api_log": True,
+                "worker_log": True,
+                "database": True,
+                "wal_shm": True,
+                "http_responses": 3,
+                "legacy_key_scanned": True,
+                "ciphertexts_scanned": 3,
+                "screenshot": "provider-restart.png",
+            },
         },
     }
 
@@ -342,6 +371,8 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
     (tmp_path / "api.log").write_text("api ready")
     (tmp_path / "worker.log").write_text("worker ready")
     (tmp_path / "provider-secrets-issue40" / "provider-secrets.png").write_bytes(b"png")
+    (tmp_path / "provider-migration-restart" / "provider-migration-restart.png").write_bytes(b"png")
+    (tmp_path / "provider-restart" / "provider-restart.png").write_bytes(b"png")
     (tmp_path / "workspace-full" / "screen.png").write_bytes(b"png")
 
     code, report = run_report(tmp_path, monkeypatch, exit_code=0)
