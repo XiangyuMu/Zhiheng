@@ -190,7 +190,7 @@ with sqlite3.connect(sys.argv[1]) as db:
           method: "POST", credentials: "same-origin",
           headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf,
             "Idempotency-Key": crypto.randomUUID() },
-          body: JSON.stringify({ query: "restore install", intent: "complex_synthesis" }),
+          body: JSON.stringify({ query: "中文全文检索", intent: "complex_synthesis" }),
         });
         return { status: response.status, body: await response.json() };
       });
