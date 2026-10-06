@@ -640,11 +640,23 @@ def test_provider_key_rotation_revokes_old_version_and_delete_disables_provider(
     with pytest.raises(PermissionError):
         store.resolve(old_ref, provider_id=provider["provider_id"])
 
+    rotated_again = client.patch(
+        f"/v1/model-config/providers/{provider['provider_id']}",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": rotated_body["etag"],
+            "Idempotency-Key": "rotation-update-again",
+        },
+        json={"api_key": "sk-issue37-newer"},
+    )
+    assert rotated_again.status_code == 200
+    assert rotated_again.json()["secret_version"] == 3
+
     deleted = client.delete(
         f"/v1/model-config/providers/{provider['provider_id']}/secret",
         headers={
             "X-CSRF-Token": csrf,
-            "If-Match": rotated_body["etag"],
+            "If-Match": rotated_again.json()["etag"],
             "Idempotency-Key": "rotation-delete",
         },
     )
@@ -653,6 +665,15 @@ def test_provider_key_rotation_revokes_old_version_and_delete_disables_provider(
     assert deleted_body["enabled"] is False
     assert deleted_body["secret_status"] == "missing"
     assert deleted_body["secret_configured"] is False
+    with app.state.session_factory() as session:
+        statuses = session.execute(
+            text(
+                "SELECT secret_version, status FROM provider_secret_records "
+                "WHERE provider_id=:id ORDER BY secret_version"
+            ),
+            {"id": provider["provider_id"]},
+        ).all()
+    assert statuses == [(1, "revoked"), (2, "revoked"), (3, "revoked")]
     connectivity = client.post(
         f"/v1/model-config/providers/{provider['provider_id']}/connectivity-test",
         headers={"X-CSRF-Token": csrf, "Idempotency-Key": "rotation-connectivity"},
