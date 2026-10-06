@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -463,20 +462,14 @@ def connectivity_test(
 
     started = datetime.now(UTC)
     try:
-        probe_kwargs: dict[str, object] = {
-            "endpoint_url": str(row["endpoint_url"]),
-            "provider_kind": str(row["provider_kind"]),
-            "secret_ref": str(row["secret_ref"]) if row["secret_ref"] is not None else None,
-        }
-        probe_signature = inspect.signature(probe_model_provider_connectivity)
-        if "provider_id" in probe_signature.parameters:
-            probe_kwargs["provider_id"] = provider_id
-        if "model_id" in probe_signature.parameters:
-            probe_kwargs["model_id"] = selected_model
-        if "secret_store" in probe_signature.parameters:
-            probe_kwargs["secret_store"] = secret_store
-        probe = cast(Any, probe_model_provider_connectivity)
-        status, code, message = probe(**probe_kwargs)
+        status, code, message = probe_model_provider_connectivity(
+            endpoint_url=str(row["endpoint_url"]),
+            provider_kind=str(row["provider_kind"]),
+            secret_ref=str(row["secret_ref"]) if row["secret_ref"] is not None else None,
+            provider_id=provider_id,
+            model_id=selected_model,
+            secret_store=secret_store,
+        )
     except (KeyError, ValueError, PermissionError) as exc:
         status, code, message = "failed", "secret_unavailable", str(exc)
     duration_ms = max(0, int((datetime.now(UTC) - started).total_seconds() * 1000))

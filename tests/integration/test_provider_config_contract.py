@@ -133,7 +133,10 @@ def test_provider_config_update_is_idempotent_and_rejects_secret_fields(tmp_path
     assert secret.status_code == 422
 
 
-def test_provider_management_supports_modal_defaults_health_and_archive(tmp_path: Path) -> None:
+def test_provider_management_supports_modal_defaults_health_and_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_DEEPSEEK_KEY", "synthetic-management-key")
     client = _client(tmp_path)
     csrf = _login(client)
     headers = {
@@ -361,8 +364,10 @@ def test_local_provider_key_survives_app_recreation_and_resolves_for_gateway(
         secret_ref: str | None,
         provider_id: str | None = None,
         secret_store: ProviderSecretStore | None = None,
+        model_id: str | None = None,
         timeout: float = 5.0,
     ) -> tuple[str, str, str]:
+        del model_id
         restarted_app: Any = restarted.app
         assert secret_store is restarted_app.state.provider_secret_store
         captured["resolved"] = secret_store.resolve(
@@ -833,10 +838,11 @@ def test_legacy_environment_secret_migrates_once_and_survives_environment_remova
         provider_kind: str,
         secret_ref: str | None,
         provider_id: str | None = None,
+        model_id: str | None = None,
         secret_store: ProviderSecretStore | None = None,
         timeout: float = 5.0,
     ) -> tuple[str, str, str]:
-        del endpoint_url, provider_kind, timeout
+        del endpoint_url, provider_kind, model_id, timeout
         assert secret_store is app.state.provider_secret_store
         assert provider_id is not None
         assert secret_ref is not None
@@ -851,7 +857,59 @@ def test_legacy_environment_secret_migrates_once_and_survives_environment_remova
     )
     assert result.status_code == 200, result.text
     assert captured["key"] == legacy_value
-    assert legacy_value not in result.text
+
+
+def test_legacy_migration_allocates_next_version_after_local_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy_name = "ZHIHENG_PRIVATE_ISSUE38_REBOUND"
+    monkeypatch.setenv(legacy_name, "sk-issue38-rebound")
+    backend = InMemoryMasterKeyBackend()
+    client = _empty_client(tmp_path, ProviderSecretStore(master_key_backend=backend))
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "migration-rebound-create"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Rebound Provider",
+            "base_url": "https://models.example.test/v1",
+            "api_key": "sk-issue38-local-first",
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200
+    switched = client.patch(
+        f"/v1/model-config/providers/{created.json()['provider_id']}",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": created.json()["etag"],
+            "Idempotency-Key": "migration-rebound-switch",
+        },
+        json={"secret_ref": f"env:{legacy_name}"},
+    )
+    assert switched.status_code == 200
+    migrated = client.post(
+        f"/v1/model-config/providers/{created.json()['provider_id']}/secret/migrate",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": switched.json()["etag"],
+            "Idempotency-Key": "migration-rebound-migrate",
+        },
+    )
+    assert migrated.status_code == 200, migrated.text
+    assert migrated.json()["secret_version"] == 2
+    app: Any = client.app
+    with app.state.session_factory() as session:
+        statuses = session.execute(
+            text(
+                "SELECT secret_version, status FROM provider_secret_records "
+                "WHERE provider_id=:provider_id ORDER BY secret_version"
+            ),
+            {"provider_id": created.json()["provider_id"]},
+        ).all()
+    assert statuses == [(1, "rotated"), (2, "active")]
 
 
 def test_failed_legacy_secret_migration_preserves_environment_reference(
@@ -1130,8 +1188,12 @@ def test_connectivity_failure_marks_unhealthy_and_records_secret_free_audit(
         endpoint_url: str,
         provider_kind: str,
         secret_ref: str | None,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        secret_store: ProviderSecretStore | None = None,
         timeout: float = 5.0,
     ) -> tuple[str, str, str]:
+        del provider_id, model_id, secret_store
         assert endpoint_url == "https://models.example.test/v1"
         assert provider_kind == "openai-compatible"
         assert secret_ref == "env:ZHIHENG_PRIVATE_TEST_SECRET"

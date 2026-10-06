@@ -5,6 +5,7 @@ import json
 import os
 import secrets as pysecrets
 import sys
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import import_module
@@ -112,6 +113,7 @@ class InMemoryMasterKeyBackend:
 
 class NativeKeyringMasterKeyBackend:
     service_name = "zhiheng.provider-secrets"
+    _creation_lock = threading.Lock()
 
     def __init__(self) -> None:
         self._keyring: Any | None = None
@@ -129,13 +131,18 @@ class NativeKeyringMasterKeyBackend:
 
     def get_or_create_master_key(self, instance_id: str) -> bytes:
         try:
-            keyring_backend = self._platform_keyring()
-            value = keyring_backend.get_password(self.service_name, instance_id)
-            if value is not None:
-                return _decode_master_key(value)
-            key = AESGCM.generate_key(bit_length=256)
-            keyring_backend.set_password(self.service_name, instance_id, _b64encode(key))
-            return key
+            with self._creation_lock:
+                keyring_backend = self._platform_keyring()
+                value = keyring_backend.get_password(self.service_name, instance_id)
+                if value is not None:
+                    return _decode_master_key(value)
+                key = AESGCM.generate_key(bit_length=256)
+                encoded = _b64encode(key)
+                keyring_backend.set_password(self.service_name, instance_id, encoded)
+                persisted = keyring_backend.get_password(self.service_name, instance_id)
+                if persisted != encoded:
+                    raise MasterKeyUnavailable("native keyring master key was not persisted")
+                return key
         except MasterKeyUnavailable:
             raise
         except Exception as exc:
@@ -251,7 +258,7 @@ class ProviderSecretStore:
                     """
                     SELECT secret_version
                     FROM provider_secret_records
-                    WHERE provider_id = :provider_id AND status = 'active'
+                    WHERE provider_id = :provider_id AND status <> 'revoked'
                     ORDER BY secret_version
                     """
                 ),
@@ -265,7 +272,7 @@ class ProviderSecretStore:
                 """
                 UPDATE provider_secret_records
                 SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
-                WHERE provider_id = :provider_id AND status = 'active'
+                WHERE provider_id = :provider_id AND status <> 'revoked'
                 """
             ),
             {"provider_id": provider_id},
@@ -286,7 +293,30 @@ class ProviderSecretStore:
         if not secret_ref.startswith("env:"):
             raise ValueError("only env secret references can be migrated")
         secret = self._environment.resolve(secret_ref, provider_id=provider_id)
-        return self.store(session, provider_id=provider_id, secret=secret)
+        instance_id = self._instance_id or _provider_secret_instance_id(session, create=True)
+        current_version = int(
+            session.execute(
+                text(
+                    "SELECT COALESCE(MAX(secret_version), 0) "
+                    "FROM provider_secret_records WHERE provider_id=:provider_id"
+                ),
+                {"provider_id": provider_id},
+            ).scalar_one()
+        )
+        session.execute(
+            text(
+                "UPDATE provider_secret_records SET status='rotated', updated_at=CURRENT_TIMESTAMP "
+                "WHERE provider_id=:provider_id AND status='active'"
+            ),
+            {"provider_id": provider_id},
+        )
+        return self._store_version(
+            session,
+            provider_id=provider_id,
+            secret=secret,
+            instance_id=instance_id,
+            version=current_version + 1,
+        )
 
     def _store_version(
         self,
@@ -366,6 +396,15 @@ class ProviderSecretStore:
         if not secret_ref:
             return SecretStatus(configured=False, status="missing")
         if secret_ref.startswith("env:"):
+            try:
+                self._environment.resolve(secret_ref, provider_id=provider_id)
+            except (SecretUnavailable, KeyError):
+                return SecretStatus(
+                    configured=True,
+                    status="unavailable",
+                    fingerprint=sha256_text(secret_ref)[:12],
+                    source="legacy_env",
+                )
             return SecretStatus(
                 configured=True,
                 status="configured",
