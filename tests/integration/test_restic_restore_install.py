@@ -28,9 +28,9 @@ from zhiheng.db.session import create_session_factory, create_sqlite_engine, ses
 from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import LocalKnowledgeObjectStore, StoredTextArtifacts
+from zhiheng.models._transports import probe_provider_connectivity
 from zhiheng.privacy.erase_journal import ExternalEraseJournal
 from zhiheng.retrieval.repository import CitationContextRepository, LexicalRetriever
-from zhiheng.models._transports import probe_provider_connectivity
 from zhiheng.secrets import InMemoryMasterKeyBackend, ProviderSecretStore
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
