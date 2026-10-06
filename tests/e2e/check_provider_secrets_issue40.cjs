@@ -121,7 +121,6 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "passed", checks: [
       "real browser creates encrypted Provider key without rendering plaintext",
       "refresh and API listing retain only configured state and short fingerprint",
-      "refresh and API listing retain only configured state and short fingerprint",
       "browser rotation creates a new version and deletion disables the Provider",
       "browser migrates a legacy env reference to local encrypted storage",
       "synthetic key and complete ciphertext are absent from page, storage, and model-config responses",
