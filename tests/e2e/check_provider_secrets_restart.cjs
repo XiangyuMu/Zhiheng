@@ -71,7 +71,8 @@ fs.mkdirSync(output, { recursive: true });
     const connectivity = await page.evaluate(async ({ providerId, csrf }) => {
       const response = await fetch(`/v1/model-config/providers/${providerId}/connectivity-test`, {
         method: "POST", credentials: "same-origin",
-        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf,
+          "Idempotency-Key": crypto.randomUUID() },
       });
       return { status: response.status, body: await response.json() };
     }, { providerId: provider.provider_id, csrf });
