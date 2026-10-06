@@ -184,9 +184,12 @@ with sqlite3.connect(sys.argv[1]) as db:
       evidence.connectivity = connectivity.body.status;
       assert.deepEqual(receivedAuth.at(-1), "Bearer issue40-browser-legacy-key");
       const answer = await page.evaluate(async () => {
+        const csrf = document.cookie.split(";").map((v) => v.trim())
+          .find((v) => v.startsWith("zhiheng_csrf="))?.slice(13) || "";
         const response = await fetch("/v1/answers", {
           method: "POST", credentials: "same-origin",
-          headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf,
+            "Idempotency-Key": crypto.randomUUID() },
           body: JSON.stringify({ query: "restore install", intent: "complex_synthesis" }),
         });
         return { status: response.status, body: await response.json() };
