@@ -148,7 +148,12 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     const visible = await page.locator("body").innerText();
     assert(!visible.includes(syntheticKey) && !visible.includes("ciphertext_b64"));
     for (const response of responses) {
-      const body = await response.text().catch(() => "");
+      let body;
+      try {
+        body = await response.text();
+      } catch (error) {
+        throw new Error(`could not read response body for ${response.url()}: ${error}`);
+      }
       assert(!body.includes(syntheticKey) && !body.includes(rotatedKey) && !body.includes(legacyKey));
       assert(!body.includes("ciphertext_b64"));
     }

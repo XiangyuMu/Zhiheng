@@ -461,6 +461,7 @@ def main() -> int:
             "node tests/e2e/check_issue11_upgrade.cjs",
             "node tests/e2e/check_issue12_relations.cjs",
             "node tests/e2e/check_provider_secrets_issue40.cjs",
+            "node tests/e2e/check_provider_secrets_restart.cjs",
         ],
         "versions": {
             "node": command_output(["node", "--version"]),
@@ -534,6 +535,8 @@ def main() -> int:
                 "in the browser",
                 "Provider secret plaintext and complete ciphertext are absent from "
                 "browser-visible surfaces",
+                "Provider remains unavailable after tamper, then recovers after key re-entry "
+                "and restart",
             ],
         },
     }

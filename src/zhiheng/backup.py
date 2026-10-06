@@ -192,9 +192,19 @@ def _verify_provider_secret_references(database: Path) -> None:
         if "model_provider_configs" not in tables:
             return
         references = connection.execute(
-            "SELECT id, secret_ref FROM model_provider_configs WHERE secret_ref LIKE 'local:%'"
+            "SELECT id, secret_ref FROM model_provider_configs WHERE secret_ref IS NOT NULL"
         ).fetchall()
         for provider_id, reference in references:
+            if not isinstance(reference, str):
+                raise ValueError("restored provider secret reference is invalid")
+            if reference.startswith("env:"):
+                if not re.fullmatch(r"env:ZHIHENG_PRIVATE_[A-Za-z0-9_]+", reference):
+                    raise ValueError("restored provider secret reference is invalid")
+                continue
+            if not reference.startswith("local:") or not re.fullmatch(
+                r"local:[A-Za-z0-9_-]+", reference
+            ):
+                raise ValueError("restored provider secret reference is invalid")
             if "provider_secret_records" not in tables:
                 raise ValueError("restored provider secret reference is dangling")
             record = connection.execute(

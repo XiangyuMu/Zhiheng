@@ -355,3 +355,16 @@ def test_backup_retains_inactive_secret_history(tmp_path: Path, status: str) -> 
     bundle = tmp_path / "inactive-secret-history"
     stage_backup(snapshot, root, bundle)
     assert len(verify_backup_bundle(bundle)) == 3
+
+
+def test_backup_rejects_plaintext_provider_reference(tmp_path: Path) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_provider_secret_record(snapshot)
+    with sqlite3.connect(snapshot) as connection:
+        connection.execute(
+            "UPDATE model_provider_configs SET secret_ref='sk-plaintext-provider-key'"
+        )
+    bundle = tmp_path / "plaintext-provider-reference"
+    stage_backup(snapshot, root, bundle)
+    with pytest.raises(ValueError, match="reference is invalid"):
+        verify_backup_bundle(bundle)
