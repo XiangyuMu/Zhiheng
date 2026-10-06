@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -29,6 +30,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from scripts import restore_restic
 from zhiheng.api.main import create_app
+from zhiheng.auth import SessionService
 from zhiheng.backup import BackupArtifact
 from zhiheng.core.config import Settings
 from zhiheng.db.maintenance import acquire_database_lock
@@ -45,6 +47,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTIC_PASSWORD = "synthetic-restic-restore-password"
 JOURNAL_SECRET = "test-secret-with-enough-length-for-hmac"
 RESTORE_TEXT = "restic restore install must not revive erased private evidence bytes"
+RESTORE_USERNAME = "restore-owner"
+RESTORE_PASSWORD = "restore-owner-password"
 
 
 def _restic_binary() -> str:
@@ -91,7 +95,7 @@ def _assert_current_schema(db_path: Path) -> None:
     assert current == expected
 
 
-def _ingest(session: Session, artifacts: StoredTextArtifacts) -> str:
+def _ingest(session: Session, artifacts: StoredTextArtifacts, *, owner_user_id: str) -> str:
     ingested = KnowledgeRepository().ingest_text(
         session,
         TextEvidenceInput(
@@ -100,7 +104,7 @@ def _ingest(session: Session, artifacts: StoredTextArtifacts) -> str:
             text=RESTORE_TEXT,
             source_metadata={"fixture": "synthetic"},
         ),
-        user_authority=KnowledgeUserAuthority("synthetic-test-user"),
+        user_authority=KnowledgeUserAuthority(owner_user_id),
         stored_artifacts=artifacts,
     )
     return str(ingested.knowledge_object_id)
@@ -117,7 +121,12 @@ def _make_backup(
     session_factory = _session_factory(source_db)
     artifacts = LocalKnowledgeObjectStore(source_objects).write_text_artifacts(RESTORE_TEXT)
     with session_scope(session_factory) as session:
-        knowledge_object_id = _ingest(session, artifacts)
+        owner_user_id = SessionService().bootstrap_single_user(
+            session,
+            username=RESTORE_USERNAME,
+            password=RESTORE_PASSWORD,
+        )
+        knowledge_object_id = _ingest(session, artifacts, owner_user_id=owner_user_id)
         # The fixture represents a completed indexing worker before the
         # snapshot is taken, so restored search observes the normal serving
         # qualification contract.
@@ -215,6 +224,57 @@ def _run_restore(env: dict[str, str], *, check: bool = True) -> subprocess.Compl
     )
 
 
+def _stop_process(process: subprocess.Popen[str]) -> None:
+    """Terminate a child without allowing one stuck process to skip cleanup."""
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=10)
+
+
+def _persist_restore_evidence(
+    root: Path,
+    *,
+    scenario: str,
+    metadata: dict[str, object],
+    files: tuple[Path, ...],
+) -> None:
+    """Keep restic/process diagnostics when an explicit delivery root is supplied."""
+    destination = root / "issue39-restic-restore" / scenario
+    destination.mkdir(parents=True, exist_ok=True)
+    copied: list[dict[str, str]] = []
+    for source in files:
+        if not source.exists():
+            continue
+        target = destination / source.name
+        shutil.copy2(source, target)
+        copied.append({"path": target.name, "sha256": _digest(target)})
+    (destination / "metadata.json").write_text(
+        json.dumps(
+            {
+                "commit_sha": subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.strip(),
+                "scenario": scenario,
+                "files": copied,
+                **metadata,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+
 def _object_paths_from_db(db_path: Path) -> list[Path]:
     connection = sqlite3.connect(db_path)
     try:
@@ -248,8 +308,6 @@ def _empty_journal(path: Path) -> None:
 
 
 def _digest(path: Path) -> str:
-    import hashlib
-
     with path.open("rb") as handle:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
@@ -488,7 +546,7 @@ def test_restic_restore_preserves_provider_ciphertext_and_supports_reentry(
     assert seen_headers == {"Authorization": "Bearer sk-restic-reentered-secret"}
 
 
-def test_restic_restore_real_api_worker_serves_knowledge_without_keyring(
+def test_restic_restore_real_api_worker_starts_and_serves_knowledge_without_keyring(
     tmp_path: Path,
 ) -> None:
     """The restore boundary must be proven with real serving processes and HTTP."""
@@ -502,16 +560,14 @@ def test_restic_restore_real_api_worker_serves_knowledge_without_keyring(
     target_objects = tmp_path / "real-target" / "objects"
     journal_path = tmp_path / "real-target" / "erase-journal.jsonl"
     _empty_journal(journal_path)
-    _run_restore(
+    evidence_root = os.environ.get("ZHIHENG_DELIVERY_EVIDENCE")
+    unavailable_restore = _run_restore(
         _restore_env(repository, binary, snapshot_id, target_db, target_objects, journal_path)
     )
-    # The restored fixture is intentionally public to the authenticated
-    # acceptance session; ownership isolation is covered by the retrieval
-    # contract tests and must not hide the restore serving assertion here.
-    with sqlite3.connect(target_db) as connection:
-        connection.execute("UPDATE knowledge_objects SET owner_user_id=NULL")
-        connection.commit()
-
+    unavailable_restore_log = tmp_path / "missing-keyring-restic.log"
+    unavailable_restore_log.write_text(
+        unavailable_restore.stdout + unavailable_restore.stderr, encoding="utf-8"
+    )
     unavailable_keyring = tmp_path / "unavailable-keyring"
     _write_unavailable_keyring(unavailable_keyring)
     port = _free_loopback_port()
@@ -522,9 +578,9 @@ def test_restic_restore_real_api_worker_serves_knowledge_without_keyring(
             "ZHIHENG_DATABASE_URL": f"sqlite:///{target_db}",
             "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH": str(target_objects),
             "ZHIHENG_ENVIRONMENT": "test",
-            "ZHIHENG_SECRET_KEY": JOURNAL_SECRET,
-            "ZHIHENG_API_HOST": "127.0.0.1",
-            "ZHIHENG_API_PORT": str(port),
+        "ZHIHENG_SECRET_KEY": JOURNAL_SECRET,
+        "ZHIHENG_API_HOST": "127.0.0.1",
+        "ZHIHENG_API_PORT": str(port),
         }
     )
     api_log = tmp_path / "real-api.log"
@@ -568,14 +624,9 @@ def test_restic_restore_real_api_worker_serves_knowledge_without_keyring(
                 text=True,
             )
             with httpx.Client(base_url=base_url, timeout=10.0) as client:
-                bootstrap = client.post(
-                    "/auth/bootstrap",
-                    json={"username": "synthetic-test-user", "password": "restore-password"},
-                )
-                assert bootstrap.status_code in {200, 409}, bootstrap.text
                 login = client.post(
                     "/auth/login",
-                    json={"username": "synthetic-test-user", "password": "restore-password"},
+                    json={"username": RESTORE_USERNAME, "password": RESTORE_PASSWORD},
                 )
                 assert login.status_code == 200, login.text
                 listing = client.get("/v1/model-config/providers")
@@ -597,15 +648,44 @@ def test_restic_restore_real_api_worker_serves_knowledge_without_keyring(
             assert worker.poll() is None
         finally:
             if worker is not None:
-                worker.terminate()
-                worker.wait(timeout=10)
-            api.terminate()
-            api.wait(timeout=10)
+                _stop_process(worker)
+            _stop_process(api)
+            if evidence_root:
+                _persist_restore_evidence(
+                    Path(evidence_root),
+                    scenario="missing-keyring",
+                    metadata={
+                        "database": str(target_db),
+                        "object_store": str(target_objects),
+                        "provider_status": "unavailable",
+                    },
+                    files=(api_log, worker_log, unavailable_restore_log),
+                )
+
+    available_target = tmp_path / "available-target"
+    available_target_db = available_target / "zhiheng.db"
+    available_target_objects = available_target / "objects"
+    available_journal = available_target / "erase-journal.jsonl"
+    _empty_journal(available_journal)
+    available_restore = _run_restore(
+        _restore_env(
+            repository,
+            binary,
+            snapshot_id,
+            available_target_db,
+            available_target_objects,
+            available_journal,
+        )
+    )
+    available_restore_log = tmp_path / "available-keyring-restic.log"
+    available_restore_log.write_text(
+        available_restore.stdout + available_restore.stderr, encoding="utf-8"
+    )
 
     available_keyring = tmp_path / "available-keyring"
     keyring_file = tmp_path / "master-key.json"
     _write_available_keyring(available_keyring, master_key, keyring_file)
-    with sqlite3.connect(target_db) as connection:
+    with sqlite3.connect(available_target_db) as connection:
         instance_id = str(
             connection.execute(
                 "SELECT instance_id FROM provider_secret_instances WHERE singleton_id='default'"
@@ -630,6 +710,40 @@ def test_restic_restore_real_api_worker_serves_knowledge_without_keyring(
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(b'{"data":[{"id":"model-a"}]}')
+
+        def do_POST(self) -> None:  # noqa: N802 - stdlib handler protocol
+            if self.path != "/chat/completions":
+                self.send_response(404)
+                self.end_headers()
+                return
+            provider_requests.append(self.headers.get("Authorization", ""))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": json.dumps(
+                                        {
+                                            "answer": "restored provider answer",
+                                            "claims": [],
+                                            "conflicts": [],
+                                            "assumptions": [],
+                                            "insufficiencies": [],
+                                            "output_tokens": 3,
+                                            "personalization_refs": [],
+                                        },
+                                        ensure_ascii=False,
+                                    )
+                                }
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+            )
 
         def log_message(self, format: str, *args: object) -> None:
             del format, args
@@ -665,10 +779,22 @@ def test_restic_restore_real_api_worker_serves_knowledge_without_keyring(
     provider_thread = threading.Thread(target=provider_server.serve_forever, daemon=True)
     provider_thread.start()
     available_port = _free_loopback_port()
-    available_env = env | {
+    available_env = _restore_env(
+        repository,
+        binary,
+        snapshot_id,
+        available_target_db,
+        available_target_objects,
+        available_journal,
+    ) | {
         "PYTHONPATH": f"{available_keyring}:{REPO_ROOT / 'src'}",
         "ZHIHENG_API_PORT": str(available_port),
         "SSL_CERT_FILE": str(cert_path),
+        "ZHIHENG_DATABASE_URL": f"sqlite:///{available_target_db}",
+        "ZHIHENG_ENVIRONMENT": "test",
+        "ZHIHENG_SECRET_KEY": JOURNAL_SECRET,
+        "ZHIHENG_API_HOST": "127.0.0.1",
+        "ZHIHENG_EXTERNAL_MODELS_ENABLED": "true",
     }
     available_api_log = tmp_path / "available-api.log"
     available_worker_log = tmp_path / "available-worker.log"
@@ -713,7 +839,7 @@ def test_restic_restore_real_api_worker_serves_knowledge_without_keyring(
             with httpx.Client(base_url=available_base_url, timeout=10.0) as client:
                 login = client.post(
                     "/auth/login",
-                    json={"username": "synthetic-test-user", "password": "restore-password"},
+                    json={"username": RESTORE_USERNAME, "password": RESTORE_PASSWORD},
                 )
                 assert login.status_code == 200, login.text
                 csrf = login.json()["csrf_token"]
@@ -737,16 +863,51 @@ def test_restic_restore_real_api_worker_serves_knowledge_without_keyring(
                 )
                 assert connectivity.status_code == 200, connectivity.text
                 assert connectivity.json()["status"] == "succeeded"
-                assert provider_requests == ["Bearer sk-restic-provider-secret"]
+                defaults = client.get("/v1/model-config/status")
+                assert defaults.status_code == 200, defaults.text
+                saved_defaults = client.put(
+                    "/v1/model-config/defaults",
+                    headers={
+                        "X-CSRF-Token": csrf,
+                        "If-Match": defaults.json()["defaults"]["etag"],
+                        "Idempotency-Key": "restic-real-default-route",
+                    },
+                    json={"text": {"provider_id": "provider-restic", "model_id": "model-a"}},
+                )
+                assert saved_defaults.status_code == 200, saved_defaults.text
+                answer = client.post(
+                    "/v1/answers",
+                    headers={
+                        "X-CSRF-Token": csrf,
+                        "Idempotency-Key": "restic-real-answer",
+                    },
+                    json={"query": "restic restore install"},
+                )
+                assert answer.status_code == 200, answer.text
+                assert answer.json()["answer"] == "restored provider answer", answer.text
+                assert provider_requests == [
+                    "Bearer sk-restic-provider-secret",
+                    "Bearer sk-restic-provider-secret",
+                ]
         finally:
             if available_worker is not None:
-                available_worker.terminate()
-                available_worker.wait(timeout=10)
-            available_api.terminate()
-            available_api.wait(timeout=10)
+                _stop_process(available_worker)
+            _stop_process(available_api)
             provider_server.shutdown()
             provider_server.server_close()
             provider_thread.join(timeout=10)
+            if evidence_root:
+                _persist_restore_evidence(
+                    Path(evidence_root),
+                    scenario="available-keyring",
+                    metadata={
+                        "database": str(available_target_db),
+                        "object_store": str(available_target_objects),
+                        "provider_status": "configured",
+                        "provider_requests": provider_requests,
+                    },
+                    files=(available_api_log, available_worker_log, available_restore_log),
+                )
 
 
 def test_restic_restore_supports_real_search_and_original_source_resolution(
