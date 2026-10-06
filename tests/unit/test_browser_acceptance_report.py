@@ -207,6 +207,8 @@ def complete_provider_secret_checks() -> dict[str, object]:
             "migration": {"secret_source": "local"},
             "leakage": {
                 "page": True,
+                "accessibility": True,
+                "input_values": True,
                 "storage": True,
                 "api_log": True,
                 "worker_log": True,
@@ -236,6 +238,7 @@ def complete_provider_migration_restart_checks() -> dict[str, object]:
             "model_call": "succeeded",
             "leakage": {
                 "page": True,
+                "accessibility": True,
                 "input_values": True,
                 "storage": True,
                 "audit": True,
@@ -264,6 +267,7 @@ def complete_provider_restart_checks() -> dict[str, object]:
             "search_status": 200,
             "leakage": {
                 "page": True,
+                "accessibility": True,
                 "input_values": True,
                 "storage": True,
                 "audit": True,

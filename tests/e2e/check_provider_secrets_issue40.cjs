@@ -139,12 +139,19 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     evidence.deletion = { enabled: deleted.enabled, secret_status: deleted.secret_status };
 
     const allProviders = await api("/v1/model-config/providers");
-    const legacy = allProviders.find((item) => item.display_name === "Issue 38 Legacy Provider")
+    let legacy = allProviders.find((item) => item.display_name === "Issue 38 Legacy Provider")
       || await api("/v1/model-config/providers", { method: "POST", body: {
         provider_kind: "openai-compatible", display_name: "Issue 38 Legacy Provider",
         base_url: providerUrl, secret_ref: legacyRef,
         text_models: ["model-a"], enabled: true,
       }});
+    if (legacy.secret_source === "legacy_env") {
+      legacy = await api(`/v1/model-config/providers/${legacy.provider_id}`, {
+        method: "PATCH",
+        headers: { "If-Match": legacy.etag },
+        body: { base_url: providerUrl },
+      });
+    }
     await page.reload();
     const legacyCard = page.locator("li.provider-card").filter({ hasText: "Issue 38 Legacy Provider" });
     await legacyCard.getByRole("button", { name: "迁移到本地加密", exact: true }).click();
@@ -159,12 +166,18 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     evidence.migration = { provider_id: migrated.provider_id, secret_source: migrated.secret_source, secret_version: migrated.secret_version };
     const audit = await api(`/v1/model-config/audits?provider_id=${migrated.provider_id}`);
     assert(!JSON.stringify(audit).includes(syntheticKey));
+    assert(!JSON.stringify(audit).includes(rotatedKey));
+    assert(!JSON.stringify(audit).includes(legacyKey));
     evidence.audit = { entries: Array.isArray(audit) ? audit.length : (audit.items || []).length };
 
     const storage = await page.evaluate(() => ({ local: JSON.stringify(localStorage), session: JSON.stringify(sessionStorage) }));
     assert(!storage.local.includes(syntheticKey) && !storage.session.includes(syntheticKey));
+    const inputValues = await page.locator("input, textarea").evaluateAll((fields) => fields.map((field) => field.value).join("\n"));
+    assert(!inputValues.includes(syntheticKey) && !inputValues.includes(rotatedKey) && !inputValues.includes(legacyKey));
     const visible = await page.locator("body").innerText();
     assert(!visible.includes(syntheticKey) && !visible.includes("ciphertext_b64"));
+    const accessibility = await page.locator("body").ariaSnapshot();
+    assert(!accessibility.includes(syntheticKey) && !accessibility.includes(rotatedKey) && !accessibility.includes(legacyKey));
     const databaseUrl = process.env.ZHIHENG_DATABASE_URL || "";
     const databasePath = databaseUrl.startsWith("sqlite:///") ? databaseUrl.slice("sqlite:///".length) : "";
     assert(databasePath && fs.existsSync(databasePath));
@@ -176,7 +189,7 @@ with sqlite3.connect(sys.argv[1]) as db:
 `, databasePath], { encoding: "utf8" }).trim().split("\\n").filter(Boolean);
     assert(ciphertexts.length >= 3);
     const forbiddenOutputs = [
-      visible, JSON.stringify(storage), ...observedApiBodies,
+      visible, accessibility, inputValues, JSON.stringify(storage), ...observedApiBodies,
       ...((await Promise.all(responseBodyReads)).map((result) => {
         if (result.error) throw new Error(`could not read response body for ${result.url}: ${result.error}`);
         return result.body;
@@ -207,6 +220,8 @@ with sqlite3.connect(sys.argv[1]) as db:
     assert(fs.statSync(screenshotPath).size > 0);
     evidence.leakage = {
       page: true,
+      accessibility: true,
+      input_values: true,
       storage: true,
       http_responses: responses.length,
       api_log: true,

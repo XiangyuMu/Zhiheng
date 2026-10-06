@@ -246,7 +246,16 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     leakage = evidence_payload["leakage"]
                     if any(
                         leakage.get(key) is not True
-                        for key in ("page", "storage", "api_log", "worker_log", "database", "audit")
+                        for key in (
+                            "page",
+                            "accessibility",
+                            "input_values",
+                            "storage",
+                            "api_log",
+                            "worker_log",
+                            "database",
+                            "audit",
+                        )
                     ) or not isinstance(leakage.get("model_config_responses"), int) \
                         or leakage.get("model_config_responses", 0) <= 0 \
                         or not isinstance(leakage.get("http_responses"), int) \
@@ -294,6 +303,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     leakage = evidence_payload.get("leakage")
                     required_leakage = (
                         "page",
+                        "accessibility",
                         "input_values",
                         "storage",
                         "audit",

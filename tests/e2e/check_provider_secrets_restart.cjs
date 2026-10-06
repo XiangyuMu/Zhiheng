@@ -45,7 +45,8 @@ with sqlite3.connect(sys.argv[1]) as db:
       inputs: Array.from(document.querySelectorAll("input, textarea")).map((item) => item.value).join("\n"),
       storage: `${JSON.stringify(localStorage)}${JSON.stringify(sessionStorage)}`,
     }));
-    const outputs = [browserValues.visible, browserValues.inputs, browserValues.storage, ...apiBodies];
+    const accessibility = await page.locator("body").ariaSnapshot();
+    const outputs = [browserValues.visible, accessibility, browserValues.inputs, browserValues.storage, ...apiBodies];
     const screenshotPath = `${output}/provider-restart.png`;
     await page.screenshot({ path: screenshotPath, fullPage: true });
     const screenshot = fs.readFileSync(screenshotPath);
@@ -63,6 +64,7 @@ with sqlite3.connect(sys.argv[1]) as db:
     assert(ciphertexts.length > 0);
     return {
       page: true,
+      accessibility: true,
       input_values: true,
       storage: true,
       http_responses: apiBodies.length,
