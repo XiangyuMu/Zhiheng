@@ -4,8 +4,8 @@ import base64
 import json
 import os
 import secrets as pysecrets
+import stat
 import sys
-import tempfile
 import threading
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -134,8 +134,8 @@ class NativeKeyringMasterKeyBackend:
 
     def get_or_create_master_key(self, instance_id: str) -> bytes:
         try:
+            keyring_backend = self._platform_keyring()
             with self._creation_lock, _process_keyring_creation_lock(instance_id):
-                keyring_backend = self._platform_keyring()
                 value = keyring_backend.get_password(self.service_name, instance_id)
                 if value is not None:
                     return _decode_master_key(value)
@@ -174,14 +174,27 @@ class NativeKeyringMasterKeyBackend:
 @contextmanager
 def _process_keyring_creation_lock(instance_id: str) -> Iterator[None]:
     """Serialize first-use keyring initialization across API/Worker processes."""
+    lock_directory = _keyring_lock_directory()
+    _ensure_secure_lock_directory(lock_directory)
     lock_name = f"zhiheng-provider-secret-{sha256_text(instance_id)[:32]}.lock"
-    lock_path = Path(tempfile.gettempdir()) / lock_name
-    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    lock_path = lock_directory / lock_name
     try:
+        no_follow = os.O_NOFOLLOW
+    except AttributeError:  # pragma: no cover - native backends are POSIX-only.
+        raise MasterKeyUnavailable("native keyring lock cannot reject symlinks") from None
+    try:
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | no_follow, 0o600)
+    except OSError as exc:
+        raise MasterKeyUnavailable("native keyring lock is unavailable") from exc
+    try:
+        lock_stat = os.fstat(descriptor)
+        _validate_secure_lock_entry(lock_stat)
         try:
             import fcntl
         except ImportError:  # pragma: no cover - Windows fallback.
-            yield
+            raise MasterKeyUnavailable(
+                "native keyring lock is unsupported on this platform"
+            ) from None
         else:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
             try:
@@ -190,6 +203,68 @@ def _process_keyring_creation_lock(instance_id: str) -> Iterator[None]:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
     finally:
         os.close(descriptor)
+
+
+def _keyring_lock_directory() -> Path:
+    home = Path.home()
+    platform_name = str(sys.platform)
+    if platform_name == "darwin":
+        return home / "Library" / "Application Support" / "Zhiheng" / "locks"
+    if platform_name.startswith("linux"):
+        return home / ".local" / "state" / "zhiheng" / "locks"
+    raise MasterKeyUnavailable("native keyring backend is unsupported on this platform")
+
+
+def _ensure_secure_lock_directory(path: Path) -> None:
+    home = Path.home()
+    try:
+        relative_parts = path.relative_to(home).parts
+    except ValueError as exc:
+        raise MasterKeyUnavailable("native keyring lock path is outside the user home") from exc
+
+    current = home
+    for part in relative_parts:
+        current /= part
+        try:
+            current.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise MasterKeyUnavailable("native keyring lock directory is unavailable") from exc
+        try:
+            entry_stat = current.lstat()
+        except OSError as exc:
+            raise MasterKeyUnavailable("native keyring lock directory is unavailable") from exc
+        if not _is_secure_directory(entry_stat):
+            raise MasterKeyUnavailable("native keyring lock directory is insecure")
+
+
+def _validate_secure_lock_entry(entry_stat: os.stat_result) -> None:
+    if not _is_secure_file(entry_stat):
+        raise MasterKeyUnavailable("native keyring lock file is insecure")
+
+
+def _is_secure_directory(entry_stat: os.stat_result) -> bool:
+    return (
+        _current_user_id() == entry_stat.st_uid
+        and stat.S_ISDIR(entry_stat.st_mode)
+        and (entry_stat.st_mode & 0o077) == 0
+    )
+
+
+def _is_secure_file(entry_stat: os.stat_result) -> bool:
+    return (
+        _current_user_id() == entry_stat.st_uid
+        and stat.S_ISREG(entry_stat.st_mode)
+        and (entry_stat.st_mode & 0o077) == 0
+    )
+
+
+def _current_user_id() -> int:
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:  # pragma: no cover - native backends are POSIX-only.
+        raise MasterKeyUnavailable("native keyring lock cannot verify ownership")
+    return int(getuid())
 
 
 class ProviderSecretStore:
