@@ -49,6 +49,7 @@ def probe_model_provider_connectivity(
     provider_kind: str,
     secret_ref: str | None,
     provider_id: str | None = None,
+    model_id: str | None = None,
     secret_store: SecretResolver | None = None,
     timeout: float = 5.0,
 ) -> tuple[str, str, str]:
@@ -58,6 +59,7 @@ def probe_model_provider_connectivity(
         provider_kind=provider_kind,
         secret_ref=secret_ref,
         provider_id=provider_id,
+        model_id=model_id,
         secret_store=secret_store,
         timeout=timeout,
     )

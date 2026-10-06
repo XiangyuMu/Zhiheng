@@ -13,6 +13,7 @@ from sqlalchemy import text
 from zhiheng.api.main import create_app
 from zhiheng.core.config import Settings
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
+from zhiheng.models._transports import probe_provider_connectivity
 from zhiheng.models.configuration import defaults
 from zhiheng.secrets import InMemoryMasterKeyBackend, ProviderSecretStore
 
@@ -380,7 +381,7 @@ def test_local_provider_key_survives_app_recreation_and_resolves_for_gateway(
         )
     finally:
         monkeypatch.undo()
-    assert result.status_code == 200
+    assert result.status_code == 200, result.text
     assert captured["resolved"] == synthetic_key
     assert synthetic_key not in result.text
 
@@ -649,6 +650,174 @@ def test_provider_key_rotation_revokes_old_version_and_delete_disables_provider(
     assert "sk-issue37" not in connectivity.text
 
 
+def test_deleting_provider_key_revokes_local_history_even_after_legacy_reference_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_ISSUE37_SWITCH", "sk-issue37-env")
+    backend = InMemoryMasterKeyBackend()
+    store = ProviderSecretStore(master_key_backend=backend)
+    client = _empty_client(tmp_path, store)
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "revoke-switch-create"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Revoke Switch Provider",
+            "base_url": "https://models.example.test/v1",
+            "api_key": "sk-issue37-old-history",
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    provider = created.json()
+    app: Any = client.app
+    with app.state.session_factory() as session:
+        old_ref = str(
+            session.execute(
+                text("SELECT secret_ref FROM model_provider_configs WHERE id=:id"),
+                {"id": provider["provider_id"]},
+            ).scalar_one()
+        )
+    switched = client.patch(
+        f"/v1/model-config/providers/{provider['provider_id']}",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": provider["etag"],
+            "Idempotency-Key": "revoke-switch-env",
+        },
+        json={"secret_ref": "env:ZHIHENG_PRIVATE_ISSUE37_SWITCH"},
+    )
+    assert switched.status_code == 200
+    deleted = client.delete(
+        f"/v1/model-config/providers/{provider['provider_id']}/secret",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": switched.json()["etag"],
+            "Idempotency-Key": "revoke-switch-delete",
+        },
+    )
+    assert deleted.status_code == 200
+    with pytest.raises(PermissionError):
+        store.resolve(old_ref, provider_id=provider["provider_id"])
+
+
+def test_legacy_environment_secret_migrates_once_and_survives_environment_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy_name = "ZHIHENG_PRIVATE_ISSUE38_KEY"
+    legacy_value = "sk-issue38-legacy"
+    monkeypatch.setenv(legacy_name, legacy_value)
+    backend = InMemoryMasterKeyBackend()
+    client = _empty_client(tmp_path, ProviderSecretStore(master_key_backend=backend))
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "migration-create"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Legacy Provider",
+            "base_url": "https://models.example.test/v1",
+            "secret_ref": f"env:{legacy_name}",
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200
+    provider = created.json()
+    assert provider["secret_source"] == "legacy_env"
+    migrated = client.post(
+        f"/v1/model-config/providers/{provider['provider_id']}/secret/migrate",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": provider["etag"],
+            "Idempotency-Key": "migration-run",
+        },
+    )
+    assert migrated.status_code == 200
+    migrated_body = migrated.json()
+    assert migrated_body["secret_source"] == "local"
+    assert migrated_body["secret_version"] == 1
+    assert "env:" not in migrated.text
+    assert legacy_value not in migrated.text
+    repeat = client.post(
+        f"/v1/model-config/providers/{provider['provider_id']}/secret/migrate",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": migrated_body["etag"],
+            "Idempotency-Key": "migration-repeat",
+        },
+    )
+    assert repeat.status_code == 200
+    assert repeat.json()["secret_version"] == 1
+    monkeypatch.delenv(legacy_name)
+    app: Any = client.app
+    captured: dict[str, str] = {}
+
+    def probe(
+        *,
+        endpoint_url: str,
+        provider_kind: str,
+        secret_ref: str | None,
+        provider_id: str | None = None,
+        secret_store: ProviderSecretStore | None = None,
+        timeout: float = 5.0,
+    ) -> tuple[str, str, str]:
+        del endpoint_url, provider_kind, timeout
+        assert secret_store is app.state.provider_secret_store
+        assert provider_id is not None
+        assert secret_ref is not None
+        resolved = secret_store.resolve(secret_ref, provider_id=provider_id)
+        captured["key"] = resolved.get_secret_value()
+        return "failed", "network_error", "无法连接到供应商地址"
+
+    monkeypatch.setattr("zhiheng.models.gateway.probe_model_provider_connectivity", probe)
+    result = client.post(
+        f"/v1/model-config/providers/{provider['provider_id']}/connectivity-test",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "migration-connectivity"},
+    )
+    assert result.status_code == 200, result.text
+    assert captured["key"] == legacy_value
+    assert legacy_value not in result.text
+
+
+def test_failed_legacy_secret_migration_preserves_environment_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy_name = "ZHIHENG_PRIVATE_ISSUE38_MISSING"
+    monkeypatch.delenv(legacy_name, raising=False)
+    client = _empty_client(
+        tmp_path,
+        ProviderSecretStore(master_key_backend=InMemoryMasterKeyBackend()),
+    )
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "migration-failure-create"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Unmigrated Provider",
+            "base_url": "https://models.example.test/v1",
+            "secret_ref": f"env:{legacy_name}",
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    provider = created.json()
+    failed = client.post(
+        f"/v1/model-config/providers/{provider['provider_id']}/secret/migrate",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": provider["etag"],
+            "Idempotency-Key": "migration-failure-run",
+        },
+    )
+    assert failed.status_code == 422, failed.text
+    refreshed = client.get("/v1/model-config/providers").json()[0]
+    assert refreshed["secret_source"] == "legacy_env"
+    assert refreshed["enabled"] is True
+
+
 def test_provider_key_idempotency_and_validation_do_not_echo_secret(
     tmp_path: Path,
 ) -> None:
@@ -834,6 +1003,46 @@ def test_provider_update_rejects_stale_etag(tmp_path: Path) -> None:
     )
     assert stale.status_code == 412
     assert client.get("/v1/model-config/providers").json()[0]["display_name"] == "Updated"
+
+
+def test_connectivity_probe_rejects_malformed_or_missing_model_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload: object) -> None:
+            self._payload = payload
+
+        def json(self) -> object:
+            if isinstance(self._payload, Exception):
+                raise self._payload
+            return self._payload
+
+    monkeypatch.setenv("ZHIHENG_PRIVATE_ISSUE37_PROBE", "probe-secret")
+    monkeypatch.setattr(
+        "zhiheng.models._transports.httpx.get",
+        lambda *args, **kwargs: FakeResponse({"unexpected": True}),
+    )
+    malformed = probe_provider_connectivity(
+        endpoint_url="https://models.example.test/v1",
+        provider_kind="openai-compatible",
+        secret_ref="env:ZHIHENG_PRIVATE_ISSUE37_PROBE",
+        model_id="model-a",
+    )
+    assert malformed[:2] == ("failed", "response_format_error")
+
+    monkeypatch.setattr(
+        "zhiheng.models._transports.httpx.get",
+        lambda *args, **kwargs: FakeResponse({"data": [{"id": "other-model"}]}),
+    )
+    missing_model = probe_provider_connectivity(
+        endpoint_url="https://models.example.test/v1",
+        provider_kind="openai-compatible",
+        secret_ref="env:ZHIHENG_PRIVATE_ISSUE37_PROBE",
+        model_id="model-a",
+    )
+    assert missing_model[:2] == ("failed", "model_not_found")
 
 
 def test_connectivity_failure_marks_unhealthy_and_records_secret_free_audit(

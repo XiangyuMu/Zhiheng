@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 from pydantic import SecretStr
 from sqlalchemy import text
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
@@ -230,6 +231,20 @@ def update_provider(
     current_revision = str(row["policy_revision"])
     if current_revision != if_match:
         raise RuntimeError("provider configuration changed; refresh and retry")
+    # Reserve the exact revision while holding the database write lock.  This
+    # makes the ETag check and subsequent secret rotation one atomic mutation.
+    reserved = cast(CursorResult[Any], session.execute(
+        text(
+            """
+            UPDATE model_provider_configs
+            SET updated_at = updated_at
+            WHERE id = :provider_id AND policy_revision = :if_match
+            """
+        ),
+        {"provider_id": provider_id, "if_match": if_match},
+    ))
+    if reserved.rowcount != 1:
+        raise RuntimeError("provider configuration changed; refresh and retry")
 
     provider_kind = str(changes.get("provider_kind", row["provider_kind"]))
     display_name = str(changes.get("display_name", row["display_name"])).strip()
@@ -297,7 +312,7 @@ def update_provider(
                 endpoint_origin = :endpoint_origin,
                 policy_revision = :policy_revision,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = :id
+            WHERE id = :id AND policy_revision = :if_match
             """
         ),
         {
@@ -314,6 +329,7 @@ def update_provider(
             "endpoint_url": endpoint_url,
             "endpoint_origin": _endpoint_origin(endpoint_url),
             "policy_revision": revision,
+            "if_match": if_match,
         },
     )
     updated = _provider_row(session, provider_id)
@@ -335,11 +351,23 @@ def delete_provider_secret(
         raise LookupError("provider not found")
     if str(row["policy_revision"]) != if_match:
         raise RuntimeError("provider configuration changed; refresh and retry")
+    reserved = cast(CursorResult[Any], session.execute(
+        text(
+            """
+            UPDATE model_provider_configs
+            SET updated_at = updated_at
+            WHERE id = :provider_id AND policy_revision = :if_match
+            """
+        ),
+        {"provider_id": provider_id, "if_match": if_match},
+    ))
+    if reserved.rowcount != 1:
+        raise RuntimeError("provider configuration changed; refresh and retry")
     secret_ref = row.get("secret_ref")
-    if secret_ref and str(secret_ref).startswith("local:"):
-        if secret_store is None:
-            raise RuntimeError("provider secret store is unavailable")
+    if secret_store is not None:
         secret_store.revoke(session, provider_id=provider_id)
+    elif secret_ref and str(secret_ref).startswith("local:"):
+        raise RuntimeError("provider secret store is unavailable")
     session.execute(
         text(
             """
@@ -359,6 +387,53 @@ def delete_provider_secret(
     updated = _provider_row(session, provider_id)
     if updated is None:
         raise RuntimeError("provider secret deletion was not persisted")
+    return _provider_response(updated, secret_store=secret_store, session=session)
+
+
+def migrate_provider_secret(
+    session: Session,
+    provider_id: str,
+    if_match: str,
+    *,
+    secret_store: ProviderSecretStore | None = None,
+) -> dict[str, object]:
+    """Migrate an environment reference to an encrypted local secret."""
+    row = _provider_row(session, provider_id)
+    if row is None:
+        raise LookupError("provider not found")
+    if str(row["policy_revision"]) != if_match:
+        raise RuntimeError("provider configuration changed; refresh and retry")
+    secret_ref = row.get("secret_ref")
+    if isinstance(secret_ref, str) and secret_ref.startswith("local:"):
+        return _provider_response(row, secret_store=secret_store, session=session)
+    if not isinstance(secret_ref, str) or not secret_ref.startswith("env:"):
+        raise ValueError("provider does not use a legacy environment secret")
+    if secret_store is None:
+        raise RuntimeError("provider secret store is unavailable")
+    stored = secret_store.migrate_environment_reference(
+        session,
+        provider_id=provider_id,
+        secret_ref=secret_ref,
+    )
+    session.execute(
+        text(
+            """
+            UPDATE model_provider_configs
+            SET secret_ref = :secret_ref,
+                policy_revision = :policy_revision,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :provider_id
+            """
+        ),
+        {
+            "provider_id": provider_id,
+            "secret_ref": stored.secret_ref,
+            "policy_revision": f"{if_match}:secret-migrated",
+        },
+    )
+    updated = _provider_row(session, provider_id)
+    if updated is None:
+        raise RuntimeError("provider secret migration was not persisted")
     return _provider_response(updated, secret_store=secret_store, session=session)
 
 
@@ -396,6 +471,8 @@ def connectivity_test(
         probe_signature = inspect.signature(probe_model_provider_connectivity)
         if "provider_id" in probe_signature.parameters:
             probe_kwargs["provider_id"] = provider_id
+        if "model_id" in probe_signature.parameters:
+            probe_kwargs["model_id"] = selected_model
         if "secret_store" in probe_signature.parameters:
             probe_kwargs["secret_store"] = secret_store
         probe = cast(Any, probe_model_provider_connectivity)
@@ -644,6 +721,7 @@ def _provider_response(
         "secret_status": secret_status.status,
         "secret_fingerprint": secret_status.fingerprint,
         "secret_version": secret_status.version,
+        "secret_source": secret_status.source,
         "health_status": str(row.get("health_status") or "unknown"),
         "health_checked_at": _iso_timestamp(row.get("health_checked_at")),
         "health_error": row.get("health_error"),

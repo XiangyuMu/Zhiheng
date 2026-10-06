@@ -1231,6 +1231,7 @@ function renderModelProviders(providers) {
     const actions = node("div", undefined, "provider-actions");
   actions.append(action("编辑", () => openProviderEditor(provider)), action(provider.enabled ? "停用" : "启用", () => toggleProvider(provider)), action("测试连接", () => testProvider(provider)));
   if (provider.secret_configured) actions.append(action("删除密钥", () => deleteProviderSecret(provider), "danger"));
+  if (provider.secret_source === "legacy_env") actions.append(action("迁移到本地加密", () => migrateProviderSecret(provider), "quiet"));
   actions.append(action("归档", () => archiveProvider(provider), "danger"));
     li.append(title, detail, health, actions); return li;
   }));
@@ -1291,6 +1292,7 @@ async function toggleProvider(provider) { try { await modelMutation(`/v1/model-c
 async function archiveProvider(provider) { try { await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}`, "PATCH", { archived: true, enabled: false }, provider.etag); await loadModelConfig(); } catch (error) { showToast(readableError(error)); } }
 async function testProvider(provider) { try { showToast("正在测试连接…"); const result = await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/connectivity-test`, "POST", {}, null); showToast(result.status === "succeeded" ? "连接测试成功" : `连接失败：${result.message}`); await loadModelConfig(); } catch (error) { showToast(readableError(error)); } }
 async function deleteProviderSecret(provider) { if (!window.confirm("删除此 Provider 密钥并立即停用 Provider？")) return; try { await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/secret`, "DELETE", {}, provider.etag); showToast("密钥已删除，Provider 已停用"); await loadModelConfig(); } catch (error) { showToast(readableError(error)); } }
+async function migrateProviderSecret(provider) { try { showToast("正在迁移密钥…"); await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/secret/migrate`, "POST", {}, provider.etag); showToast("密钥已迁移到本地加密存储"); await loadModelConfig(); } catch (error) { showToast(readableError(error)); } }
 function renderModelAudits(audits) { $("model-audit-list").replaceChildren(...(audits || []).map((audit) => { const tr = node("tr"); const code = audit.diagnostic_code || audit.error_class || ""; const payloadHash = audit.payload_hash || ""; const responseHash = audit.response_hash || ""; const hash = payloadHash || responseHash ? `请求 ${payloadHash.slice(0, 12) || "—"} · 响应 ${responseHash.slice(0, 12) || "—"}` : "—"; tr.append(node("td", audit.sent_at || audit.created_at || ""), node("td", `${audit.provider_id} / ${audit.model_id}`), node("td", modelAuditStatusNames[audit.status] || audit.status || ""), node("td", audit.duration_ms == null ? "—" : `${audit.duration_ms} ms`), node("td", modelDiagnosticNames[code] || (audit.status === "failed" ? "调用失败" : "—")), node("td", hash)); return tr; })); }
 $("load-model-config").addEventListener("click", () => busy($("load-model-config"), "刷新中…", loadModelConfig));
 $("add-model-provider").addEventListener("click", () => openProviderEditor(null));

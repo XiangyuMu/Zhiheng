@@ -17,6 +17,7 @@ def probe_provider_connectivity(
     provider_kind: str,
     secret_ref: str | None,
     provider_id: str | None = None,
+    model_id: str | None = None,
     secret_store: SecretResolver | None = None,
     timeout: float = 5.0,
 ) -> tuple[str, str, str]:
@@ -61,6 +62,28 @@ def probe_provider_connectivity(
         return "failed", "model_not_found", "供应商接口或模型不存在"
     if response.status_code >= 400:
         return "failed", "http_error", f"供应商返回 HTTP {response.status_code}"
+    try:
+        payload = response.json()
+    except ValueError:
+        return "failed", "response_format_error", "供应商返回格式无法识别"
+    if provider_kind == "ollama":
+        models = payload.get("models") if isinstance(payload, dict) else None
+        model_names = {
+            str(item.get("name"))
+            for item in models
+            if isinstance(item, dict) and item.get("name")
+        } if isinstance(models, list) else set()
+    else:
+        models = payload.get("data") if isinstance(payload, dict) else None
+        model_names = {
+            str(item.get("id"))
+            for item in models
+            if isinstance(item, dict) and item.get("id")
+        } if isinstance(models, list) else set()
+    if not model_names:
+        return "failed", "response_format_error", "供应商返回格式无法识别"
+    if model_id and model_id not in model_names:
+        return "failed", "model_not_found", "供应商接口或模型不存在"
     return "succeeded", "ok", "连接正常"
 
 

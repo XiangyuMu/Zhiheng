@@ -45,6 +45,7 @@ from zhiheng.models.configuration import (
     defaults,
     delete_provider_secret,
     list_providers,
+    migrate_provider_secret,
     recent_audits,
     set_defaults,
     update_provider,
@@ -555,6 +556,8 @@ def create_app(
                 if_match,
                 secret_store=app.state.provider_secret_store,
             )
+        except KeyError as exc:
+            raise HTTPException(status_code=422, detail="provider secret migration failed") from exc
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuntimeError as exc:
@@ -639,6 +642,50 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (RuntimeError, PermissionError) as exc:
             raise HTTPException(status_code=412, detail=str(exc)) from exc
+        response.headers["ETag"] = str(result["etag"])
+        response.headers["Cache-Control"] = "no-store"
+        _remember_model_config_result(app, operation_key, fingerprint, result)
+        return result
+
+    @app.post("/v1/model-config/providers/{provider_id}/secret/migrate", tags=["models"])
+    def model_provider_secret_migrate(
+        provider_id: str,
+        request: Request,
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        csrf_header: str | None = Header(default=None, alias="X-CSRF-Token"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        if_match: str | None = Header(default=None, alias="If-Match"),
+    ) -> dict[str, object]:
+        operation_key = _require_model_mutation(
+            request, session, session_service, session_token, csrf_header, idempotency_key
+        )
+        if not if_match:
+            raise HTTPException(status_code=412, detail="missing If-Match")
+        fingerprint = _model_config_fingerprint(
+            f"provider:secret-migrate:{provider_id}:{if_match}", {}
+        )
+        cached = _model_config_idempotent_result(app, operation_key, fingerprint)
+        if cached is not None:
+            response.headers["ETag"] = str(cached.get("etag", ""))
+            response.headers["Cache-Control"] = "no-store"
+            return dict(cached)
+        try:
+            result = migrate_provider_secret(
+                session,
+                provider_id,
+                if_match,
+                secret_store=app.state.provider_secret_store,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=422, detail="provider secret migration failed") from exc
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (RuntimeError, PermissionError) as exc:
+            raise HTTPException(status_code=412, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="provider secret migration failed") from exc
         response.headers["ETag"] = str(result["etag"])
         response.headers["Cache-Control"] = "no-store"
         _remember_model_config_result(app, operation_key, fingerprint, result)

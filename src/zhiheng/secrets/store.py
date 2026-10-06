@@ -48,6 +48,7 @@ class SecretStatus:
     status: str
     fingerprint: str | None = None
     version: int | None = None
+    source: str = "none"
 
 
 @dataclass(frozen=True)
@@ -274,6 +275,19 @@ class ProviderSecretStore:
             revoked_versions=tuple(int(version) for version in rows),
         )
 
+    def migrate_environment_reference(
+        self,
+        session: Session,
+        *,
+        provider_id: str,
+        secret_ref: str,
+    ) -> StoredProviderSecret:
+        """Copy a legacy environment secret into local encrypted storage once."""
+        if not secret_ref.startswith("env:"):
+            raise ValueError("only env secret references can be migrated")
+        secret = self._environment.resolve(secret_ref, provider_id=provider_id)
+        return self.store(session, provider_id=provider_id, secret=secret)
+
     def _store_version(
         self,
         session: Session,
@@ -356,6 +370,7 @@ class ProviderSecretStore:
                 configured=True,
                 status="configured",
                 fingerprint=sha256_text(secret_ref)[:12],
+                source="legacy_env",
             )
         if not secret_ref.startswith(LOCAL_SECRET_PREFIX):
             return SecretStatus(configured=True, status="unavailable")
@@ -374,12 +389,14 @@ class ProviderSecretStore:
                 status="unavailable",
                 fingerprint=fingerprint,
                 version=version,
+                source="local",
             )
         return SecretStatus(
             configured=True,
             status="configured",
             fingerprint=fingerprint,
             version=version,
+            source="local",
         )
 
     def _decrypt_row(self, row: Mapping[str, Any], *, provider_id: str, instance_id: str) -> str:
