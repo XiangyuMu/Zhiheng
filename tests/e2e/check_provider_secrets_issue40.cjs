@@ -1,5 +1,6 @@
 /* Issue #40: browser acceptance for encrypted Provider secret lifecycle. */
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const https = require("node:https");
 const path = require("node:path");
@@ -18,7 +19,12 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
 
 (async () => {
   let receivedAuth = [];
-  const providerServer = https.createServer({
+  let providerServer;
+  let browser;
+  let context;
+  let page;
+  try {
+  providerServer = https.createServer({
     key: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_KEY),
     cert: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_CERT),
   }, (request, response) => {
@@ -39,11 +45,12 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
   await new Promise((resolve) => providerServer.listen(0, "127.0.0.1", resolve));
   const providerPort = providerServer.address().port;
   const providerUrl = `https://127.0.0.1:${providerPort}`;
-  const browser = await chromium.launch({ headless: true, channel: "chromium" });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
-  const page = await context.newPage();
+  browser = await chromium.launch({ headless: true, channel: "chromium" });
+  context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
+  page = await context.newPage();
   const errors = [];
   const responses = [];
+  const observedApiBodies = [];
   const responseBodyReads = [];
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("response", (response) => {
@@ -67,7 +74,7 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     await page.waitForURL("**/knowledge-agent**");
   }
   async function api(url, options = {}) {
-    return page.evaluate(async ({ url, options }) => {
+    const body = await page.evaluate(async ({ url, options }) => {
       const csrf = document.cookie.split(";").map((v) => v.trim()).find((v) => v.startsWith("zhiheng_csrf="))?.slice(13) || "";
       const response = await fetch(url, { credentials: "same-origin", ...options,
         headers: { Accept: "application/json", "Content-Type": "application/json", "X-CSRF-Token": csrf,
@@ -77,9 +84,10 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
       if (!response.ok) throw new Error(`${response.status}: ${body.detail || JSON.stringify(body)}`);
       return body;
     }, { url, options });
+    observedApiBodies.push(JSON.stringify(body));
+    return body;
   }
   const evidence = {};
-  try {
     await login();
     await page.goto(`${base}/knowledge-agent#settings`);
     await page.locator("#model-provider-form").waitFor({ state: "hidden" });
@@ -155,16 +163,32 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     assert(!storage.local.includes(syntheticKey) && !storage.session.includes(syntheticKey));
     const visible = await page.locator("body").innerText();
     assert(!visible.includes(syntheticKey) && !visible.includes("ciphertext_b64"));
-    for (const result of await Promise.all(responseBodyReads)) {
-      if (result.error) {
-        throw new Error(`could not read response body for ${result.url}: ${result.error}`);
-      }
-      const body = result.body;
-      assert(!body.includes(syntheticKey) && !body.includes(rotatedKey) && !body.includes(legacyKey));
-      assert(!body.includes("ciphertext_b64"));
+    const databaseUrl = process.env.ZHIHENG_DATABASE_URL || "";
+    const databasePath = databaseUrl.startsWith("sqlite:///") ? databaseUrl.slice("sqlite:///".length) : "";
+    assert(databasePath && fs.existsSync(databasePath));
+    const ciphertexts = execFileSync("python3", ["-c", `
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    for (value,) in db.execute("SELECT ciphertext_b64 FROM provider_secret_records WHERE ciphertext_b64 IS NOT NULL"):
+        print(value)
+`, databasePath], { encoding: "utf8" }).trim().split("\\n").filter(Boolean);
+    assert(ciphertexts.length >= 3);
+    const forbiddenOutputs = [
+      visible, JSON.stringify(storage), ...observedApiBodies,
+      ...((await Promise.all(responseBodyReads)).map((result) => {
+        if (result.error) throw new Error(`could not read response body for ${result.url}: ${result.error}`);
+        return result.body;
+      })),
+    ];
+    for (const value of forbiddenOutputs) {
+      for (const ciphertext of ciphertexts) assert(!value.includes(ciphertext));
     }
     const screenshotPath = path.join(output, "provider-secrets.png");
     await page.screenshot({ path: screenshotPath, fullPage: true });
+    const screenshotBytes = fs.readFileSync(screenshotPath);
+    for (const key of [syntheticKey, rotatedKey, legacyKey, ...ciphertexts]) {
+      assert(!screenshotBytes.includes(Buffer.from(key)));
+    }
     const acceptanceRoot = process.env.ZHIHENG_ACCEPTANCE_OUTPUT || output;
     const logContents = ["api.log", "worker.log"].map((name) => {
       const file = path.join(acceptanceRoot, name);
@@ -172,9 +196,6 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     }).join("\n");
     assert(fs.existsSync(path.join(acceptanceRoot, "api.log")) && fs.existsSync(path.join(acceptanceRoot, "worker.log")));
     assert(!logContents.includes(syntheticKey) && !logContents.includes(rotatedKey) && !logContents.includes(legacyKey));
-    const databaseUrl = process.env.ZHIHENG_DATABASE_URL || "";
-    const databasePath = databaseUrl.startsWith("sqlite:///") ? databaseUrl.slice("sqlite:///".length) : "";
-    assert(databasePath && fs.existsSync(databasePath));
     const databaseFiles = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]
       .filter((file) => fs.existsSync(file));
     const databaseBytes = Buffer.concat(databaseFiles.map((file) => fs.readFileSync(file)));
@@ -193,6 +214,7 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
       audit: true,
       legacy_key_scanned: true,
       model_config_responses: responses.filter((response) => response.url().includes("/v1/model-config")).length,
+      ciphertexts_scanned: ciphertexts.length,
     };
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "passed", checks: [
       "real browser creates encrypted Provider key without rendering plaintext",
@@ -206,5 +228,9 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
   } catch (error) {
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "failed", error: error.stack || String(error), evidence, browserErrors: errors }, null, 2));
     throw error;
-  } finally { await context.close(); await browser.close(); await new Promise((resolve) => providerServer.close(resolve)); }
+  } finally {
+    if (context) await context.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
+    if (providerServer) await new Promise((resolve) => providerServer.close(resolve));
+  }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

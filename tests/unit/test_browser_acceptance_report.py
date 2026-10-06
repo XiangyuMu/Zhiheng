@@ -97,6 +97,20 @@ PROVIDER_SECRET_CHECKS = [
     "model-config responses",
 ]
 
+PROVIDER_MIGRATION_RESTART_CHECKS = [
+    "migrated Provider remains configured after API and Worker restart",
+    "legacy environment variable is absent while migrated Provider authenticates over HTTPS",
+    "knowledge search remains available after migration restart",
+]
+
+PROVIDER_RESTART_CHECKS = [
+    "tampered Provider is unavailable after API and Worker restart",
+    "Provider key can be re-entered after recovery",
+    "re-entered Provider succeeds through a real authenticated HTTPS probe",
+    "legacy environment reference is absent after restart",
+    "knowledge search remains available after Provider restart",
+]
+
 
 def complete_delivery_checks() -> dict[str, object]:
     return {
@@ -202,7 +216,37 @@ def complete_provider_secret_checks() -> dict[str, object]:
                 "http_responses": 31,
                 "model_config_responses": 27,
                 "legacy_key_scanned": True,
+                "ciphertexts_scanned": 3,
             },
+        },
+    }
+
+
+def complete_provider_migration_restart_checks() -> dict[str, object]:
+    return {
+        "checks": PROVIDER_MIGRATION_RESTART_CHECKS,
+        "browserErrors": [],
+        "evidence": {
+            "provider_id": "provider-1",
+            "pre_reentry_status": "configured",
+            "post_reentry_status": "configured",
+            "connectivity": "succeeded",
+            "search_status": 200,
+            "legacy_environment_removed": True,
+        },
+    }
+
+
+def complete_provider_restart_checks() -> dict[str, object]:
+    return {
+        "checks": PROVIDER_RESTART_CHECKS,
+        "browserErrors": [],
+        "evidence": {
+            "provider_id": "provider-1",
+            "pre_reentry_status": "unavailable",
+            "post_reentry_status": "configured",
+            "connectivity": "succeeded",
+            "search_status": 200,
         },
     }
 
@@ -265,6 +309,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "issue11-upgrade/checks.json",
         "issue12-relations/checks.json",
         "provider-secrets-issue40/checks.json",
+        "provider-migration-restart/checks.json",
         "provider-restart/checks.json",
     ):
         write_checks(
@@ -288,6 +333,10 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             if relative == "issue12-relations/checks.json"
             else complete_provider_secret_checks()
             if relative == "provider-secrets-issue40/checks.json"
+            else complete_provider_migration_restart_checks()
+            if relative == "provider-migration-restart/checks.json"
+            else complete_provider_restart_checks()
+            if relative == "provider-restart/checks.json"
             else {"checks": ["one"], "browserErrors": [], "evidence": {"facts": ["observed"]}},
         )
     (tmp_path / "api.log").write_text("api ready")

@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const https = require("node:https");
 const { chromium } = require("playwright");
+const { execFileSync } = require("node:child_process");
 
 const base = process.argv[2];
 const output = process.argv[3];
@@ -10,17 +11,49 @@ if (!base || !output) throw new Error("Pass a service URL and output directory")
 fs.mkdirSync(output, { recursive: true });
 
 (async () => {
-  const browser = await chromium.launch({ headless: true, channel: "chromium" });
-  const context = await browser.newContext();
-  const page = await context.newPage();
+  let browser;
+  let context;
+  let page;
   const receivedAuth = [];
-  const providerServer = https.createServer({
+  const expectMigrated = process.env.ZHIHENG_EXPECT_MIGRATED === "1";
+  let expectedAuthorization = expectMigrated
+    ? "Bearer issue40-browser-legacy-key"
+    : "Bearer sk-issue40-reentry-key";
+  let providerServer;
+  function leakageEvidence(keys, logNames) {
+    const root = process.env.ZHIHENG_ACCEPTANCE_OUTPUT || output;
+    const logs = logNames.map((name) => {
+      const file = `${root}/${name}`;
+      assert(fs.existsSync(file), `missing restart log: ${file}`);
+      return fs.readFileSync(file, "utf8");
+    }).join("\n");
+    const databaseUrl = process.env.ZHIHENG_DATABASE_URL || "";
+    const databasePath = databaseUrl.startsWith("sqlite:///") ? databaseUrl.slice("sqlite:///".length) : "";
+    assert(databasePath && fs.existsSync(databasePath));
+    const ciphertexts = execFileSync("python3", ["-c", `
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    for (value,) in db.execute("SELECT ciphertext_b64 FROM provider_secret_records WHERE ciphertext_b64 IS NOT NULL"):
+        print(value)
+`, databasePath], { encoding: "utf8" }).trim().split("\n").filter(Boolean);
+    const databaseBytes = fs.readFileSync(databasePath);
+    for (const key of keys) {
+      assert(!logs.includes(key));
+      assert(!databaseBytes.includes(Buffer.from(key)));
+    }
+    return { logs: true, database: true, ciphertexts_scanned: ciphertexts.length };
+  }
+  try {
+  browser = await chromium.launch({ headless: true, channel: "chromium" });
+  context = await browser.newContext();
+  page = await context.newPage();
+  providerServer = https.createServer({
     key: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_KEY),
     cert: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_CERT),
   }, (request, response) => {
     if (request.url === "/models") {
       receivedAuth.push(request.headers.authorization || "");
-      if (request.headers.authorization !== "Bearer sk-issue40-reentry-key") {
+      if (request.headers.authorization !== expectedAuthorization) {
         response.writeHead(401, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: "invalid authorization" }));
         return;
@@ -34,7 +67,6 @@ fs.mkdirSync(output, { recursive: true });
   });
   await new Promise((resolve) => providerServer.listen(0, "127.0.0.1", resolve));
   const providerUrl = `https://127.0.0.1:${providerServer.address().port}`;
-  try {
     await page.goto(`${base}/login`);
     await page.evaluate(async () => {
       const response = await fetch("/auth/bootstrap", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -53,10 +85,45 @@ fs.mkdirSync(output, { recursive: true });
     const provider = state.body.find((item) => item.display_name === "Issue 40 Legacy Provider");
     assert(provider);
     assert.equal(provider.secret_source, "local");
-    assert.equal(provider.secret_status, "unavailable");
     assert(!JSON.stringify(state.body).includes("ZHIHENG_PRIVATE_ISSUE40_LEGACY"));
     const csrf = await page.evaluate(() => document.cookie.split(";").map((v) => v.trim())
       .find((v) => v.startsWith("zhiheng_csrf="))?.slice(13) || "");
+    if (expectMigrated) {
+      assert.equal(provider.secret_status, "configured");
+      const updated = await page.evaluate(async ({ providerId, etag, csrf, providerUrl }) => {
+        const response = await fetch(`/v1/model-config/providers/${providerId}`, {
+          method: "PATCH", credentials: "same-origin",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf,
+            "If-Match": etag, "Idempotency-Key": crypto.randomUUID() },
+          body: JSON.stringify({ base_url: providerUrl, enabled: true }),
+        });
+        return { status: response.status, body: await response.json() };
+      }, { providerId: provider.provider_id, etag: provider.etag, csrf, providerUrl });
+      assert.equal(updated.status, 200, JSON.stringify(updated.body));
+      const connectivity = await page.evaluate(async ({ providerId, csrf }) => {
+        const response = await fetch(`/v1/model-config/providers/${providerId}/connectivity-test`, {
+          method: "POST", credentials: "same-origin",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf,
+            "Idempotency-Key": crypto.randomUUID() },
+        });
+        return { status: response.status, body: await response.json() };
+      }, { providerId: provider.provider_id, csrf });
+      assert.equal(connectivity.status, 200, JSON.stringify(connectivity.body));
+      assert.equal(connectivity.body.status, "succeeded");
+      assert.deepEqual(receivedAuth.at(-1), "Bearer issue40-browser-legacy-key");
+      const search = await page.evaluate(async () => (await fetch("/v1/knowledge/search?sort=updated_desc")).status);
+      assert.equal(search, 200);
+      const leakage = leakageEvidence(["issue40-browser-legacy-key"], ["api-restart.log", "worker-restart.log"]);
+      fs.writeFileSync(`${output}/checks.json`, JSON.stringify({ status: "passed", checks: [
+        "migrated Provider remains configured after API and Worker restart",
+        "legacy environment variable is absent while migrated Provider authenticates over HTTPS",
+        "knowledge search remains available after migration restart",
+      ], evidence: { provider_id: provider.provider_id, pre_reentry_status: provider.secret_status,
+        post_reentry_status: updated.body.secret_status, connectivity: connectivity.body.status,
+        search_status: search, legacy_environment_removed: true, leakage } }, null, 2));
+      return;
+    }
+    assert.equal(provider.secret_status, "unavailable");
     const repaired = await page.evaluate(async ({ providerId, etag, csrf, providerUrl }) => {
       const response = await fetch(`/v1/model-config/providers/${providerId}`, {
         method: "PATCH", credentials: "same-origin",
@@ -68,6 +135,7 @@ fs.mkdirSync(output, { recursive: true });
     }, { providerId: provider.provider_id, etag: provider.etag, csrf, providerUrl });
     assert.equal(repaired.status, 200);
     assert.equal(repaired.body.secret_status, "configured");
+    expectedAuthorization = "Bearer sk-issue40-reentry-key";
     const connectivity = await page.evaluate(async ({ providerId, csrf }) => {
       const response = await fetch(`/v1/model-config/providers/${providerId}/connectivity-test`, {
         method: "POST", credentials: "same-origin",
@@ -84,6 +152,7 @@ fs.mkdirSync(output, { recursive: true });
       return response.status;
     });
     assert.equal(search, 200);
+    const leakage = leakageEvidence(["sk-issue40-reentry-key"], ["api-restart-2.log", "worker-restart-2.log"]);
     fs.writeFileSync(`${output}/checks.json`, JSON.stringify({ status: "passed", checks: [
       "tampered Provider is unavailable after API and Worker restart",
       "Provider key can be re-entered after recovery",
@@ -92,9 +161,13 @@ fs.mkdirSync(output, { recursive: true });
       "knowledge search remains available after Provider restart",
     ], evidence: { provider_id: provider.provider_id, pre_reentry_status: "unavailable",
       post_reentry_status: repaired.body.secret_status, connectivity: connectivity.body.status,
-      search_status: search } }, null, 2));
+      search_status: search, leakage } }, null, 2));
   } catch (error) {
     fs.writeFileSync(`${output}/checks.json`, JSON.stringify({ status: "failed", error: error.stack || String(error) }, null, 2));
     throw error;
-  } finally { await context.close(); await browser.close(); await new Promise((resolve) => providerServer.close(resolve)); }
+  } finally {
+    if (context) await context.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
+    if (providerServer) await new Promise((resolve) => providerServer.close(resolve));
+  }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

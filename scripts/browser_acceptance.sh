@@ -21,13 +21,6 @@ unset PLAYWRIGHT_MODULE_PATH
 unset BROWSER_CHANNEL
 
 mkdir -p "${OUTPUT_DIR}" "${OBJECT_STORE}"
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
-  -keyout "${PROVIDER_KEY}" -out "${PROVIDER_CERT}" \
-  -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1" \
-  >"${OUTPUT_DIR}/provider-cert.log" 2>&1
-export ZHIHENG_ACCEPTANCE_PROVIDER_CERT="${PROVIDER_CERT}"
-export ZHIHENG_ACCEPTANCE_PROVIDER_KEY="${PROVIDER_KEY}"
-export SSL_CERT_FILE="${PROVIDER_CERT}"
 cleanup() {
   if [[ -n "${WORKER_PID}" ]]; then kill "${WORKER_PID}" 2>/dev/null || true; fi
   if [[ -n "${API_PID}" ]]; then kill "${API_PID}" 2>/dev/null || true; fi
@@ -39,7 +32,7 @@ finalize() {
   local exit_code=$?
   local report_code=0
   if [[ -z "${GIT_SHA}" ]]; then
-    GIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+    GIT_SHA="$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)"
   fi
   cleanup
   python3 "${ROOT_DIR}/scripts/browser_acceptance_report.py" \
@@ -54,6 +47,16 @@ finalize() {
   fi
   exit "${exit_code}"
 }
+trap finalize EXIT
+cd "${ROOT_DIR}"
+CURRENT_STAGE="provider-cert"
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+  -keyout "${PROVIDER_KEY}" -out "${PROVIDER_CERT}" \
+  -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1" \
+  >"${OUTPUT_DIR}/provider-cert.log" 2>&1
+export ZHIHENG_ACCEPTANCE_PROVIDER_CERT="${PROVIDER_CERT}"
+export ZHIHENG_ACCEPTANCE_PROVIDER_KEY="${PROVIDER_KEY}"
+export SSL_CERT_FILE="${PROVIDER_CERT}"
 run_stage() {
   CURRENT_STAGE="$1"
   shift
@@ -63,9 +66,6 @@ run_stage() {
     return "${stage_code}"
   }
 }
-trap finalize EXIT
-
-cd "${ROOT_DIR}"
 GIT_SHA="$(git rev-parse HEAD)"
 if [[ -n "$(git status --porcelain)" ]]; then
   CURRENT_STAGE="clean-checkout"
@@ -131,6 +131,28 @@ run_stage "provider-secrets-issue40" node tests/e2e/check_provider_secrets_issue
 
 CURRENT_STAGE="provider-restart"
 unset ZHIHENG_PRIVATE_ISSUE40_LEGACY
+kill "${WORKER_PID}" 2>/dev/null || true
+kill "${API_PID}" 2>/dev/null || true
+wait "${WORKER_PID}" 2>/dev/null || true
+wait "${API_PID}" 2>/dev/null || true
+API_PID=""
+WORKER_PID=""
+uv run uvicorn zhiheng.api.main:app --host 127.0.0.1 --port "${PORT}" >"${OUTPUT_DIR}/api-restart.log" 2>&1 &
+API_PID=$!
+for _ in $(seq 1 60); do
+  if ! kill -0 "${API_PID}" 2>/dev/null; then
+    cat "${OUTPUT_DIR}/api-restart.log" >&2
+    exit 1
+  fi
+  if curl --fail --silent "http://127.0.0.1:${PORT}/healthz" >/dev/null; then break; fi
+  sleep 1
+done
+curl --fail --silent "http://127.0.0.1:${PORT}/healthz" >/dev/null
+uv run zhiheng-worker --role worker --idle-seconds 1 >"${OUTPUT_DIR}/worker-restart.log" 2>&1 &
+WORKER_PID=$!
+sleep 1
+run_stage "provider-migration-restart" env ZHIHENG_EXPECT_MIGRATED=1 node tests/e2e/check_provider_secrets_restart.cjs "${BASE_URL}" "${OUTPUT_DIR}/provider-migration-restart"
+
 CURRENT_STAGE="provider-secret-loss"
 uv run python - <<'PY'
 import os
@@ -152,18 +174,18 @@ wait "${WORKER_PID}" 2>/dev/null || true
 wait "${API_PID}" 2>/dev/null || true
 API_PID=""
 WORKER_PID=""
-uv run uvicorn zhiheng.api.main:app --host 127.0.0.1 --port "${PORT}" >"${OUTPUT_DIR}/api-restart.log" 2>&1 &
+uv run uvicorn zhiheng.api.main:app --host 127.0.0.1 --port "${PORT}" >"${OUTPUT_DIR}/api-restart-2.log" 2>&1 &
 API_PID=$!
 for _ in $(seq 1 60); do
   if ! kill -0 "${API_PID}" 2>/dev/null; then
-    cat "${OUTPUT_DIR}/api-restart.log" >&2
+    cat "${OUTPUT_DIR}/api-restart-2.log" >&2
     exit 1
   fi
   if curl --fail --silent "http://127.0.0.1:${PORT}/healthz" >/dev/null; then break; fi
   sleep 1
 done
 curl --fail --silent "http://127.0.0.1:${PORT}/healthz" >/dev/null
-uv run zhiheng-worker --role worker --idle-seconds 1 >"${OUTPUT_DIR}/worker-restart.log" 2>&1 &
+uv run zhiheng-worker --role worker --idle-seconds 1 >"${OUTPUT_DIR}/worker-restart-2.log" 2>&1 &
 WORKER_PID=$!
 sleep 1
 run_stage "provider-restart" node tests/e2e/check_provider_secrets_restart.cjs "${BASE_URL}" "${OUTPUT_DIR}/provider-restart"

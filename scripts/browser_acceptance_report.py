@@ -104,6 +104,22 @@ PROVIDER_SECRET_CHECKS = {
     "refresh": "refresh and API listing retain only configured state and short fingerprint",
 }
 
+PROVIDER_MIGRATION_RESTART_CHECKS = {
+    "configured": "migrated Provider remains configured after API and Worker restart",
+    "legacy_removed": (
+        "legacy environment variable is absent while migrated Provider authenticates over HTTPS"
+    ),
+    "search": "knowledge search remains available after migration restart",
+}
+
+PROVIDER_RESTART_CHECKS = {
+    "unavailable": "tampered Provider is unavailable after API and Worker restart",
+    "reentry": "Provider key can be re-entered after recovery",
+    "authenticated": "re-entered Provider succeeds through a real authenticated HTTPS probe",
+    "legacy_absent": "legacy environment reference is absent after restart",
+    "search": "knowledge search remains available after Provider restart",
+}
+
 EXPECTED_CHECKS = {
     "workspace_full": Path("workspace-full/checks.json"),
     "relations": Path("relations/checks.json"),
@@ -117,6 +133,7 @@ EXPECTED_CHECKS = {
     "issue11_upgrade": Path("issue11-upgrade/checks.json"),
     "issue12_relations": Path("issue12-relations/checks.json"),
     "provider_secrets_issue40": Path("provider-secrets-issue40/checks.json"),
+    "provider_migration_restart": Path("provider-migration-restart/checks.json"),
     "provider_restart": Path("provider-restart/checks.json"),
 }
 
@@ -236,7 +253,9 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         or leakage.get("http_responses", 0) <= 0 \
                         or not isinstance(leakage.get("screenshot"), str) \
                         or not isinstance(leakage.get("legacy_key_scanned"), bool) \
-                        or leakage.get("legacy_key_scanned") is not True:
+                        or leakage.get("legacy_key_scanned") is not True \
+                        or not isinstance(leakage.get("ciphertexts_scanned"), int) \
+                        or leakage.get("ciphertexts_scanned", 0) <= 0:
                         result["error"] = "provider leakage evidence is incomplete"
                         results[name] = result
                         continue
@@ -253,6 +272,47 @@ def validate_checks(output: Path) -> dict[str, Any]:
                             break
                     if result.get("error"):
                         continue
+                if name in {"provider_migration_restart", "provider_restart"}:
+                    required = (
+                        PROVIDER_MIGRATION_RESTART_CHECKS
+                        if name == "provider_migration_restart"
+                        else PROVIDER_RESTART_CHECKS
+                    )
+                    missing_provider = [
+                        label
+                        for label in required.values()
+                        if not any(isinstance(item, str) and item == label for item in checks)
+                    ]
+                    evidence_payload = payload.get("evidence")
+                    if missing_provider or not isinstance(evidence_payload, dict):
+                        result["error"] = (
+                            "required provider restart checks/evidence missing: "
+                            f"{missing_provider}"
+                        )
+                        results[name] = result
+                        continue
+                    if name == "provider_migration_restart":
+                        if (
+                            evidence_payload.get("pre_reentry_status") != "configured"
+                            or evidence_payload.get("connectivity") != "succeeded"
+                            or evidence_payload.get("legacy_environment_removed") is not True
+                            or evidence_payload.get("search_status") != 200
+                        ):
+                            result["error"] = (
+                                "migrated Provider restart evidence has invalid outcomes"
+                            )
+                            results[name] = result
+                            continue
+                    else:
+                        if (
+                            evidence_payload.get("pre_reentry_status") != "unavailable"
+                            or evidence_payload.get("post_reentry_status") != "configured"
+                            or evidence_payload.get("connectivity") != "succeeded"
+                            or evidence_payload.get("search_status") != 200
+                        ):
+                            result["error"] = "Provider recovery evidence has invalid outcomes"
+                            results[name] = result
+                            continue
                 if name == "context_prompts_issue8":
                     required_issue8 = list(ISSUE8_CHECKS.values())
                     missing_issue8 = [
