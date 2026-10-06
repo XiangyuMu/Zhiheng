@@ -240,6 +240,19 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         result["error"] = "provider leakage evidence is incomplete"
                         results[name] = result
                         continue
+                    screenshot = output / "provider-secrets-issue40" / str(leakage["screenshot"])
+                    if not screenshot.is_file() or screenshot.stat().st_size == 0:
+                        result["error"] = "provider leakage screenshot is missing or empty"
+                        results[name] = result
+                        continue
+                    for log_name in ("api.log", "worker.log"):
+                        log_path = output / log_name
+                        if not log_path.is_file():
+                            result["error"] = f"provider leakage log is missing: {log_name}"
+                            results[name] = result
+                            break
+                    if result.get("error"):
+                        continue
                 if name == "context_prompts_issue8":
                     required_issue8 = list(ISSUE8_CHECKS.values())
                     missing_issue8 = [

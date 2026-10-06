@@ -291,6 +291,8 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             else {"checks": ["one"], "browserErrors": [], "evidence": {"facts": ["observed"]}},
         )
     (tmp_path / "api.log").write_text("api ready")
+    (tmp_path / "worker.log").write_text("worker ready")
+    (tmp_path / "provider-secrets-issue40" / "provider-secrets.png").write_bytes(b"png")
     (tmp_path / "workspace-full" / "screen.png").write_bytes(b"png")
 
     code, report = run_report(tmp_path, monkeypatch, exit_code=0)
