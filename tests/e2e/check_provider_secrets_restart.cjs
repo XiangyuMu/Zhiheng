@@ -68,13 +68,13 @@ fs.mkdirSync(output, { recursive: true });
     }, { providerId: provider.provider_id, etag: provider.etag, csrf, providerUrl });
     assert.equal(repaired.status, 200);
     assert.equal(repaired.body.secret_status, "configured");
-    const connectivity = await page.evaluate(async (providerId, csrf) => {
+    const connectivity = await page.evaluate(async ({ providerId, csrf }) => {
       const response = await fetch(`/v1/model-config/providers/${providerId}/connectivity-test`, {
         method: "POST", credentials: "same-origin",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
       });
       return { status: response.status, body: await response.json() };
-    }, provider.provider_id, csrf);
+    }, { providerId: provider.provider_id, csrf });
     assert.equal(connectivity.status, 200);
     assert.equal(connectivity.body.status, "succeeded");
     assert.deepEqual(receivedAuth.at(-1), "Bearer sk-issue40-reentry-key");
