@@ -91,6 +91,16 @@ IMPORT_FAILURE_CHECKS = {
     "network_error": "network_error status is rendered with bounded polling and recovery semantics",
 }
 
+PROVIDER_SECRET_CHECKS = {
+    "create": "real browser creates encrypted Provider key without rendering plaintext",
+    "rotation": "browser rotation creates a new version and deletion disables the Provider",
+    "migration": "browser migrates a legacy env reference to local encrypted storage",
+    "leakage": (
+        "synthetic key and complete ciphertext are absent from page, storage, and "
+        "model-config responses"
+    ),
+}
+
 EXPECTED_CHECKS = {
     "workspace_full": Path("workspace-full/checks.json"),
     "relations": Path("relations/checks.json"),
@@ -103,6 +113,7 @@ EXPECTED_CHECKS = {
     "issue14_writes": Path("issue14-writes/checks.json"),
     "issue11_upgrade": Path("issue11-upgrade/checks.json"),
     "issue12_relations": Path("issue12-relations/checks.json"),
+    "provider_secrets_issue40": Path("provider-secrets-issue40/checks.json"),
 }
 
 
@@ -185,10 +196,21 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     "issue14_writes",
                     "issue11_upgrade",
                     "issue12_relations",
+                    "provider_secrets_issue40",
                 } and (not isinstance(payload.get("evidence"), dict) or not payload["evidence"]):
                     result["error"] = "concrete browser evidence fields missing"
                     results[name] = result
                     continue
+                if name == "provider_secrets_issue40":
+                    missing_provider = [
+                        label
+                        for label in PROVIDER_SECRET_CHECKS.values()
+                        if not any(isinstance(item, str) and item == label for item in checks)
+                    ]
+                    if missing_provider:
+                        result["error"] = f"required checks missing: {missing_provider}"
+                        results[name] = result
+                        continue
                 if name == "context_prompts_issue8":
                     required_issue8 = list(ISSUE8_CHECKS.values())
                     missing_issue8 = [
@@ -396,6 +418,7 @@ def main() -> int:
             "node tests/e2e/check_issue14_writes.cjs",
             "node tests/e2e/check_issue11_upgrade.cjs",
             "node tests/e2e/check_issue12_relations.cjs",
+            "node tests/e2e/check_provider_secrets_issue40.cjs",
         ],
         "versions": {
             "node": command_output(["node", "--version"]),
@@ -464,6 +487,12 @@ def main() -> int:
                 "workspace-full, relation review, cross-session qualification",
             ],
             "#18": ["API and worker remain alive during browser acceptance"],
+            "#40": [
+                "Provider key creation, rotation, deletion, and legacy-env migration complete "
+                "in the browser",
+                "Provider secret plaintext and complete ciphertext are absent from "
+                "browser-visible surfaces",
+            ],
         },
     }
     report["commands"].extend(

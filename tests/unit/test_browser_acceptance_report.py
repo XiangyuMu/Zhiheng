@@ -86,6 +86,14 @@ ISSUE12_CHECKS = [
     "answer citations use the approved relation's current knowledge and content version",
 ]
 
+PROVIDER_SECRET_CHECKS = [
+    "real browser creates encrypted Provider key without rendering plaintext",
+    "browser rotation creates a new version and deletion disables the Provider",
+    "browser migrates a legacy env reference to local encrypted storage",
+    "synthetic key and complete ciphertext are absent from page, storage, and "
+    "model-config responses",
+]
+
 
 def complete_delivery_checks() -> dict[str, object]:
     return {
@@ -169,6 +177,19 @@ def complete_issue12_checks() -> dict[str, object]:
     }
 
 
+def complete_provider_secret_checks() -> dict[str, object]:
+    return {
+        "checks": PROVIDER_SECRET_CHECKS,
+        "browserErrors": [],
+        "evidence": {
+            "create": {"secret_status": "configured"},
+            "rotation": {"secret_version": 2, "enabled": False},
+            "migration": {"secret_source": "local"},
+            "leakage": {"page": True, "storage": True, "model_config_responses": 27},
+        },
+    }
+
+
 def write_checks(output: Path, relative: str, payload: object) -> None:
     path = output / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -226,6 +247,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "issue14-writes/checks.json",
         "issue11-upgrade/checks.json",
         "issue12-relations/checks.json",
+        "provider-secrets-issue40/checks.json",
     ):
         write_checks(
             tmp_path,
@@ -246,6 +268,8 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             if relative == "issue11-upgrade/checks.json"
             else complete_issue12_checks()
             if relative == "issue12-relations/checks.json"
+            else complete_provider_secret_checks()
+            if relative == "provider-secrets-issue40/checks.json"
             else {"checks": ["one"], "browserErrors": [], "evidence": {"facts": ["observed"]}},
         )
     (tmp_path / "api.log").write_text("api ready")
