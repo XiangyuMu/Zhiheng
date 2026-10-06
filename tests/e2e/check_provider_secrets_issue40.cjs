@@ -163,8 +163,13 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     assert(!logContents.includes(syntheticKey) && !logContents.includes(rotatedKey) && !logContents.includes(legacyKey));
     const databaseUrl = process.env.ZHIHENG_DATABASE_URL || "";
     const databasePath = databaseUrl.startsWith("sqlite:///") ? databaseUrl.slice("sqlite:///".length) : "";
-    const databaseBytes = databasePath && fs.existsSync(databasePath) ? fs.readFileSync(databasePath, "utf8") : "";
-    assert(!databaseBytes.includes(syntheticKey) && !databaseBytes.includes(rotatedKey) && !databaseBytes.includes(legacyKey));
+    assert(databasePath && fs.existsSync(databasePath));
+    const databaseFiles = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]
+      .filter((file) => fs.existsSync(file));
+    const databaseBytes = Buffer.concat(databaseFiles.map((file) => fs.readFileSync(file)));
+    for (const key of [syntheticKey, rotatedKey, legacyKey]) {
+      assert(!databaseBytes.includes(Buffer.from(key)));
+    }
     assert(fs.statSync(screenshotPath).size > 0);
     evidence.leakage = {
       page: true,
@@ -181,8 +186,9 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "passed", checks: [
       "real browser creates encrypted Provider key without rendering plaintext",
       "refresh and API listing retain only configured state and short fingerprint",
-      "browser completes an authenticated Provider connectivity test with a stable diagnostic",
+      "browser completes a real Provider connectivity test with a stable diagnostic",
       "browser rotation creates a new version and deletion disables the Provider",
+      "browser deletion disables the Provider and removes the active secret",
       "browser migrates a legacy env reference to local encrypted storage",
       "synthetic key and complete ciphertext are absent from page, storage, and model-config responses",
     ], evidence, browserErrors: errors }, null, 2));

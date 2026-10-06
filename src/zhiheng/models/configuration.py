@@ -294,7 +294,7 @@ def update_provider(
             )
             secret_ref = stored_secret.secret_ref
     revision = f"{current_revision}:updated"
-    session.execute(
+    updated_result = cast(CursorResult[Any], session.execute(
         text(
             """
             UPDATE model_provider_configs
@@ -330,7 +330,9 @@ def update_provider(
             "policy_revision": revision,
             "if_match": if_match,
         },
-    )
+    ))
+    if updated_result.rowcount != 1:
+        raise RuntimeError("provider configuration changed; refresh and retry")
     updated = _provider_row(session, provider_id)
     if updated is None:
         raise RuntimeError("provider update was not persisted")
@@ -367,7 +369,7 @@ def delete_provider_secret(
         secret_store.revoke(session, provider_id=provider_id)
     elif secret_ref and str(secret_ref).startswith("local:"):
         raise RuntimeError("provider secret store is unavailable")
-    session.execute(
+    updated_result = cast(CursorResult[Any], session.execute(
         text(
             """
             UPDATE model_provider_configs
@@ -382,7 +384,9 @@ def delete_provider_secret(
             "provider_id": provider_id,
             "policy_revision": f"{if_match}:secret-revoked",
         },
-    )
+    ))
+    if updated_result.rowcount != 1:
+        raise RuntimeError("provider configuration changed; refresh and retry")
     updated = _provider_row(session, provider_id)
     if updated is None:
         raise RuntimeError("provider secret deletion was not persisted")
@@ -432,7 +436,7 @@ def migrate_provider_secret(
         provider_id=provider_id,
         secret_ref=secret_ref,
     )
-    session.execute(
+    updated_result = cast(CursorResult[Any], session.execute(
         text(
             """
             UPDATE model_provider_configs
@@ -448,7 +452,9 @@ def migrate_provider_secret(
             "policy_revision": f"{if_match}:secret-migrated",
             "reserved_revision": reserved_revision,
         },
-    )
+    ))
+    if updated_result.rowcount != 1:
+        raise RuntimeError("provider configuration changed; refresh and retry")
     updated = _provider_row(session, provider_id)
     if updated is None:
         raise RuntimeError("provider secret migration was not persisted")

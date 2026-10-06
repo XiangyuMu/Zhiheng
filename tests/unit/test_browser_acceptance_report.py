@@ -90,6 +90,7 @@ PROVIDER_SECRET_CHECKS = [
     "real browser creates encrypted Provider key without rendering plaintext",
     "refresh and API listing retain only configured state and short fingerprint",
     "browser rotation creates a new version and deletion disables the Provider",
+    "browser deletion disables the Provider and removes the active secret",
     "browser migrates a legacy env reference to local encrypted storage",
     "browser completes a real Provider connectivity test with a stable diagnostic",
     "synthetic key and complete ciphertext are absent from page, storage, and "
@@ -188,6 +189,7 @@ def complete_provider_secret_checks() -> dict[str, object]:
             "refresh": {"secret_status": "configured"},
             "connection": {"status": "failed", "diagnostic_code": "network_error"},
             "rotation": {"secret_version": 2, "enabled": False},
+            "deletion": {"enabled": False, "secret_status": "missing"},
             "migration": {"secret_source": "local"},
             "leakage": {
                 "page": True,
@@ -199,6 +201,7 @@ def complete_provider_secret_checks() -> dict[str, object]:
                 "screenshot": "provider-secrets.png",
                 "http_responses": 31,
                 "model_config_responses": 27,
+                "legacy_key_scanned": True,
             },
         },
     }
