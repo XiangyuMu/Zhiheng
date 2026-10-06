@@ -214,12 +214,18 @@ def _verify_provider_secret_records(database: Path) -> None:
         active_ids: set[str] = set()
         record_ids = {str(row[0]) for row in rows}
         for secret_ref in providers.values():
-            if secret_ref.startswith("local:") and secret_ref.removeprefix("local:") not in record_ids:
+            if (
+                secret_ref.startswith("local:")
+                and secret_ref.removeprefix("local:") not in record_ids
+            ):
                 raise ValueError("restored provider secret reference is dangling")
         for secret_id, provider_id, version, algorithm, nonce, ciphertext, aad in rows:
             if provider_id not in providers:
                 raise ValueError("restored provider secret references an unknown provider")
-            if providers[provider_id].startswith("local:") and providers[provider_id] != f"local:{secret_id}":
+            if (
+                providers[provider_id].startswith("local:")
+                and providers[provider_id] != f"local:{secret_id}"
+            ):
                 raise ValueError("restored provider secret reference is inconsistent")
             if not isinstance(version, int) or version < 1 or algorithm != "AES-256-GCM":
                 raise ValueError("restored provider secret metadata is invalid")

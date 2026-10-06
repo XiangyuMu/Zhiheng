@@ -1,7 +1,7 @@
 /* Issue #40: browser acceptance for encrypted Provider secret lifecycle. */
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const http = require("node:http");
+const https = require("node:https");
 const path = require("node:path");
 const { chromium } = require("playwright");
 
@@ -18,7 +18,10 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
 
 (async () => {
   let receivedAuth = [];
-  const providerServer = http.createServer((request, response) => {
+  const providerServer = https.createServer({
+    key: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_KEY),
+    cert: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_CERT),
+  }, (request, response) => {
     if (request.url === "/models") {
       receivedAuth.push(request.headers.authorization || "");
       if (!request.headers.authorization) {
@@ -35,7 +38,7 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
   });
   await new Promise((resolve) => providerServer.listen(0, "127.0.0.1", resolve));
   const providerPort = providerServer.address().port;
-  const providerUrl = `http://127.0.0.1:${providerPort}`;
+  const providerUrl = `https://127.0.0.1:${providerPort}`;
   const browser = await chromium.launch({ headless: true, channel: "chromium" });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
   const page = await context.newPage();

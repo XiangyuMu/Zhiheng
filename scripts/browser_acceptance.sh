@@ -8,6 +8,8 @@ PORT="${ZHIHENG_ACCEPTANCE_PORT:-8765}"
 RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/zhiheng-acceptance.XXXXXX")"
 DB_PATH="${RUN_DIR}/zhiheng.sqlite"
 OBJECT_STORE="${RUN_DIR}/knowledge-object-store"
+PROVIDER_CERT="${RUN_DIR}/provider.crt"
+PROVIDER_KEY="${RUN_DIR}/provider.key"
 API_LOG="${OUTPUT_DIR}/api.log"
 WORKER_LOG="${OUTPUT_DIR}/worker.log"
 API_PID=""
@@ -19,6 +21,13 @@ unset PLAYWRIGHT_MODULE_PATH
 unset BROWSER_CHANNEL
 
 mkdir -p "${OUTPUT_DIR}" "${OBJECT_STORE}"
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+  -keyout "${PROVIDER_KEY}" -out "${PROVIDER_CERT}" \
+  -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1" \
+  >"${OUTPUT_DIR}/provider-cert.log" 2>&1
+export ZHIHENG_ACCEPTANCE_PROVIDER_CERT="${PROVIDER_CERT}"
+export ZHIHENG_ACCEPTANCE_PROVIDER_KEY="${PROVIDER_KEY}"
+export SSL_CERT_FILE="${PROVIDER_CERT}"
 cleanup() {
   if [[ -n "${WORKER_PID}" ]]; then kill "${WORKER_PID}" 2>/dev/null || true; fi
   if [[ -n "${API_PID}" ]]; then kill "${API_PID}" 2>/dev/null || true; fi
