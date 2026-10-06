@@ -59,6 +59,38 @@ def _snapshot(tmp_path: Path) -> tuple[Path, Path, Path]:
     return snapshot, root, Path(unquote(urlparse(artifacts.evidence_object_uri).path))
 
 
+def _add_provider_secret_record(snapshot: Path) -> None:
+    connection = sqlite3.connect(snapshot)
+    try:
+        connection.execute(
+            """
+            INSERT INTO model_provider_configs (
+              id, provider_kind, display_name, enabled, policy_json, secret_ref,
+              model_allowlist_json, endpoint_url, endpoint_origin, policy_revision
+            ) VALUES (
+              'provider-backup', 'openai-compatible', 'Backup Provider', 1, '{}',
+              'local:v1', '[\"model-a\"]', 'https://models.example.test/v1',
+              'https://models.example.test', 'rev-1'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO provider_secret_records (
+              id, provider_id, secret_version, algorithm, nonce_b64,
+              ciphertext_b64, aad_json, secret_fingerprint, status
+            ) VALUES (
+              'secret-backup', 'provider-backup', 1, 'AES-256-GCM',
+              'bm9uY2U=', 'Y2lwaGVydGV4dA==', '{\"provider_id\":\"provider-backup\"}',
+              'fingerprint', 'active'
+            )
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def test_manifest_covers_original_and_markdown_but_not_orphans(tmp_path: Path) -> None:
     snapshot, root, _ = _snapshot(tmp_path)
     LocalKnowledgeObjectStore(root).write_text_artifacts("uncommitted orphan")
@@ -90,9 +122,9 @@ def test_staged_bundle_contains_verified_private_bytes(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
     stage_backup(snapshot, root, bundle)
     manifest = json.loads((bundle / "manifest.json").read_text())
-    assert manifest["format_version"] == 1
+    assert manifest["format_version"] == 2
     assert manifest["provider_secret_recovery"] == {
-        "encrypted_records_in_database": True,
+        "encrypted_records_in_database": False,
         "master_key_external_dependency": "native-keyring",
         "missing_master_key_behavior": "provider_reentry_required",
     }
@@ -105,6 +137,45 @@ def test_staged_bundle_contains_verified_private_bytes(tmp_path: Path) -> None:
     assert len(verify_backup_bundle(bundle)) == 3
     with pytest.raises(FileExistsError):
         stage_backup(snapshot, root, bundle)
+
+
+def test_provider_secret_records_are_verified_and_preserved_in_backup(tmp_path: Path) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_provider_secret_record(snapshot)
+    bundle = tmp_path / "bundle-with-provider-secret"
+
+    stage_backup(snapshot, root, bundle)
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    assert manifest["format_version"] == 2
+    assert manifest["provider_secret_recovery"]["encrypted_records_in_database"] is True
+    assert len(verify_backup_bundle(bundle)) == 3
+
+    restored = tmp_path / "restored.sqlite"
+    shutil.copy2(bundle / "database.sqlite", restored)
+    connection = sqlite3.connect(restored)
+    try:
+        row = connection.execute(
+            "SELECT secret_version, algorithm, nonce_b64, ciphertext_b64, aad_json "
+            "FROM provider_secret_records"
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row == (
+        1,
+        "AES-256-GCM",
+        "bm9uY2U=",
+        "Y2lwaGVydGV4dA==",
+        '{"provider_id":"provider-backup"}',
+    )
+
+    connection = sqlite3.connect(bundle / "database.sqlite")
+    try:
+        connection.execute("UPDATE provider_secret_records SET ciphertext_b64 = ''")
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(ValueError, match="checksum"):
+        verify_backup_bundle(bundle)
 
 
 def test_real_restic_encrypts_and_restores_bundle(tmp_path: Path) -> None:

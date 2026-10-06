@@ -119,6 +119,9 @@ def _restore_from_env() -> None:
                 )
                 _replay_latest_journal_again(restored_database, object_root, journal, records)
                 _compact_and_verify_database(restored_database)
+                recovery_metadata = json.loads(
+                    (bundle / "manifest.json").read_text(encoding="utf-8")
+                ).get("provider_secret_recovery")
                 _refuse_sqlite_sidecars(database)
                 _replace_database(restored_database, database)
             _fsync_directory(database.parent)
@@ -126,8 +129,8 @@ def _restore_from_env() -> None:
             json.dumps(
                 {
                     "restored_snapshot_id": snapshot_id,
-                    "format_version": 1,
-                    "provider_secret_recovery": "native-keyring-required",
+                    "format_version": 2,
+                    "provider_secret_recovery": recovery_metadata,
                 }
             )
         )

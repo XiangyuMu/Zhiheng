@@ -64,12 +64,12 @@ def stage_backup(database: Path, object_root: Path, destination: Path) -> None:
             if _file_digest(path) != artifact.sha256 or path.stat().st_size != artifact.byte_size:
                 raise ValueError("artifact changed while staging backup")
         payload = {
-            "format_version": 1,
+            "format_version": 2,
             "original_object_root": str(object_root.resolve()),
             "database_sha256": _file_digest(snapshot),
             "artifacts": [asdict(item) for item in manifest],
             "provider_secret_recovery": {
-                "encrypted_records_in_database": True,
+                "encrypted_records_in_database": _has_provider_secret_records(snapshot),
                 "master_key_external_dependency": "native-keyring",
                 "missing_master_key_behavior": "provider_reentry_required",
             },
@@ -107,7 +107,7 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
         "provider_secret_recovery",
     }):
         raise ValueError("unsupported backup manifest schema")
-    if type(payload["format_version"]) is not int or payload["format_version"] != 1:
+    if type(payload["format_version"]) is not int or payload["format_version"] not in {1, 2}:
         raise ValueError("unsupported backup format version")
     if (
         not isinstance(payload["original_object_root"], str)
@@ -119,12 +119,22 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
     if not isinstance(payload["artifacts"], list):
         raise ValueError("backup artifacts must be a list")
     recovery = payload.get("provider_secret_recovery")
-    if recovery is not None and recovery != {
-        "encrypted_records_in_database": True,
-        "master_key_external_dependency": "native-keyring",
-        "missing_master_key_behavior": "provider_reentry_required",
-    }:
+    if payload["format_version"] == 2 and not isinstance(recovery, dict):
+        raise ValueError("provider secret recovery metadata is required")
+    if recovery is not None and (
+        not isinstance(recovery, dict)
+        or set(recovery) != {
+            "encrypted_records_in_database",
+            "master_key_external_dependency",
+            "missing_master_key_behavior",
+        }
+        or not isinstance(recovery["encrypted_records_in_database"], bool)
+        or recovery["master_key_external_dependency"] != "native-keyring"
+        or recovery["missing_master_key_behavior"] != "provider_reentry_required"
+    ):
         raise ValueError("invalid provider secret recovery metadata")
+    if recovery is not None and recovery["encrypted_records_in_database"]:
+        _verify_provider_secret_records(root / "database.sqlite")
     expected_files = {"manifest.json", "database.sqlite"}
     artifacts: list[BackupArtifact] = []
     for item in payload["artifacts"]:
@@ -153,6 +163,44 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
     if actual_files != expected_files:
         raise ValueError("backup bundle contains unlisted or missing files")
     return tuple(artifacts)
+
+
+def _has_provider_secret_records(database: Path) -> bool:
+    connection = sqlite3.connect(database)
+    try:
+        table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='provider_secret_records'"
+        ).fetchone()
+        if table is None:
+            return False
+        return bool(connection.execute("SELECT 1 FROM provider_secret_records LIMIT 1").fetchone())
+    finally:
+        connection.close()
+
+
+def _verify_provider_secret_records(database: Path) -> None:
+    connection = sqlite3.connect(database)
+    try:
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+                "('provider_secret_instances', 'provider_secret_records')"
+            )
+        }
+        if tables != {"provider_secret_instances", "provider_secret_records"}:
+            raise ValueError("provider secret tables are missing from restored database")
+        rows = connection.execute(
+            "SELECT secret_version, algorithm, nonce_b64, ciphertext_b64, aad_json "
+            "FROM provider_secret_records"
+        ).fetchall()
+        for version, algorithm, nonce, ciphertext, aad in rows:
+            if not isinstance(version, int) or version < 1 or algorithm != "AES-256-GCM":
+                raise ValueError("restored provider secret metadata is invalid")
+            if not all(isinstance(value, str) and value for value in (nonce, ciphertext, aad)):
+                raise ValueError("restored provider secret ciphertext is incomplete")
+    finally:
+        connection.close()
 
 
 def collect_artifact_manifest(snapshot: Path, object_root: Path) -> tuple[BackupArtifact, ...]:
