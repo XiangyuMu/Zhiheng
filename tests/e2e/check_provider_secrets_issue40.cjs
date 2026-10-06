@@ -44,8 +44,15 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
   const page = await context.newPage();
   const errors = [];
   const responses = [];
+  const responseBodyReads = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  page.on("response", (response) => responses.push(response));
+  page.on("response", (response) => {
+    responses.push(response);
+    if (["xhr", "fetch"].includes(response.request().resourceType())) {
+      responseBodyReads.push(response.text().then((body) => ({ url: response.url(), body }))
+        .catch((error) => ({ url: response.url(), error })));
+    }
+  });
   async function login() {
     await page.goto(`${base}/login`);
     await page.evaluate(async () => {
@@ -147,13 +154,11 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     assert(!storage.local.includes(syntheticKey) && !storage.session.includes(syntheticKey));
     const visible = await page.locator("body").innerText();
     assert(!visible.includes(syntheticKey) && !visible.includes("ciphertext_b64"));
-    for (const response of responses) {
-      let body;
-      try {
-        body = await response.text();
-      } catch (error) {
-        throw new Error(`could not read response body for ${response.url()}: ${error}`);
+    for (const result of await Promise.all(responseBodyReads)) {
+      if (result.error) {
+        throw new Error(`could not read response body for ${result.url}: ${result.error}`);
       }
+      const body = result.body;
       assert(!body.includes(syntheticKey) && !body.includes(rotatedKey) && !body.includes(legacyKey));
       assert(!body.includes("ciphertext_b64"));
     }
