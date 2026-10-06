@@ -91,6 +91,11 @@ def test_staged_bundle_contains_verified_private_bytes(tmp_path: Path) -> None:
     stage_backup(snapshot, root, bundle)
     manifest = json.loads((bundle / "manifest.json").read_text())
     assert manifest["format_version"] == 1
+    assert manifest["provider_secret_recovery"] == {
+        "encrypted_records_in_database": True,
+        "master_key_external_dependency": "native-keyring",
+        "missing_master_key_behavior": "provider_reentry_required",
+    }
     assert len(manifest["artifacts"]) == 3
     for artifact in manifest["artifacts"]:
         path = bundle / "objects" / artifact["relative_path"]

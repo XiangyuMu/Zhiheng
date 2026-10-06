@@ -122,7 +122,15 @@ def _restore_from_env() -> None:
                 _refuse_sqlite_sidecars(database)
                 _replace_database(restored_database, database)
             _fsync_directory(database.parent)
-        print(json.dumps({"restored_snapshot_id": snapshot_id, "format_version": 1}))
+        print(
+            json.dumps(
+                {
+                    "restored_snapshot_id": snapshot_id,
+                    "format_version": 1,
+                    "provider_secret_recovery": "native-keyring-required",
+                }
+            )
+        )
     finally:
         os.close(db_lock)
 

@@ -68,6 +68,11 @@ def stage_backup(database: Path, object_root: Path, destination: Path) -> None:
             "original_object_root": str(object_root.resolve()),
             "database_sha256": _file_digest(snapshot),
             "artifacts": [asdict(item) for item in manifest],
+            "provider_secret_recovery": {
+                "encrypted_records_in_database": True,
+                "master_key_external_dependency": "native-keyring",
+                "missing_master_key_behavior": "provider_reentry_required",
+            },
         }
         fd = os.open(destination / "manifest.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as handle:
@@ -89,12 +94,18 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
     if any(path.is_symlink() for path in root.rglob("*")):
         raise ValueError("backup bundle must not contain symlinks")
     payload = json.loads((root / "manifest.json").read_text())
-    if not isinstance(payload, dict) or set(payload) != {
+    if not isinstance(payload, dict) or set(payload) not in ({
         "format_version",
         "original_object_root",
         "database_sha256",
         "artifacts",
-    }:
+    }, {
+        "format_version",
+        "original_object_root",
+        "database_sha256",
+        "artifacts",
+        "provider_secret_recovery",
+    }):
         raise ValueError("unsupported backup manifest schema")
     if type(payload["format_version"]) is not int or payload["format_version"] != 1:
         raise ValueError("unsupported backup format version")
@@ -107,6 +118,13 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
         raise ValueError("backup database checksum mismatch")
     if not isinstance(payload["artifacts"], list):
         raise ValueError("backup artifacts must be a list")
+    recovery = payload.get("provider_secret_recovery")
+    if recovery is not None and recovery != {
+        "encrypted_records_in_database": True,
+        "master_key_external_dependency": "native-keyring",
+        "missing_master_key_behavior": "provider_reentry_required",
+    }:
+        raise ValueError("invalid provider secret recovery metadata")
     expected_files = {"manifest.json", "database.sqlite"}
     artifacts: list[BackupArtifact] = []
     for item in payload["artifacts"]:
