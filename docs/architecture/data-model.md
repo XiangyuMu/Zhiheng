@@ -62,7 +62,9 @@ Candidate memory rows cannot be referenced by `memory_current_state`. A database
 | Table | Key fields | Constraints and indexes |
 |---|---|---|
 | `sensitivity_labels` | `target_type`, `target_id`, `label`, `confidence`, `classifier_version`, `status` | uncertain labels block external transmission |
-| `model_provider_configs` | `id`, `provider_kind`, `display_name`, `enabled`, `policy_json`, `secret_ref` | secrets are references only, never secret values |
+| `model_provider_configs` | `id`, `provider_kind`, `display_name`, `enabled`, `policy_json`, `secret_ref` | `secret_ref` is a write-only local identifier or legacy `env:` reference; no plaintext key is stored |
+| `provider_secret_instances` | singleton `instance_id` | binds encrypted Provider records to the local keyring master-key identity; the master key is never in the database |
+| `provider_secret_records` | `id`, `provider_id`, `secret_version`, `algorithm`, `nonce_b64`, `ciphertext_b64`, `aad_json`, `secret_fingerprint`, `status` | AES-256-GCM ciphertext and authenticated binding metadata only; active records are versioned and revocable |
 | `outbound_payload_approvals` | `id`, `task_id`, `provider_id`, `payload_hash`, `classification_snapshot_id`, `redaction_snapshot_id`, `status` | only approved rows may be sent |
 | `model_call_audits` | `id`, `approval_id`, `provider_id`, `model_id`, `sent_at`, `payload_hash`, `response_hash`, `status` | no raw payload storage |
 | `privacy_erase_requests` | `id`, `requester`, `reason`, `status`, `created_at`, `completed_at` | irreversible after execution starts |

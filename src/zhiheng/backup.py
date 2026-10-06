@@ -134,9 +134,10 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
         or recovery["missing_master_key_behavior"] != "provider_reentry_required"
     ):
         raise ValueError("invalid provider secret recovery metadata")
-    if recovery is not None and recovery["encrypted_records_in_database"]:
-        _verify_provider_secret_records(root / "database.sqlite")
     database_has_secrets = _has_provider_secret_records(root / "database.sqlite")
+    _verify_provider_secret_references(root / "database.sqlite")
+    if database_has_secrets:
+        _verify_provider_secret_records(root / "database.sqlite")
     if recovery is not None and recovery["encrypted_records_in_database"] != database_has_secrets:
         raise ValueError("provider secret recovery metadata does not match database")
     expected_files = {"manifest.json", "database.sqlite"}
@@ -182,6 +183,30 @@ def _has_provider_secret_records(database: Path) -> bool:
         connection.close()
 
 
+def _verify_provider_secret_references(database: Path) -> None:
+    connection = sqlite3.connect(database)
+    try:
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        if "model_provider_configs" not in tables:
+            return
+        references = connection.execute(
+            "SELECT id, secret_ref FROM model_provider_configs WHERE secret_ref LIKE 'local:%'"
+        ).fetchall()
+        for provider_id, reference in references:
+            if "provider_secret_records" not in tables:
+                raise ValueError("restored provider secret reference is dangling")
+            record = connection.execute(
+                "SELECT provider_id, status FROM provider_secret_records WHERE id=?",
+                (reference.removeprefix("local:"),),
+            ).fetchone()
+            if record is None or record != (provider_id, "active"):
+                raise ValueError("restored provider secret reference is inconsistent")
+    finally:
+        connection.close()
+
+
 def _verify_provider_secret_records(database: Path) -> None:
     connection = sqlite3.connect(database)
     try:
@@ -202,31 +227,25 @@ def _verify_provider_secret_records(database: Path) -> None:
         instance_id = instance[0]
         rows = connection.execute(
             "SELECT id, provider_id, secret_version, algorithm, nonce_b64, ciphertext_b64, "
-            "aad_json FROM provider_secret_records"
+            "aad_json, status FROM provider_secret_records"
         ).fetchall()
         providers = {
-            str(provider_id): str(secret_ref)
+            str(provider_id): secret_ref
             for provider_id, secret_ref in connection.execute(
                 "SELECT id, secret_ref FROM model_provider_configs"
             ).fetchall()
-            if isinstance(provider_id, str) and isinstance(secret_ref, str)
+            if isinstance(provider_id, str)
         }
-        active_ids: set[str] = set()
         record_ids = {str(row[0]) for row in rows}
         for secret_ref in providers.values():
             if (
-                secret_ref.startswith("local:")
+                isinstance(secret_ref, str) and secret_ref.startswith("local:")
                 and secret_ref.removeprefix("local:") not in record_ids
             ):
                 raise ValueError("restored provider secret reference is dangling")
-        for secret_id, provider_id, version, algorithm, nonce, ciphertext, aad in rows:
+        for secret_id, provider_id, version, algorithm, nonce, ciphertext, aad, _status in rows:
             if provider_id not in providers:
                 raise ValueError("restored provider secret references an unknown provider")
-            if (
-                providers[provider_id].startswith("local:")
-                and providers[provider_id] != f"local:{secret_id}"
-            ):
-                raise ValueError("restored provider secret reference is inconsistent")
             if not isinstance(version, int) or version < 1 or algorithm != "AES-256-GCM":
                 raise ValueError("restored provider secret metadata is invalid")
             try:
@@ -245,14 +264,12 @@ def _verify_provider_secret_records(database: Path) -> None:
                 "version": version,
             }:
                 raise ValueError("restored provider secret authenticated data is invalid")
-            status = connection.execute(
-                "SELECT status FROM provider_secret_records WHERE id = ?", (secret_id,)
-            ).fetchone()
-            if status is not None and status[0] == "active":
-                active_ids.add(str(secret_id))
-        for secret_id in active_ids:
-            if not any(secret_ref == f"local:{secret_id}" for secret_ref in providers.values()):
-                raise ValueError("restored active provider secret is orphaned")
+        records_by_id = {str(row[0]): row for row in rows}
+        for provider_id, secret_ref in providers.items():
+            if isinstance(secret_ref, str) and secret_ref.startswith("local:"):
+                record = records_by_id[secret_ref.removeprefix("local:")]
+                if record[1] != provider_id or record[7] != "active":
+                    raise ValueError("restored provider secret reference is inconsistent")
     finally:
         connection.close()
 

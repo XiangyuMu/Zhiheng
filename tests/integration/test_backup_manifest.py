@@ -326,3 +326,32 @@ def test_prepare_refuses_missing_latest_journal_before_mutating_bundle(tmp_path:
     with pytest.raises(ValueError, match="missing"):
         prepare_restored_bundle(bundle, journal, project_root=Path.cwd())
     assert (bundle / "database.sqlite").read_bytes() == before
+
+
+@pytest.mark.parametrize("mutation", [
+    "UPDATE model_provider_configs SET secret_ref='local:absent'",
+    "DELETE FROM provider_secret_records",
+    "UPDATE provider_secret_records SET status='rotated'",
+    "DELETE FROM model_provider_configs",
+])
+def test_backup_rejects_inconsistent_secret_references(tmp_path: Path, mutation: str) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_provider_secret_record(snapshot)
+    with sqlite3.connect(snapshot) as connection:
+        connection.execute(mutation)
+    bundle = tmp_path / "invalid-secret-reference"
+    stage_backup(snapshot, root, bundle)
+    with pytest.raises(ValueError, match="provider secret reference"):
+        verify_backup_bundle(bundle)
+
+
+@pytest.mark.parametrize("status", ["rotated", "revoked"])
+def test_backup_retains_inactive_secret_history(tmp_path: Path, status: str) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_provider_secret_record(snapshot)
+    with sqlite3.connect(snapshot) as connection:
+        connection.execute("UPDATE model_provider_configs SET secret_ref=NULL, enabled=0")
+        connection.execute("UPDATE provider_secret_records SET status=?", (status,))
+    bundle = tmp_path / "inactive-secret-history"
+    stage_backup(snapshot, root, bundle)
+    assert len(verify_backup_bundle(bundle)) == 3
