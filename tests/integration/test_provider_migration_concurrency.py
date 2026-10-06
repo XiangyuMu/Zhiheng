@@ -142,3 +142,81 @@ def test_concurrent_legacy_migrations_use_one_stale_etag_winner(
     assert str(provider_row[0]).startswith("local:")
     assert str(provider_row[1]) == f"{original_etag}:secret-migrated"
     assert secret_rows == [(1, "active")]
+
+
+def test_failed_final_migration_cas_rolls_back_secret_insert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy_name = "ZHIHENG_PRIVATE_ISSUE38_FINAL_CAS"
+    monkeypatch.setenv(legacy_name, "sk-issue38-final-cas")
+    setup_client = _empty_client(
+        tmp_path,
+        ProviderSecretStore(master_key_backend=InMemoryMasterKeyBackend()),
+    )
+    csrf = _login(setup_client)
+    created = setup_client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "migration-final-cas-create"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Final CAS Provider",
+            "base_url": "https://models.example.test/v1",
+            "secret_ref": f"env:{legacy_name}",
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200, created.text
+    provider = created.json()
+    provider_id = str(provider["provider_id"])
+    original_etag = str(provider["etag"])
+    app: Any = setup_client.app
+    app_secret_store = app.state.provider_secret_store
+    original_migrate = app_secret_store.migrate_environment_reference
+
+    def invalidate_reserved_revision(
+        session: Any, *, provider_id: str, secret_ref: str
+    ) -> Any:
+        stored = original_migrate(session, provider_id=provider_id, secret_ref=secret_ref)
+        session.execute(
+            text(
+                "UPDATE model_provider_configs SET policy_revision='interfered' "
+                "WHERE id=:provider_id"
+            ),
+            {"provider_id": provider_id},
+        )
+        return stored
+
+    monkeypatch.setattr(
+        app_secret_store,
+        "migrate_environment_reference",
+        invalidate_reserved_revision,
+    )
+    failed = setup_client.post(
+        f"/v1/model-config/providers/{provider_id}/secret/migrate",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": original_etag,
+            "Idempotency-Key": "migration-final-cas-run",
+        },
+    )
+    assert failed.status_code == 412, failed.text
+
+    with app.state.session_factory() as session:
+        provider_row = session.execute(
+            text(
+                "SELECT secret_ref, policy_revision FROM model_provider_configs "
+                "WHERE id=:provider_id"
+            ),
+            {"provider_id": provider_id},
+        ).one()
+        secret_rows = session.execute(
+            text(
+                "SELECT secret_version, status FROM provider_secret_records "
+                "WHERE provider_id=:provider_id"
+            ),
+            {"provider_id": provider_id},
+        ).all()
+
+    assert provider_row == (f"env:{legacy_name}", original_etag)
+    assert secret_rows == []
