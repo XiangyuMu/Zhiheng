@@ -226,9 +226,9 @@ class ModelGateway:
             route,
             privacy,
         )
-
         started = time.monotonic()
         try:
+            self._revalidate_dispatch_credential(dispatch_route)
             response = transport.complete(
                 route=_transport_route(dispatch_route),
                 payload=_ApprovedOutboundPayload(
@@ -249,6 +249,40 @@ class ModelGateway:
             response_hash=response.response_hash,
             audit_id=audit_id,
         )
+
+    def _revalidate_dispatch_credential(self, route: _ProviderRoute) -> None:
+        """Fence credential revocation between approval claim and network I/O."""
+        with self._session_factory() as session:
+            row = (
+                session.execute(
+                    text(
+                        """
+                        SELECT id, provider_kind, enabled, archived, policy_json, secret_ref,
+                               model_allowlist_json, text_model_allowlist_json,
+                               multimodal_model_allowlist_json, endpoint_url, endpoint_origin,
+                               policy_revision
+                        FROM model_provider_configs
+                        WHERE id = :provider_id
+                        """
+                    ),
+                    {"provider_id": route.provider_id},
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                raise PermissionError("provider is not configured")
+            current = _route_from_provider_row(row, route.model_id, self._settings)
+            if current != route or current.secret_ref != route.secret_ref:
+                raise PermissionError("provider credential changed before dispatch")
+            if current.secret_ref and current.provider_kind != "ollama":
+                try:
+                    self._secret_store.resolve(
+                        current.secret_ref,
+                        provider_id=current.provider_id,
+                    )
+                except (KeyError, PermissionError, ValueError) as exc:
+                    raise PermissionError("provider credential is unavailable") from exc
 
     def _read_route(self, request: ModelRequest) -> _ProviderRoute:
         with self._session_factory() as session:

@@ -13,7 +13,12 @@ from sqlalchemy import text
 from zhiheng.api.main import create_app
 from zhiheng.core.config import Settings
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
-from zhiheng.models._transports import probe_provider_connectivity
+from zhiheng.models._transports import (
+    OpenAICompatibleChatTransport,
+    TransportRoute,
+    _ApprovedOutboundPayload,
+    probe_provider_connectivity,
+)
 from zhiheng.models.configuration import defaults
 from zhiheng.secrets import InMemoryMasterKeyBackend, ProviderSecretStore
 
@@ -700,6 +705,74 @@ def test_deleting_provider_key_revokes_local_history_even_after_legacy_reference
     assert deleted.status_code == 200
     with pytest.raises(PermissionError):
         store.resolve(old_ref, provider_id=provider["provider_id"])
+
+
+def test_rotated_key_is_the_only_key_sent_to_provider_http_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ProviderSecretStore(master_key_backend=InMemoryMasterKeyBackend())
+    client = _empty_client(tmp_path, store)
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "http-rotation-create"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "HTTP Rotation Provider",
+            "base_url": "https://models.example.test/v1",
+            "api_key": "sk-issue37-http-key",
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200
+    provider = created.json()
+    app: Any = client.app
+    with app.state.session_factory() as session:
+        secret_ref = str(
+            session.execute(
+                text("SELECT secret_ref FROM model_provider_configs WHERE id=:id"),
+                {"id": provider["provider_id"]},
+            ).scalar_one()
+        )
+    headers_seen: list[str] = []
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    def fake_post(*args: object, **kwargs: object) -> FakeResponse:
+        del args
+        headers_seen.append(str(kwargs["headers"]))
+        return FakeResponse()
+
+    monkeypatch.setattr("zhiheng.models._transports.httpx.post", fake_post)
+    transport = OpenAICompatibleChatTransport(
+        store.bind_session_factory(app.state.session_factory)
+    )
+    response = transport.complete(
+        route=TransportRoute(
+            provider_id=provider["provider_id"],
+            provider_kind="openai-compatible",
+            model_id="model-a",
+            endpoint_url="https://models.example.test/v1",
+            endpoint_origin="https://models.example.test",
+            policy_revision=provider["etag"],
+            secret_ref=secret_ref,
+        ),
+        payload=_ApprovedOutboundPayload(
+            text="hello",
+            payload_hash="payload-hash",
+            approval_id="approval",
+            audit_id="audit",
+        ),
+    )
+    assert response.text == "ok"
+    assert headers_seen == ["{'Authorization': 'Bearer sk-issue37-http-key'}"]
+    assert "sk-issue37-http-key" not in json.dumps(provider)
 
 
 def test_legacy_environment_secret_migrates_once_and_survives_environment_removal(
