@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import new_id
+from zhiheng.secrets import ProviderSecretStore, SecretStatus
 
 ALLOWED_PROVIDER_KINDS = frozenset({"ollama", "openai", "deepseek", "openai-compatible"})
 
@@ -25,6 +28,7 @@ class ProviderInput:
     display_name: str
     endpoint_url: str
     secret_ref: str | None = None
+    api_key: SecretStr | None = None
     text_models: tuple[str, ...] = ()
     multimodal_models: tuple[str, ...] = ()
     enabled: bool = False
@@ -108,7 +112,10 @@ def defaults(session: Session) -> dict[str, object]:
 
 
 def list_providers(
-    session: Session, *, include_archived: bool = False
+    session: Session,
+    *,
+    include_archived: bool = False,
+    secret_store: ProviderSecretStore | None = None,
 ) -> list[dict[str, object]]:
     where = "" if include_archived else "WHERE archived = 0"
     rows = (
@@ -130,11 +137,21 @@ def list_providers(
         .mappings()
         .all()
     )
-    return [_provider_response(dict(row)) for row in rows]
+    return [
+        _provider_response(dict(row), secret_store=secret_store, session=session)
+        for row in rows
+    ]
 
 
-def create_provider(session: Session, provider: ProviderInput) -> dict[str, object]:
+def create_provider(
+    session: Session,
+    provider: ProviderInput,
+    *,
+    secret_store: ProviderSecretStore | None = None,
+) -> dict[str, object]:
     _validate_provider_input(provider)
+    if provider.secret_ref is not None and provider.api_key is not None:
+        raise ValueError("provider key and secret_ref cannot both be supplied")
     provider_id = new_id()
     endpoint_origin = _endpoint_origin(provider.endpoint_url)
     text_models = _clean_models(provider.text_models)
@@ -175,10 +192,28 @@ def create_provider(session: Session, provider: ProviderInput) -> dict[str, obje
         )
     except IntegrityError as exc:
         raise ValueError("provider configuration conflicts with an existing record") from exc
+    if provider.api_key is not None:
+        if secret_store is None:
+            raise RuntimeError("provider secret store is unavailable")
+        stored_secret = secret_store.store(
+            session,
+            provider_id=provider_id,
+            secret=provider.api_key,
+        )
+        session.execute(
+            text(
+                """
+                UPDATE model_provider_configs
+                SET secret_ref = :secret_ref
+                WHERE id = :provider_id
+                """
+            ),
+            {"provider_id": provider_id, "secret_ref": stored_secret.secret_ref},
+        )
     row = _provider_row(session, provider_id)
     if row is None:
         raise RuntimeError("provider was not created")
-    return _provider_response(row)
+    return _provider_response(row, secret_store=secret_store, session=session)
 
 
 def update_provider(
@@ -186,6 +221,8 @@ def update_provider(
     provider_id: str,
     changes: Mapping[str, object],
     if_match: str,
+    *,
+    secret_store: ProviderSecretStore | None = None,
 ) -> dict[str, object]:
     row = _provider_row(session, provider_id)
     if row is None:
@@ -222,10 +259,26 @@ def update_provider(
         text_models = [model_id]
     all_models = list(dict.fromkeys((*text_models, *multimodal_models)))
     secret_ref = row["secret_ref"]
+    if "secret_ref" in changes and "api_key" in changes:
+        raise ValueError("provider key and secret_ref cannot both be supplied")
     if "secret_ref" in changes:
         value = changes["secret_ref"]
         secret_ref = None if value is None else str(value).strip()
         _validate_secret_ref(secret_ref)
+    if "api_key" in changes:
+        value = changes["api_key"]
+        api_key = value if isinstance(value, SecretStr) else None
+        if api_key is None and value is not None:
+            api_key = SecretStr(str(value))
+        if api_key is not None and api_key.get_secret_value():
+            if secret_store is None:
+                raise RuntimeError("provider secret store is unavailable")
+            stored_secret = secret_store.store(
+                session,
+                provider_id=provider_id,
+                secret=api_key,
+            )
+            secret_ref = stored_secret.secret_ref
     revision = f"{current_revision}:updated"
     session.execute(
         text(
@@ -266,11 +319,15 @@ def update_provider(
     updated = _provider_row(session, provider_id)
     if updated is None:
         raise RuntimeError("provider update was not persisted")
-    return _provider_response(updated)
+    return _provider_response(updated, secret_store=secret_store, session=session)
 
 
 def connectivity_test(
-    session: Session, provider_id: str, model_id: str | None = None
+    session: Session,
+    provider_id: str,
+    model_id: str | None = None,
+    *,
+    secret_store: ProviderSecretStore | None = None,
 ) -> dict[str, object]:
     row = _provider_row(session, provider_id)
     if row is None:
@@ -288,11 +345,18 @@ def connectivity_test(
 
     started = datetime.now(UTC)
     try:
-        status, code, message = probe_model_provider_connectivity(
-            endpoint_url=str(row["endpoint_url"]),
-            provider_kind=str(row["provider_kind"]),
-            secret_ref=str(row["secret_ref"]) if row["secret_ref"] is not None else None,
-        )
+        probe_kwargs: dict[str, object] = {
+            "endpoint_url": str(row["endpoint_url"]),
+            "provider_kind": str(row["provider_kind"]),
+            "secret_ref": str(row["secret_ref"]) if row["secret_ref"] is not None else None,
+        }
+        probe_signature = inspect.signature(probe_model_provider_connectivity)
+        if "provider_id" in probe_signature.parameters:
+            probe_kwargs["provider_id"] = provider_id
+        if "secret_store" in probe_signature.parameters:
+            probe_kwargs["secret_store"] = secret_store
+        probe = cast(Any, probe_model_provider_connectivity)
+        status, code, message = probe(**probe_kwargs)
     except (KeyError, ValueError, PermissionError) as exc:
         status, code, message = "failed", "secret_unavailable", str(exc)
     duration_ms = max(0, int((datetime.now(UTC) - started).total_seconds() * 1000))
@@ -508,9 +572,15 @@ def _provider_row(session: Session, provider_id: str) -> Mapping[str, Any] | Non
     return dict(row) if row is not None else None
 
 
-def _provider_response(row: Mapping[str, Any]) -> dict[str, object]:
+def _provider_response(
+    row: Mapping[str, Any],
+    *,
+    secret_store: ProviderSecretStore | None = None,
+    session: Session | None = None,
+) -> dict[str, object]:
     text_models = _models_from_row(row, "text")
     multimodal_models = _models_from_row(row, "multimodal")
+    secret_status = _secret_status(row, secret_store=secret_store, session=session)
     return {
         "provider_id": str(row["id"]),
         "provider_kind": str(row["provider_kind"]),
@@ -524,9 +594,9 @@ def _provider_response(row: Mapping[str, Any]) -> dict[str, object]:
         "multimodal_models": multimodal_models,
         "models": list(dict.fromkeys((*text_models, *multimodal_models))),
         "capabilities": {"text": bool(text_models), "multimodal": bool(multimodal_models)},
-        "secret_configured": bool(row["secret_ref"]),
-        "secret_status": "configured" if row["secret_ref"] else "missing",
-        "secret_fingerprint": _secret_fingerprint(row["secret_ref"]),
+        "secret_configured": secret_status.configured,
+        "secret_status": secret_status.status,
+        "secret_fingerprint": secret_status.fingerprint,
         "health_status": str(row.get("health_status") or "unknown"),
         "health_checked_at": _iso_timestamp(row.get("health_checked_at")),
         "health_error": row.get("health_error"),
@@ -544,6 +614,8 @@ def _validate_provider_input(provider: ProviderInput) -> None:
         raise ValueError("display_name must not be empty")
     _validate_endpoint(provider.endpoint_url, provider.provider_kind)
     _validate_secret_ref(provider.secret_ref)
+    if provider.api_key is not None and provider.api_key.get_secret_value() == "":
+        raise ValueError("provider key must not be empty")
 
 
 def _validate_endpoint(endpoint_url: str, provider_kind: str) -> None:
@@ -564,8 +636,28 @@ def _validate_endpoint(endpoint_url: str, provider_kind: str) -> None:
 
 
 def _validate_secret_ref(secret_ref: str | None) -> None:
-    if secret_ref is not None and not secret_ref.startswith("env:ZHIHENG_PRIVATE_"):
+    if secret_ref is not None and not (
+        secret_ref.startswith("env:ZHIHENG_PRIVATE_") or secret_ref.startswith("local:")
+    ):
         raise ValueError("secret_ref must use an approved private secret reference")
+
+
+def _secret_status(
+    row: Mapping[str, Any],
+    *,
+    secret_store: ProviderSecretStore | None,
+    session: Session | None,
+) -> SecretStatus:
+    secret_ref = str(row["secret_ref"]) if row["secret_ref"] is not None else None
+    if secret_store is not None and session is not None:
+        return secret_store.status(session, secret_ref=secret_ref, provider_id=str(row["id"]))
+    if not secret_ref:
+        return SecretStatus(configured=False, status="missing")
+    return SecretStatus(
+        configured=True,
+        status="configured",
+        fingerprint=_secret_fingerprint(secret_ref),
+    )
 
 
 def _endpoint_origin(endpoint_url: str) -> str:

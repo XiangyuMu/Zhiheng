@@ -824,6 +824,7 @@ def _ensure_query_services(app: Any, *, eager_answer_model: bool = False) -> Non
         app.state.model_gateway = ModelGateway(
             session_factory=app.state.session_factory,
             settings=settings,
+            secret_store=getattr(app.state, "provider_secret_store", None),
         )
     if not hasattr(app.state, "answer_model"):
         app.state.answer_model = (
@@ -880,6 +881,7 @@ def _answer_model_for_settings(app: Any) -> Any:
         app.state.model_gateway = ModelGateway(
             session_factory=app.state.session_factory,
             settings=settings,
+            secret_store=getattr(app.state, "provider_secret_store", None),
         )
     from zhiheng.query.gateway_model import GatewayAnswerModel
 

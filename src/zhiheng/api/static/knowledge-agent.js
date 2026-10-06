@@ -1213,13 +1213,18 @@ async function loadModelAudits() {
   renderModelAudits(audits);
 }
 
+function providerSecretLabel(provider) {
+  if (provider.secret_status === "configured") return `已配置（${provider.secret_fingerprint || "指纹不可用"}）`;
+  if (provider.secret_status === "missing") return "未配置";
+  return "无法使用，请检查本机密钥环或重新设置密钥";
+}
 function renderModelProviders(providers) {
   $("model-config-list").replaceChildren(...providers.map((provider) => {
     const li = node("li", undefined, "provider-card");
     const title = node("strong", `${provider.display_name || provider.provider_id} · ${provider.provider_kind}`);
     const detail = node("p", `${provider.enabled ? "已启用" : "已停用"}${provider.archived ? " · 已归档" : ""} · 文本：${(provider.text_models || provider.models || []).join("、") || "未配置"} · 多模态：${(provider.multimodal_models || []).join("、") || "未配置"}`);
     const health = node("p", null);
-    const secret = node("span", `密钥：${provider.secret_status === "configured" ? "已配置" : "未配置"}`);
+    const secret = node("span", `密钥：${providerSecretLabel(provider)}`);
     const reveal = action("显示脱敏状态", () => temporarilyShowSecretStatus(provider, secret, reveal), "quiet small");
     reveal.setAttribute("aria-label", "临时显示 API Key 脱敏状态");
     health.append(secret, document.createTextNode(" · "), reveal, document.createTextNode(` · 状态：${provider.health_status || "未知"}${provider.health_error ? ` · ${provider.health_error}` : ""}`));
@@ -1232,13 +1237,13 @@ function temporarilyShowSecretStatus(provider, target, button) {
   const previous = state.secretTimers.get(provider.provider_id);
   if (previous) clearTimeout(previous);
   if (provider.secret_status !== "configured") {
-    target.textContent = "密钥：未配置";
+    target.textContent = `密钥：${providerSecretLabel(provider)}`;
   } else {
     target.textContent = `密钥：已配置（${provider.secret_fingerprint || "脱敏指纹"}）`;
   }
   button.disabled = true;
   const timer = setTimeout(() => {
-    target.textContent = `密钥：${provider.secret_status === "configured" ? "已配置" : "未配置"}`;
+    target.textContent = `密钥：${providerSecretLabel(provider)}`;
     button.disabled = false;
     state.secretTimers.delete(provider.provider_id);
   }, 10000);
@@ -1264,13 +1269,18 @@ function openProviderEditor(provider) {
   state.providerEditing = provider || null; $("model-provider-editor").hidden = false;
   $("provider-id").value = provider?.provider_id || ""; $("provider-kind").value = provider?.provider_kind || "openai-compatible";
   $("provider-name").value = provider?.display_name || ""; $("provider-base-url").value = provider?.base_url || "";
-  $("provider-secret-ref").value = ""; $("provider-text-models").value = (provider?.text_models || provider?.models || []).join("\n"); $("provider-multimodal-models").value = (provider?.multimodal_models || []).join("\n"); $("provider-enabled").checked = Boolean(provider?.enabled);
+  $("provider-api-key").value = ""; $("provider-secret-ref").value = ""; $("provider-text-models").value = (provider?.text_models || provider?.models || []).join("\n"); $("provider-multimodal-models").value = (provider?.multimodal_models || []).join("\n"); $("provider-enabled").checked = Boolean(provider?.enabled);
 }
-function closeProviderEditor() { state.providerEditing = null; $("model-provider-editor").hidden = true; $("provider-secret-ref").value = ""; $("model-provider-form")?.reset?.(); }
+function closeProviderEditor() { $("provider-api-key").value = ""; state.providerEditing = null; $("model-provider-editor").hidden = true; $("provider-secret-ref").value = ""; $("model-provider-form")?.reset?.(); }
 async function saveProvider(event) {
   event.preventDefault();
   const payload = { provider_kind: $("provider-kind").value, display_name: $("provider-name").value.trim(), base_url: $("provider-base-url").value.trim(), text_models: $("provider-text-models").value.split("\n").map((v) => v.trim()).filter(Boolean), multimodal_models: $("provider-multimodal-models").value.split("\n").map((v) => v.trim()).filter(Boolean), enabled: $("provider-enabled").checked };
-  const secret = $("provider-secret-ref").value.trim(); if (secret) payload.secret_ref = secret;
+  const key = $("provider-api-key").value.trim();
+  const secret = $("provider-secret-ref").value.trim();
+  $("provider-api-key").value = "";
+  if (key && secret) { message("provider-form-error", "API Key 与旧密钥引用只能填写一个"); return; }
+  if (key) payload.api_key = key;
+  if (secret) payload.secret_ref = secret;
   const editing = state.providerEditing;
   try { await modelMutation(editing ? `/v1/model-config/providers/${encodeURIComponent(editing.provider_id)}` : "/v1/model-config/providers", editing ? "PATCH" : "POST", payload, editing?.etag); $("provider-secret-ref").value = ""; closeProviderEditor(); showToast("Provider 配置已保存"); await loadModelConfig(); }
   catch (error) { message("provider-form-error", readableError(error)); }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 from collections.abc import AsyncIterator, Generator
@@ -12,8 +13,9 @@ from urllib.parse import quote
 import uvicorn
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.exception_handlers import http_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -47,6 +49,7 @@ from zhiheng.models.configuration import (
     update_provider,
 )
 from zhiheng.recovery import startup_recovery_barrier
+from zhiheng.secrets import ProviderSecretStore
 
 SESSION_COOKIE = "zhiheng_session"
 CSRF_COOKIE = "zhiheng_csrf"
@@ -93,6 +96,7 @@ class ModelProviderCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=128)
     base_url: str
     secret_ref: str | None = None
+    api_key: SecretStr | None = Field(default=None, max_length=4096)
     text_models: list[str] = Field(default_factory=list)
     multimodal_models: list[str] = Field(default_factory=list)
     enabled: bool = False
@@ -106,6 +110,7 @@ class ModelProviderPatch(BaseModel):
     base_url: str | None = None
     endpoint_url: str | None = None
     secret_ref: str | None = None
+    api_key: SecretStr | None = Field(default=None, max_length=4096)
     text_models: list[str] | None = None
     multimodal_models: list[str] | None = None
     enabled: bool | None = None
@@ -135,7 +140,11 @@ def get_db_session(request: Request) -> Generator[Session, None, None]:
 SessionDep = Annotated[Session, Depends(get_db_session)]
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    secret_store: ProviderSecretStore | None = None,
+) -> FastAPI:
     app_settings = settings or get_settings()
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -149,8 +158,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = create_sqlite_engine(app_settings)
     session_factory = create_session_factory(engine)
     session_service = SessionService()
+    provider_secret_store = (secret_store or ProviderSecretStore()).bind_session_factory(
+        session_factory
+    )
     app.state.session_factory = session_factory
     app.state.settings = app_settings
+    app.state.provider_secret_store = provider_secret_store
     # Idempotency records are intentionally response-only and contain no secret
     # material. A durable audit table can replace this process-local cache later.
     app.state.model_config_idempotency = {}
@@ -201,6 +214,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=status.HTTP_303_SEE_OTHER,
             )
         return await http_exception_handler(request, exc)
+
+    @app.exception_handler(RequestValidationError)
+    async def redact_request_validation_error(
+        request: Request, exc: RequestValidationError
+    ) -> Response:
+        del request, exc
+        return Response(
+            content=json.dumps({"detail": "request validation failed"}),
+            media_type="application/json",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
 
     @app.get("/healthz", tags=["system"])
     def healthz() -> dict[str, str | bool]:
@@ -381,7 +405,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> list[dict[str, object]]:
         _require_session(session, session_service, session_token)
         response.headers["Cache-Control"] = "no-store"
-        providers = list_providers(session)
+        providers = list_providers(session, secret_store=app.state.provider_secret_store)
         response.headers["ETag"] = sha256_text(
             json.dumps(providers, sort_keys=True, default=str, separators=(",", ":"))
         )[:32]
@@ -396,7 +420,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> list[dict[str, object]]:
         _require_session(session, session_service, session_token)
         response.headers["Cache-Control"] = "no-store"
-        providers = list_providers(session, include_archived=include_archived)
+        providers = list_providers(
+            session,
+            include_archived=include_archived,
+            secret_store=app.state.provider_secret_store,
+        )
         response.headers["ETag"] = sha256_text(
             json.dumps(providers, sort_keys=True, default=str, separators=(",", ":"))
         )[:32]
@@ -415,7 +443,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         operation_key = _require_model_mutation(
             request, session, session_service, session_token, csrf_header, idempotency_key
         )
-        fingerprint = _model_config_fingerprint("provider:create", payload.model_dump(mode="json"))
+        fingerprint = _model_config_fingerprint(
+            "provider:create",
+            _model_payload_for_fingerprint(payload, app_settings),
+        )
         cached = _model_config_idempotent_result(app, operation_key, fingerprint)
         if cached is not None:
             response.headers["ETag"] = str(cached.get("etag", ""))
@@ -431,12 +462,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     display_name=payload.display_name,
                     endpoint_url=payload.base_url,
                     secret_ref=payload.secret_ref,
+                    api_key=payload.api_key,
                     text_models=tuple(payload.text_models),
                     multimodal_models=tuple(payload.multimodal_models),
                     enabled=payload.enabled,
                 ),
+                secret_store=app.state.provider_secret_store,
             )
-        except (ValueError, RuntimeError) as exc:
+        except (ValueError, RuntimeError, PermissionError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         response.headers["ETag"] = str(result["etag"])
         response.headers["Cache-Control"] = "no-store"
@@ -461,7 +494,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not if_match:
             raise HTTPException(status_code=412, detail="missing If-Match")
         fingerprint = _model_config_fingerprint(
-            f"provider:patch:{provider_id}:{if_match}", payload.model_dump(mode="json")
+            f"provider:patch:{provider_id}:{if_match}",
+            _model_payload_for_fingerprint(payload, app_settings),
         )
         cached = _model_config_idempotent_result(app, operation_key, fingerprint)
         if cached is not None:
@@ -470,11 +504,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return dict(cached)
         try:
             result = update_provider(
-                session, provider_id, payload.model_dump(exclude_unset=True), if_match
+                session,
+                provider_id,
+                payload.model_dump(exclude_unset=True),
+                if_match,
+                secret_store=app.state.provider_secret_store,
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except RuntimeError as exc:
+        except (RuntimeError, PermissionError) as exc:
             raise HTTPException(status_code=412, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -514,6 +552,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 provider_id,
                 {"archived": True, "enabled": False},
                 if_match,
+                secret_store=app.state.provider_secret_store,
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -548,7 +587,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             response.headers["Cache-Control"] = "no-store"
             return dict(cached)
         try:
-            result = connectivity_test(session, provider_id, model_id)
+            result = connectivity_test(
+                session,
+                provider_id,
+                model_id,
+                secret_store=app.state.provider_secret_store,
+            )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except PermissionError as exc:
@@ -567,7 +611,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict[str, object]:
         _require_session(session, session_service, session_token)
         response.headers["Cache-Control"] = "no-store"
-        providers = list_providers(session)
+        providers = list_providers(session, secret_store=app.state.provider_secret_store)
         return {
             "defaults": defaults(session),
             "providers": providers,
@@ -723,6 +767,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 payload.provider_id,
                 compatibility_changes,
                 if_match or "",
+                secret_store=app.state.provider_secret_store,
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -786,6 +831,21 @@ def _model_config_fingerprint(operation: str, payload: object) -> str:
     return sha256_text(
         operation + "|" + json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     )
+
+
+def _model_payload_for_fingerprint(
+    payload: ModelProviderCreate | ModelProviderPatch,
+    settings: Settings,
+) -> dict[str, object]:
+    data = payload.model_dump(mode="json", exclude={"api_key"})
+    if payload.api_key is not None:
+        digest = hmac.new(
+            settings.secret_key.get_secret_value().encode("utf-8"),
+            payload.api_key.get_secret_value().encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        data["api_key_digest"] = digest
+    return data
 
 
 def _model_config_idempotent_result(

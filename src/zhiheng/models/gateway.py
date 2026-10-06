@@ -36,7 +36,7 @@ from zhiheng.privacy.gateway import (
     PrivacyPipelineResult,
     authorize_outbound_payload,
 )
-from zhiheng.secrets import EnvironmentSecretStore
+from zhiheng.secrets import EnvironmentSecretStore, SecretResolver
 
 _ALLOWED_PROVIDER_KINDS = {"ollama", "openai", "deepseek", "openai-compatible"}
 _MAX_OUTBOUND_IMAGE_BYTES = 20 * 1024 * 1024
@@ -48,6 +48,8 @@ def probe_model_provider_connectivity(
     endpoint_url: str,
     provider_kind: str,
     secret_ref: str | None,
+    provider_id: str | None = None,
+    secret_store: SecretResolver | None = None,
     timeout: float = 5.0,
 ) -> tuple[str, str, str]:
     """Gateway-facing wrapper for the private transport health probe."""
@@ -55,6 +57,8 @@ def probe_model_provider_connectivity(
         endpoint_url=endpoint_url,
         provider_kind=provider_kind,
         secret_ref=secret_ref,
+        provider_id=provider_id,
+        secret_store=secret_store,
         timeout=timeout,
     )
 
@@ -145,7 +149,7 @@ class ModelGateway:
         session_factory: sessionmaker[Session],
         settings: Settings,
         privacy_pipeline: PrivacyPipeline | None = None,
-        secret_store: EnvironmentSecretStore | None = None,
+        secret_store: SecretResolver | None = None,
         before_claim_hook: Callable[[], None] | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -166,7 +170,7 @@ class ModelGateway:
         session_factory: sessionmaker[Session],
         settings: Settings,
         privacy_pipeline: PrivacyPipeline | None = None,
-        secret_store: EnvironmentSecretStore | None = None,
+        secret_store: SecretResolver | None = None,
         transports: dict[str, ModelTransport],
         before_claim_hook: Callable[[], None] | None = None,
     ) -> ModelGateway:

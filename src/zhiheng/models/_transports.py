@@ -8,7 +8,7 @@ from openai import OpenAI
 from pydantic import SecretStr
 
 from zhiheng.core.ids import sha256_text
-from zhiheng.secrets import EnvironmentSecretStore
+from zhiheng.secrets import EnvironmentSecretStore, SecretResolver
 
 
 def probe_provider_connectivity(
@@ -16,6 +16,8 @@ def probe_provider_connectivity(
     endpoint_url: str,
     provider_kind: str,
     secret_ref: str | None,
+    provider_id: str | None = None,
+    secret_store: SecretResolver | None = None,
     timeout: float = 5.0,
 ) -> tuple[str, str, str]:
     """Perform a minimal provider health probe.
@@ -29,7 +31,8 @@ def probe_provider_connectivity(
     if provider_kind != "ollama":
         if not secret_ref:
             raise PermissionError("missing secret_ref")
-        secret = EnvironmentSecretStore().resolve(secret_ref).get_secret_value()
+        resolver = secret_store or EnvironmentSecretStore()
+        secret = resolver.resolve(secret_ref, provider_id=provider_id).get_secret_value()
         headers["Authorization"] = f"Bearer {secret}"
     probe_url = (
         f"{endpoint_url.rstrip('/')}/api/tags"
@@ -129,7 +132,7 @@ class OllamaGenerateTransport:
 
 
 class OpenAICompatibleChatTransport:
-    def __init__(self, secret_store: EnvironmentSecretStore) -> None:
+    def __init__(self, secret_store: SecretResolver) -> None:
         self._secret_store = secret_store
 
     def complete(
@@ -140,7 +143,10 @@ class OpenAICompatibleChatTransport:
     ) -> TransportResponse:
         if route.secret_ref is None:
             raise PermissionError("external provider requires secret_ref")
-        api_key: SecretStr = self._secret_store.resolve(route.secret_ref)
+        api_key: SecretStr = self._secret_store.resolve(
+            route.secret_ref,
+            provider_id=route.provider_id,
+        )
         content: str | list[dict[str, Any]]
         if payload.parts:
             content = [{"type": "text", "text": payload.text}]
@@ -177,7 +183,7 @@ class OpenAICompatibleChatTransport:
 class OpenAIResponsesTransport:
     def __init__(
         self,
-        secret_store: EnvironmentSecretStore,
+        secret_store: SecretResolver,
         client_factory: Any | None = None,
     ) -> None:
         self._secret_store = secret_store
@@ -191,7 +197,10 @@ class OpenAIResponsesTransport:
     ) -> TransportResponse:
         if route.secret_ref is None:
             raise PermissionError("openai provider requires secret_ref")
-        api_key: SecretStr = self._secret_store.resolve(route.secret_ref)
+        api_key: SecretStr = self._secret_store.resolve(
+            route.secret_ref,
+            provider_id=route.provider_id,
+        )
         client = self._client_factory(
             api_key=api_key.get_secret_value(),
             base_url=route.endpoint_url,

@@ -14,15 +14,18 @@ from zhiheng.api.main import create_app
 from zhiheng.core.config import Settings
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
 from zhiheng.models.configuration import defaults
+from zhiheng.secrets import InMemoryMasterKeyBackend, ProviderSecretStore
 
 
-def _client(tmp_path: Path) -> TestClient:
+def _client(
+    tmp_path: Path, secret_store: ProviderSecretStore | None = None
+) -> TestClient:
     db_path = tmp_path / "zhiheng.db"
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
     command.upgrade(cfg, "head")
     settings = Settings(environment="test", database_url=f"sqlite:///{db_path}")
-    app = create_app(settings)
+    app = create_app(settings, secret_store=secret_store)
     factory = create_session_factory(create_sqlite_engine(settings))
     with session_scope(factory) as session:
         session.execute(
@@ -40,6 +43,17 @@ def _client(tmp_path: Path) -> TestClient:
             )
         )
     return TestClient(app)
+
+
+def _empty_client(
+    tmp_path: Path, secret_store: ProviderSecretStore | None = None
+) -> TestClient:
+    db_path = tmp_path / "zhiheng.db"
+    cfg = Config("alembic.ini")
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.upgrade(cfg, "head")
+    settings = Settings(environment="test", database_url=f"sqlite:///{db_path}")
+    return TestClient(create_app(settings, secret_store=secret_store))
 
 
 def _login(client: TestClient) -> str:
@@ -227,6 +241,403 @@ def test_provider_secret_refs_are_validated_and_never_echoed(tmp_path: Path) -> 
     body = client.get("/v1/model-config/providers").json()
     assert "secret_ref" not in json.dumps(body)
     assert "ZHIHENG_PRIVATE_TEST_SECRET" not in json.dumps(body)
+
+
+def test_provider_key_is_encrypted_persisted_and_secret_free_over_http(
+    tmp_path: Path,
+) -> None:
+    synthetic_key = "sk-issue36-local-provider-secret"
+    backend = InMemoryMasterKeyBackend()
+    secret_store = ProviderSecretStore(master_key_backend=backend)
+    client = _empty_client(tmp_path, secret_store)
+    csrf = _login(client)
+
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "provider-create-encrypted-secret",
+        },
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Encrypted Provider",
+            "base_url": "https://models.example.test/v1",
+            "api_key": synthetic_key,
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+
+    assert created.status_code == 200
+    body = created.json()
+    assert body["secret_status"] == "configured"
+    assert body["secret_configured"] is True
+    assert body["secret_fingerprint"]
+    assert synthetic_key not in created.text
+    assert "secret_ref" not in created.text
+
+    app: Any = client.app
+    with app.state.session_factory() as session:
+        raw_provider = session.execute(
+            text("SELECT secret_ref FROM model_provider_configs WHERE id=:id"),
+            {"id": body["provider_id"]},
+        ).scalar_one()
+        raw_secret = session.execute(
+            text(
+                """
+                SELECT provider_id, secret_version, algorithm, nonce_b64,
+                       ciphertext_b64, secret_fingerprint
+                FROM provider_secret_records
+                WHERE provider_id=:id
+                """
+            ),
+            {"id": body["provider_id"]},
+        ).mappings().one()
+    assert str(raw_provider).startswith("local:")
+    serialized_secret_row = json.dumps(dict(raw_secret), sort_keys=True)
+    assert synthetic_key not in serialized_secret_row
+    assert raw_secret["algorithm"] == "AES-256-GCM"
+    assert raw_secret["secret_version"] == 1
+    assert raw_secret["nonce_b64"] != raw_secret["ciphertext_b64"]
+
+    refreshed = client.get("/v1/model-config/providers")
+    assert refreshed.status_code == 200
+    assert synthetic_key not in refreshed.text
+    refreshed_provider = refreshed.json()[0]
+    assert refreshed_provider["secret_status"] == "configured"
+    assert refreshed_provider["secret_fingerprint"] == body["secret_fingerprint"]
+
+
+def test_local_provider_key_survives_app_recreation_and_resolves_for_gateway(
+    tmp_path: Path,
+) -> None:
+    synthetic_key = "sk-issue36-restart-secret"
+    backend = InMemoryMasterKeyBackend()
+    first_store = ProviderSecretStore(master_key_backend=backend)
+    client = _empty_client(tmp_path, first_store)
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "provider-create-restart-secret",
+        },
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Restart Provider",
+            "base_url": "https://models.example.test/v1",
+            "api_key": synthetic_key,
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200
+
+    app: Any = client.app
+    settings = app.state.settings
+    restarted = TestClient(
+        create_app(
+            settings,
+            secret_store=ProviderSecretStore(master_key_backend=backend),
+        )
+    )
+    csrf_restarted = _login(restarted)
+    providers = restarted.get("/v1/model-config/providers").json()
+    assert providers[0]["secret_status"] == "configured"
+    assert providers[0]["secret_fingerprint"] == created.json()["secret_fingerprint"]
+
+    captured: dict[str, object] = {}
+
+    def failed_probe(
+        *,
+        endpoint_url: str,
+        provider_kind: str,
+        secret_ref: str | None,
+        provider_id: str | None = None,
+        secret_store: ProviderSecretStore | None = None,
+        timeout: float = 5.0,
+    ) -> tuple[str, str, str]:
+        restarted_app: Any = restarted.app
+        assert secret_store is restarted_app.state.provider_secret_store
+        captured["resolved"] = secret_store.resolve(
+            secret_ref,
+            provider_id=provider_id,
+        ).get_secret_value()
+        return "failed", "network_error", "无法连接到供应商地址"
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(
+            "zhiheng.models.gateway.probe_model_provider_connectivity",
+            failed_probe,
+        )
+        result = restarted.post(
+            f"/v1/model-config/providers/{providers[0]['provider_id']}/connectivity-test",
+            headers={
+                "X-CSRF-Token": csrf_restarted,
+                "Idempotency-Key": "connectivity-local-secret",
+            },
+        )
+    finally:
+        monkeypatch.undo()
+    assert result.status_code == 200
+    assert captured["resolved"] == synthetic_key
+    assert synthetic_key not in result.text
+
+
+def test_tampered_local_ciphertext_fails_closed_without_breaking_listing(
+    tmp_path: Path,
+) -> None:
+    synthetic_key = "sk-issue36-tampered-secret"
+    backend = InMemoryMasterKeyBackend()
+    client = _empty_client(tmp_path, ProviderSecretStore(master_key_backend=backend))
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "provider-create-tampered-secret",
+        },
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Tampered Provider",
+            "base_url": "https://models.example.test/v1",
+            "api_key": synthetic_key,
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200
+    app: Any = client.app
+    with app.state.session_factory.begin() as session:
+        session.execute(
+            text(
+                """
+                UPDATE provider_secret_records
+                SET ciphertext_b64='AAAA'
+                WHERE provider_id=:provider_id
+                """
+            ),
+            {"provider_id": created.json()["provider_id"]},
+        )
+
+    listed = client.get("/v1/model-config/providers")
+    assert listed.status_code == 200
+    assert listed.json()[0]["secret_status"] == "unavailable"
+    assert synthetic_key not in listed.text
+
+    result = client.post(
+        f"/v1/model-config/providers/{created.json()['provider_id']}/connectivity-test",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "connectivity-tampered-secret",
+        },
+    )
+    assert result.status_code == 200
+    assert result.json()["diagnostic_code"] == "secret_unavailable"
+    assert synthetic_key not in result.text
+
+
+def test_missing_master_key_keeps_api_and_provider_listing_available(tmp_path: Path) -> None:
+    synthetic_key = "sk-issue36-missing-master-key"
+    backend = InMemoryMasterKeyBackend()
+    client = _empty_client(tmp_path, ProviderSecretStore(master_key_backend=backend))
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "provider-create-missing-master",
+        },
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Missing Master Provider",
+            "base_url": "https://models.example.test/v1",
+            "api_key": synthetic_key,
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200
+    app: Any = client.app
+    settings = app.state.settings
+    unavailable = InMemoryMasterKeyBackend(available=False)
+    restarted = TestClient(
+        create_app(
+            settings,
+            secret_store=ProviderSecretStore(master_key_backend=unavailable),
+        )
+    )
+    assert restarted.get("/healthz").status_code == 200
+    csrf_restarted = _login(restarted)
+    listed = restarted.get("/v1/model-config/providers")
+    assert listed.status_code == 200
+    assert listed.json()[0]["secret_status"] == "unavailable"
+    assert synthetic_key not in listed.text
+    connectivity = restarted.post(
+        f"/v1/model-config/providers/{created.json()['provider_id']}/connectivity-test",
+        headers={
+            "X-CSRF-Token": csrf_restarted,
+            "Idempotency-Key": "provider-connectivity-missing-master",
+        },
+    )
+    assert connectivity.status_code == 200
+    assert connectivity.json()["diagnostic_code"] == "secret_unavailable"
+
+
+def test_failed_secret_storage_rolls_back_provider_creation(tmp_path: Path) -> None:
+    backend = InMemoryMasterKeyBackend(available=False)
+    client = _empty_client(tmp_path, ProviderSecretStore(master_key_backend=backend))
+    csrf = _login(client)
+
+    response = client.post(
+        "/v1/model-config/providers",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "provider-create-unavailable-secret-store",
+        },
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Should Roll Back",
+            "base_url": "https://models.example.test/v1",
+            "api_key": "sk-issue36-rollback-secret",
+            "text_models": ["model-a"],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "sk-issue36-rollback-secret" not in response.text
+    assert client.get("/v1/model-config/providers").json() == []
+    app: Any = client.app
+    with app.state.session_factory() as session:
+        assert (
+            session.execute(text("SELECT count(*) FROM model_provider_configs")).scalar_one() == 0
+        )
+        assert (
+            session.execute(text("SELECT count(*) FROM provider_secret_records")).scalar_one() == 0
+        )
+
+
+def test_local_provider_secret_ref_is_bound_to_owning_provider(tmp_path: Path) -> None:
+    synthetic_key = "sk-issue36-bound-secret"
+    backend = InMemoryMasterKeyBackend()
+    client = _empty_client(tmp_path, ProviderSecretStore(master_key_backend=backend))
+    csrf = _login(client)
+    first = client.post(
+        "/v1/model-config/providers",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "provider-create-bound-secret-a",
+        },
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Bound Provider A",
+            "base_url": "https://models.example.test/v1",
+            "api_key": synthetic_key,
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    second = client.post(
+        "/v1/model-config/providers",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "provider-create-bound-secret-b",
+        },
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Bound Provider B",
+            "base_url": "https://models-b.example.test/v1",
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    assert first.status_code == second.status_code == 200
+    app: Any = client.app
+    with app.state.session_factory.begin() as session:
+        first_ref = session.execute(
+            text("SELECT secret_ref FROM model_provider_configs WHERE id=:id"),
+            {"id": first.json()["provider_id"]},
+        ).scalar_one()
+        session.execute(
+            text("UPDATE model_provider_configs SET secret_ref=:ref WHERE id=:id"),
+            {"ref": first_ref, "id": second.json()["provider_id"]},
+        )
+
+    providers = client.get("/v1/model-config/providers").json()
+    provider_b = next(
+        item for item in providers if item["provider_id"] == second.json()["provider_id"]
+    )
+    assert provider_b["secret_status"] == "unavailable"
+    with pytest.raises(PermissionError, match="binding"):
+        app.state.provider_secret_store.resolve(
+            str(first_ref),
+            provider_id=second.json()["provider_id"],
+        )
+
+
+def test_provider_key_idempotency_and_validation_do_not_echo_secret(
+    tmp_path: Path,
+) -> None:
+    first_key = "sk-issue36-idempotency-one"
+    second_key = "sk-issue36-idempotency-two"
+    client = _empty_client(
+        tmp_path,
+        ProviderSecretStore(master_key_backend=InMemoryMasterKeyBackend()),
+    )
+    csrf = _login(client)
+    headers = {
+        "X-CSRF-Token": csrf,
+        "Idempotency-Key": "provider-create-idempotency-secret",
+    }
+    payload = {
+        "provider_kind": "openai-compatible",
+        "display_name": "Idempotent Provider",
+        "base_url": "https://models.example.test/v1",
+        "api_key": first_key,
+        "text_models": ["model-a"],
+    }
+    first = client.post("/v1/model-config/providers", headers=headers, json=payload)
+    assert first.status_code == 200
+
+    changed = client.post(
+        "/v1/model-config/providers",
+        headers=headers,
+        json={**payload, "api_key": second_key},
+    )
+    assert changed.status_code == 409
+    assert first_key not in changed.text
+    assert second_key not in changed.text
+
+    too_long_key = f"sk-{'x' * 5000}"
+    invalid = client.post(
+        "/v1/model-config/providers",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "provider-create-invalid-secret",
+        },
+        json={**payload, "api_key": too_long_key},
+    )
+    assert invalid.status_code == 422
+    assert too_long_key not in invalid.text
+    assert "request validation failed" in invalid.text
+
+
+def test_settings_page_exposes_write_only_provider_key_field(tmp_path: Path) -> None:
+    client = _empty_client(
+        tmp_path,
+        ProviderSecretStore(master_key_backend=InMemoryMasterKeyBackend()),
+    )
+    _login(client)
+
+    page = client.get("/knowledge-agent")
+    script = client.get("/knowledge-agent.js")
+
+    assert page.status_code == 200
+    assert 'id="provider-api-key"' in page.text
+    assert 'type="password"' in page.text
+    assert script.status_code == 200
+    assert "payload.api_key" in script.text
 
 
 def test_defaults_are_read_from_persisted_route_and_stale_etag_is_rejected(
