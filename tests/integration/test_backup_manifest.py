@@ -73,7 +73,7 @@ def _add_provider_secret_record(snapshot: Path) -> None:
               model_allowlist_json, endpoint_url, endpoint_origin, policy_revision
             ) VALUES (
               'provider-backup', 'openai-compatible', 'Backup Provider', 1, '{}',
-              'local:v1', '[\"model-a\"]', 'https://models.example.test/v1',
+              'local:secret-backup', '[\"model-a\"]', 'https://models.example.test/v1',
               'https://models.example.test', 'rev-1'
             )
             """

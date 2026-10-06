@@ -409,6 +409,24 @@ def migrate_provider_secret(
         raise ValueError("provider does not use a legacy environment secret")
     if secret_store is None:
         raise RuntimeError("provider secret store is unavailable")
+    reserved_revision = f"{if_match}:secret-migrating:{new_id()}"
+    reserved = cast(CursorResult[Any], session.execute(
+        text(
+            """
+            UPDATE model_provider_configs
+            SET policy_revision = :reserved_revision,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :provider_id AND policy_revision = :if_match
+            """
+        ),
+        {
+            "provider_id": provider_id,
+            "if_match": if_match,
+            "reserved_revision": reserved_revision,
+        },
+    ))
+    if reserved.rowcount != 1:
+        raise RuntimeError("provider configuration changed; refresh and retry")
     stored = secret_store.migrate_environment_reference(
         session,
         provider_id=provider_id,
@@ -421,13 +439,14 @@ def migrate_provider_secret(
             SET secret_ref = :secret_ref,
                 policy_revision = :policy_revision,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = :provider_id
+            WHERE id = :provider_id AND policy_revision = :reserved_revision
             """
         ),
         {
             "provider_id": provider_id,
             "secret_ref": stored.secret_ref,
             "policy_revision": f"{if_match}:secret-migrated",
+            "reserved_revision": reserved_revision,
         },
     )
     updated = _provider_row(session, provider_id)

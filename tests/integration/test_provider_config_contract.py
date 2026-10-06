@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -1174,6 +1175,44 @@ def test_connectivity_probe_rejects_malformed_or_missing_model_response(
         model_id="model-a",
     )
     assert missing_model[:2] == ("failed", "model_not_found")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.RemoteProtocolError("server disconnected"),
+        httpx.ReadError("read failed"),
+        httpx.WriteError("write failed"),
+    ],
+)
+def test_connectivity_probe_normalizes_protocol_transport_errors(
+    monkeypatch: pytest.MonkeyPatch, error: httpx.RequestError
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_ISSUE37_PROBE", "probe-secret")
+
+    def raise_error(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise error
+
+    monkeypatch.setattr("zhiheng.models._transports.httpx.get", raise_error)
+    result = probe_provider_connectivity(
+        endpoint_url="https://models.example.test/v1",
+        provider_kind="openai-compatible",
+        secret_ref="env:ZHIHENG_PRIVATE_ISSUE37_PROBE",
+        model_id="model-a",
+    )
+    assert result == ("failed", "network_error", "无法连接到供应商地址")
+
+
+def test_empty_legacy_environment_secret_is_reported_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "")
+    client = _client(tmp_path)
+    _login(client)
+    provider = client.get("/v1/model-config/providers").json()[0]
+    assert provider["secret_status"] == "unavailable"
+    assert provider["secret_source"] == "legacy_env"
 
 
 def test_connectivity_failure_marks_unhealthy_and_records_secret_free_audit(

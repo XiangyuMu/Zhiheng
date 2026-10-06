@@ -96,6 +96,7 @@ PROVIDER_SECRET_CHECKS = {
     "rotation": "browser rotation creates a new version and deletion disables the Provider",
     "migration": "browser migrates a legacy env reference to local encrypted storage",
     "connection": "browser completes a real Provider connectivity test with a stable diagnostic",
+    "deletion": "browser deletion disables the Provider and removes the active secret",
     "leakage": (
         "synthetic key and complete ciphertext are absent from page, storage, and "
         "model-config responses"
@@ -228,8 +229,12 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         leakage.get(key) is not True
                         for key in ("page", "storage", "api_log", "worker_log", "database", "audit")
                     ) or not isinstance(leakage.get("model_config_responses"), int) \
+                        or leakage.get("model_config_responses", 0) <= 0 \
                         or not isinstance(leakage.get("http_responses"), int) \
-                        or not isinstance(leakage.get("screenshot"), str):
+                        or leakage.get("http_responses", 0) <= 0 \
+                        or not isinstance(leakage.get("screenshot"), str) \
+                        or not isinstance(leakage.get("legacy_key_scanned"), bool) \
+                        or leakage.get("legacy_key_scanned") is not True:
                         result["error"] = "provider leakage evidence is incomplete"
                         results[name] = result
                         continue

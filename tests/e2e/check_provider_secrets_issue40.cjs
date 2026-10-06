@@ -12,13 +12,22 @@ if (!base || !output || !["127.0.0.1", "localhost"].includes(new URL(base).hostn
 }
 fs.mkdirSync(output, { recursive: true });
 const syntheticKey = "sk-issue40-browser-synthetic-key";
+const rotatedKey = `${syntheticKey}-rotated`;
+const legacyKey = "issue40-browser-legacy-key";
 const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
 
 (async () => {
+  let receivedAuth = [];
   const providerServer = http.createServer((request, response) => {
-    if (request.url === "/api/tags") {
+    if (request.url === "/models") {
+      receivedAuth.push(request.headers.authorization || "");
+      if (!request.headers.authorization) {
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "missing authorization" }));
+        return;
+      }
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ models: [{ name: "model-a" }] }));
+      response.end(JSON.stringify({ data: [{ id: "model-a" }] }));
       return;
     }
     response.writeHead(404);
@@ -65,7 +74,7 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     await page.locator("#model-provider-form").waitFor({ state: "hidden" });
     await page.getByRole("button", { name: "新增 Provider", exact: true }).click();
     await page.locator("#provider-name").fill("Issue 40 Browser Provider");
-    await page.locator("#provider-kind").selectOption("ollama");
+    await page.locator("#provider-kind").selectOption("openai-compatible");
     await page.locator("#provider-base-url").fill(providerUrl);
     await page.locator("#provider-api-key").fill(syntheticKey);
     await page.locator("#provider-text-models").fill("model-a");
@@ -80,7 +89,8 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     assert(!JSON.stringify(providers).includes(syntheticKey));
     evidence.create = { provider_id: provider.provider_id, secret_status: provider.secret_status, fingerprint: provider.secret_fingerprint };
     const connectivity = await api(`/v1/model-config/providers/${provider.provider_id}/connectivity-test`, { method: "POST" });
-    assert(["succeeded", "failed"].includes(connectivity.status));
+    assert.equal(connectivity.status, "succeeded");
+    assert.deepEqual(receivedAuth.at(-1), `Bearer ${syntheticKey}`);
     evidence.connection = { status: connectivity.status, diagnostic_code: connectivity.diagnostic_code || null };
     await page.reload();
     const refreshed = await api("/v1/model-config/providers");
@@ -92,12 +102,12 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
 
     const createdCard = page.locator("li.provider-card").filter({ hasText: "Issue 40 Browser Provider" });
     await createdCard.getByRole("button", { name: "编辑", exact: true }).click();
-    await page.locator("#provider-api-key").fill(`${syntheticKey}-rotated`);
+    await page.locator("#provider-api-key").fill(rotatedKey);
     await page.locator("#model-provider-form button[type=submit]").click();
     await page.getByText("Provider 配置已保存").waitFor();
     const rotated = (await api("/v1/model-config/providers")).find((item) => item.provider_id === provider.provider_id);
     assert.equal(rotated.secret_version, 2);
-    assert.equal((await page.locator("body").innerText()).includes(`${syntheticKey}-rotated`), false);
+    assert.equal((await page.locator("body").innerText()).includes(rotatedKey), false);
     evidence.rotation = { secret_version: rotated.secret_version, fingerprint: rotated.secret_fingerprint };
 
     const card = page.locator("li.provider-card").filter({ hasText: "Issue 40 Browser Provider" });
@@ -110,7 +120,7 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     evidence.deletion = { enabled: deleted.enabled, secret_status: deleted.secret_status };
 
     const legacy = await api("/v1/model-config/providers", { method: "POST", body: {
-      provider_kind: "ollama", display_name: "Issue 40 Legacy Provider",
+      provider_kind: "openai-compatible", display_name: "Issue 40 Legacy Provider",
       base_url: providerUrl, secret_ref: legacyRef,
       text_models: ["model-a"], enabled: true,
     }});
@@ -124,6 +134,7 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     assert(!JSON.stringify(migrated).includes(legacyRef));
     const migratedConnectivity = await api(`/v1/model-config/providers/${migrated.provider_id}/connectivity-test`, { method: "POST" });
     assert.equal(migratedConnectivity.status, "succeeded");
+    assert.deepEqual(receivedAuth.at(-1), `Bearer ${legacyKey}`);
     evidence.migration = { provider_id: migrated.provider_id, secret_source: migrated.secret_source, secret_version: migrated.secret_version };
     const audit = await api(`/v1/model-config/audits?provider_id=${migrated.provider_id}`);
     assert(!JSON.stringify(audit).includes(syntheticKey));
@@ -135,7 +146,7 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     assert(!visible.includes(syntheticKey) && !visible.includes("ciphertext_b64"));
     for (const response of responses) {
       const body = await response.text().catch(() => "");
-      assert(!body.includes(syntheticKey) && !body.includes(`${syntheticKey}-rotated`));
+      assert(!body.includes(syntheticKey) && !body.includes(rotatedKey) && !body.includes(legacyKey));
       assert(!body.includes("ciphertext_b64"));
     }
     const screenshotPath = path.join(output, "provider-secrets.png");
@@ -145,13 +156,13 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
       const file = path.join(acceptanceRoot, name);
       return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
     }).join("\n");
-    assert(!logContents.includes(syntheticKey) && !logContents.includes(`${syntheticKey}-rotated`));
+    assert(fs.existsSync(path.join(acceptanceRoot, "api.log")) && fs.existsSync(path.join(acceptanceRoot, "worker.log")));
+    assert(!logContents.includes(syntheticKey) && !logContents.includes(rotatedKey) && !logContents.includes(legacyKey));
     const databaseUrl = process.env.ZHIHENG_DATABASE_URL || "";
     const databasePath = databaseUrl.startsWith("sqlite:///") ? databaseUrl.slice("sqlite:///".length) : "";
     const databaseBytes = databasePath && fs.existsSync(databasePath) ? fs.readFileSync(databasePath, "utf8") : "";
-    assert(!databaseBytes.includes(syntheticKey) && !databaseBytes.includes(`${syntheticKey}-rotated`));
-    const screenshotBytes = fs.readFileSync(screenshotPath, "utf8");
-    assert(!screenshotBytes.includes(syntheticKey) && !screenshotBytes.includes(`${syntheticKey}-rotated`));
+    assert(!databaseBytes.includes(syntheticKey) && !databaseBytes.includes(rotatedKey) && !databaseBytes.includes(legacyKey));
+    assert(fs.statSync(screenshotPath).size > 0);
     evidence.leakage = {
       page: true,
       storage: true,
@@ -161,12 +172,13 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
       database: true,
       screenshot: "provider-secrets.png",
       audit: true,
+      legacy_key_scanned: true,
       model_config_responses: responses.filter((response) => response.url().includes("/v1/model-config")).length,
     };
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "passed", checks: [
       "real browser creates encrypted Provider key without rendering plaintext",
       "refresh and API listing retain only configured state and short fingerprint",
-      "browser completes a real Provider connectivity test with a stable diagnostic",
+      "browser completes an authenticated Provider connectivity test with a stable diagnostic",
       "browser rotation creates a new version and deletion disables the Provider",
       "browser migrates a legacy env reference to local encrypted storage",
       "synthetic key and complete ciphertext are absent from page, storage, and model-config responses",

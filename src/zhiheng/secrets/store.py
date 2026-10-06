@@ -5,10 +5,13 @@ import json
 import os
 import secrets as pysecrets
 import sys
+import tempfile
 import threading
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import import_module
+from pathlib import Path
 from typing import Any, Protocol, cast
 
 from cryptography.exceptions import InvalidTag
@@ -131,7 +134,7 @@ class NativeKeyringMasterKeyBackend:
 
     def get_or_create_master_key(self, instance_id: str) -> bytes:
         try:
-            with self._creation_lock:
+            with self._creation_lock, _process_keyring_creation_lock(instance_id):
                 keyring_backend = self._platform_keyring()
                 value = keyring_backend.get_password(self.service_name, instance_id)
                 if value is not None:
@@ -166,6 +169,27 @@ class NativeKeyringMasterKeyBackend:
         except Exception as exc:  # pragma: no cover - exercised by controlled adapters.
             raise MasterKeyUnavailable("native keyring backend is unavailable") from exc
         raise MasterKeyUnavailable("native keyring backend is unsupported on this platform")
+
+
+@contextmanager
+def _process_keyring_creation_lock(instance_id: str) -> Iterator[None]:
+    """Serialize first-use keyring initialization across API/Worker processes."""
+    lock_name = f"zhiheng-provider-secret-{sha256_text(instance_id)[:32]}.lock"
+    lock_path = Path(tempfile.gettempdir()) / lock_name
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            import fcntl
+        except ImportError:  # pragma: no cover - Windows fallback.
+            yield
+        else:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
 
 
 class ProviderSecretStore:
@@ -398,7 +422,7 @@ class ProviderSecretStore:
         if secret_ref.startswith("env:"):
             try:
                 self._environment.resolve(secret_ref, provider_id=provider_id)
-            except (SecretUnavailable, KeyError):
+            except (SecretUnavailable, KeyError, ValueError):
                 return SecretStatus(
                     configured=True,
                     status="unavailable",

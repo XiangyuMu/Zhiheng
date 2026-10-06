@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_DIR="${ZHIHENG_ACCEPTANCE_OUTPUT:-${ROOT_DIR}/artifacts/browser-acceptance}"
+export ZHIHENG_ACCEPTANCE_OUTPUT="${OUTPUT_DIR}"
 PORT="${ZHIHENG_ACCEPTANCE_PORT:-8765}"
 RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/zhiheng-acceptance.XXXXXX")"
 DB_PATH="${RUN_DIR}/zhiheng.sqlite"

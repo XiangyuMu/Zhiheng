@@ -54,7 +54,7 @@ def probe_provider_connectivity(
         if any(token in detail for token in ("dns", "name or service", "nodename")):
             return "failed", "dns_error", "无法解析供应商地址"
         return "failed", "network_error", "无法连接到供应商地址"
-    except httpx.NetworkError:
+    except httpx.RequestError:
         return "failed", "network_error", "无法连接到供应商地址"
     if response.status_code in {401, 403}:
         return "failed", "authentication_failed", "认证失败，请检查服务器密钥引用"

@@ -204,7 +204,23 @@ def _verify_provider_secret_records(database: Path) -> None:
             "SELECT id, provider_id, secret_version, algorithm, nonce_b64, ciphertext_b64, "
             "aad_json FROM provider_secret_records"
         ).fetchall()
+        providers = {
+            str(provider_id): str(secret_ref)
+            for provider_id, secret_ref in connection.execute(
+                "SELECT id, secret_ref FROM model_provider_configs"
+            ).fetchall()
+            if isinstance(provider_id, str) and isinstance(secret_ref, str)
+        }
+        active_ids: set[str] = set()
+        record_ids = {str(row[0]) for row in rows}
+        for secret_ref in providers.values():
+            if secret_ref.startswith("local:") and secret_ref.removeprefix("local:") not in record_ids:
+                raise ValueError("restored provider secret reference is dangling")
         for secret_id, provider_id, version, algorithm, nonce, ciphertext, aad in rows:
+            if provider_id not in providers:
+                raise ValueError("restored provider secret references an unknown provider")
+            if providers[provider_id].startswith("local:") and providers[provider_id] != f"local:{secret_id}":
+                raise ValueError("restored provider secret reference is inconsistent")
             if not isinstance(version, int) or version < 1 or algorithm != "AES-256-GCM":
                 raise ValueError("restored provider secret metadata is invalid")
             try:
@@ -223,6 +239,14 @@ def _verify_provider_secret_records(database: Path) -> None:
                 "version": version,
             }:
                 raise ValueError("restored provider secret authenticated data is invalid")
+            status = connection.execute(
+                "SELECT status FROM provider_secret_records WHERE id = ?", (secret_id,)
+            ).fetchone()
+            if status is not None and status[0] == "active":
+                active_ids.add(str(secret_id))
+        for secret_id in active_ids:
+            if not any(secret_ref == f"local:{secret_id}" for secret_ref in providers.values()):
+                raise ValueError("restored active provider secret is orphaned")
     finally:
         connection.close()
 
