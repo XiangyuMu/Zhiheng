@@ -47,6 +47,7 @@ class SecretStatus:
     configured: bool
     status: str
     fingerprint: str | None = None
+    version: int | None = None
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,12 @@ class StoredProviderSecret:
     secret_ref: str
     fingerprint: str
     version: int
+
+
+@dataclass(frozen=True)
+class RevokedProviderSecret:
+    provider_id: str
+    revoked_versions: tuple[int, ...]
 
 
 @dataclass
@@ -186,9 +193,99 @@ class ProviderSecretStore:
         if not plaintext:
             raise ValueError("provider key must not be empty")
         instance_id = self._instance_id or _provider_secret_instance_id(session, create=True)
-        master_key = self._master_key_backend.get_or_create_master_key(instance_id)
+        return self._store_version(
+            session,
+            provider_id=provider_id,
+            secret=secret,
+            instance_id=instance_id,
+            version=1,
+        )
+
+    def rotate(
+        self,
+        session: Session,
+        *,
+        provider_id: str,
+        secret: SecretStr,
+    ) -> StoredProviderSecret:
+        """Store a new version and revoke every previous active version."""
+        plaintext = secret.get_secret_value()
+        if not plaintext:
+            raise ValueError("provider key must not be empty")
+        instance_id = self._instance_id or _provider_secret_instance_id(session, create=True)
+        current_version = session.execute(
+            text(
+                """
+                SELECT COALESCE(MAX(secret_version), 0)
+                FROM provider_secret_records
+                WHERE provider_id = :provider_id
+                """
+            ),
+            {"provider_id": provider_id},
+        ).scalar_one()
+        version = int(current_version) + 1
+        session.execute(
+            text(
+                """
+                UPDATE provider_secret_records
+                SET status = 'rotated', updated_at = CURRENT_TIMESTAMP
+                WHERE provider_id = :provider_id AND status = 'active'
+                """
+            ),
+            {"provider_id": provider_id},
+        )
+        return self._store_version(
+            session,
+            provider_id=provider_id,
+            secret=secret,
+            instance_id=instance_id,
+            version=version,
+        )
+
+    def revoke(self, session: Session, *, provider_id: str) -> RevokedProviderSecret:
+        """Revoke all local versions for a provider without exposing plaintext."""
+        rows = (
+            session.execute(
+                text(
+                    """
+                    SELECT secret_version
+                    FROM provider_secret_records
+                    WHERE provider_id = :provider_id AND status = 'active'
+                    ORDER BY secret_version
+                    """
+                ),
+                {"provider_id": provider_id},
+            )
+            .scalars()
+            .all()
+        )
+        session.execute(
+            text(
+                """
+                UPDATE provider_secret_records
+                SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
+                WHERE provider_id = :provider_id AND status = 'active'
+                """
+            ),
+            {"provider_id": provider_id},
+        )
+        return RevokedProviderSecret(
+            provider_id=provider_id,
+            revoked_versions=tuple(int(version) for version in rows),
+        )
+
+    def _store_version(
+        self,
+        session: Session,
+        *,
+        provider_id: str,
+        secret: SecretStr,
+        instance_id: str,
+        version: int,
+    ) -> StoredProviderSecret:
+        plaintext = secret.get_secret_value()
         secret_id = new_id()
-        version = 1
+        master_key = self._master_key_backend.get_or_create_master_key(instance_id)
         nonce = pysecrets.token_bytes(_NONCE_BYTES)
         aad = self._associated_data(
             secret_id=secret_id,
@@ -267,12 +364,23 @@ class ProviderSecretStore:
         if row is None or str(row["status"]) != "active":
             return SecretStatus(configured=True, status="unavailable")
         fingerprint = str(row["secret_fingerprint"]) if row["secret_fingerprint"] else None
+        version = int(row["secret_version"])
         try:
             instance_id = self._instance_id or _provider_secret_instance_id(session, create=False)
             self._decrypt_row(row, provider_id=provider_id, instance_id=instance_id)
         except SecretUnavailable:
-            return SecretStatus(configured=True, status="unavailable", fingerprint=fingerprint)
-        return SecretStatus(configured=True, status="configured", fingerprint=fingerprint)
+            return SecretStatus(
+                configured=True,
+                status="unavailable",
+                fingerprint=fingerprint,
+                version=version,
+            )
+        return SecretStatus(
+            configured=True,
+            status="configured",
+            fingerprint=fingerprint,
+            version=version,
+        )
 
     def _decrypt_row(self, row: Mapping[str, Any], *, provider_id: str, instance_id: str) -> str:
         owner_provider_id = str(row["provider_id"])

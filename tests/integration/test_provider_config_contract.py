@@ -576,6 +576,79 @@ def test_local_provider_secret_ref_is_bound_to_owning_provider(tmp_path: Path) -
         )
 
 
+def test_provider_key_rotation_revokes_old_version_and_delete_disables_provider(
+    tmp_path: Path,
+) -> None:
+    backend = InMemoryMasterKeyBackend()
+    store = ProviderSecretStore(master_key_backend=backend)
+    client = _empty_client(tmp_path, store)
+    csrf = _login(client)
+    first = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "rotation-create"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Rotation Provider",
+            "base_url": "https://models.example.test/v1",
+            "api_key": "sk-issue37-old",
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    assert first.status_code == 200
+    provider = first.json()
+    app: Any = client.app
+    with app.state.session_factory() as session:
+        old_ref = str(
+            session.execute(
+                text("SELECT secret_ref FROM model_provider_configs WHERE id=:id"),
+                {"id": provider["provider_id"]},
+            ).scalar_one()
+        )
+
+    rotated = client.patch(
+        f"/v1/model-config/providers/{provider['provider_id']}",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": provider["etag"],
+            "Idempotency-Key": "rotation-update",
+        },
+        json={"api_key": "sk-issue37-new"},
+    )
+    assert rotated.status_code == 200
+    rotated_body = rotated.json()
+    assert rotated_body["secret_version"] == 2
+    assert rotated_body["secret_fingerprint"] != provider["secret_fingerprint"]
+    with app.state.session_factory() as session:
+        old_row = session.execute(
+            text("SELECT status FROM provider_secret_records WHERE id=:id"),
+            {"id": old_ref.removeprefix("local:")},
+        ).scalar_one()
+        assert old_row == "rotated"
+    with pytest.raises(PermissionError):
+        store.resolve(old_ref, provider_id=provider["provider_id"])
+
+    deleted = client.delete(
+        f"/v1/model-config/providers/{provider['provider_id']}/secret",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": rotated_body["etag"],
+            "Idempotency-Key": "rotation-delete",
+        },
+    )
+    assert deleted.status_code == 200
+    deleted_body = deleted.json()
+    assert deleted_body["enabled"] is False
+    assert deleted_body["secret_status"] == "missing"
+    assert deleted_body["secret_configured"] is False
+    connectivity = client.post(
+        f"/v1/model-config/providers/{provider['provider_id']}/connectivity-test",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "rotation-connectivity"},
+    )
+    assert connectivity.status_code == 422
+    assert "sk-issue37" not in connectivity.text
+
+
 def test_provider_key_idempotency_and_validation_do_not_echo_secret(
     tmp_path: Path,
 ) -> None:

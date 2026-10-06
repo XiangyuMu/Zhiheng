@@ -273,7 +273,7 @@ def update_provider(
         if api_key is not None and api_key.get_secret_value():
             if secret_store is None:
                 raise RuntimeError("provider secret store is unavailable")
-            stored_secret = secret_store.store(
+            stored_secret = secret_store.rotate(
                 session,
                 provider_id=provider_id,
                 secret=api_key,
@@ -322,6 +322,46 @@ def update_provider(
     return _provider_response(updated, secret_store=secret_store, session=session)
 
 
+def delete_provider_secret(
+    session: Session,
+    provider_id: str,
+    if_match: str,
+    *,
+    secret_store: ProviderSecretStore | None = None,
+) -> dict[str, object]:
+    """Revoke local secret versions and disable the provider atomically."""
+    row = _provider_row(session, provider_id)
+    if row is None:
+        raise LookupError("provider not found")
+    if str(row["policy_revision"]) != if_match:
+        raise RuntimeError("provider configuration changed; refresh and retry")
+    secret_ref = row.get("secret_ref")
+    if secret_ref and str(secret_ref).startswith("local:"):
+        if secret_store is None:
+            raise RuntimeError("provider secret store is unavailable")
+        secret_store.revoke(session, provider_id=provider_id)
+    session.execute(
+        text(
+            """
+            UPDATE model_provider_configs
+            SET secret_ref = NULL,
+                enabled = 0,
+                policy_revision = :policy_revision,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :provider_id
+            """
+        ),
+        {
+            "provider_id": provider_id,
+            "policy_revision": f"{if_match}:secret-revoked",
+        },
+    )
+    updated = _provider_row(session, provider_id)
+    if updated is None:
+        raise RuntimeError("provider secret deletion was not persisted")
+    return _provider_response(updated, secret_store=secret_store, session=session)
+
+
 def connectivity_test(
     session: Session,
     provider_id: str,
@@ -334,12 +374,15 @@ def connectivity_test(
         raise LookupError("provider not found")
     if bool(row.get("archived", False)):
         raise ValueError("provider is archived")
+    if not bool(row.get("enabled", False)):
+        raise ValueError("provider is disabled")
     selected_model = model_id or _first_model(row)
     if not selected_model:
         raise ValueError("provider has no configured model")
     allowed = set(_models_from_row(row, "text") + _models_from_row(row, "multimodal"))
     if selected_model not in allowed:
         raise ValueError("model is not allowlisted for provider")
+    secret_status = _secret_status(row, secret_store=secret_store, session=session)
 
     from zhiheng.models.gateway import probe_model_provider_connectivity
 
@@ -382,11 +425,11 @@ def connectivity_test(
         text(
             """
             INSERT INTO model_connectivity_audits (
-              id, provider_id, model_id, status, diagnostic_code,
-              diagnostic_message, duration_ms
+                id, provider_id, model_id, status, diagnostic_code,
+                diagnostic_message, duration_ms, secret_version
             ) VALUES (
-              :id, :provider_id, :model_id, :status, :code,
-              :message, :duration_ms
+                :id, :provider_id, :model_id, :status, :code,
+                :message, :duration_ms, :secret_version
             )
             """
         ),
@@ -398,6 +441,7 @@ def connectivity_test(
             "code": code,
             "message": message,
             "duration_ms": duration_ms,
+            "secret_version": secret_status.version,
         },
     )
     return {
@@ -408,6 +452,7 @@ def connectivity_test(
         "diagnostic_code": code,
         "message": message,
         "duration_ms": duration_ms,
+        "secret_version": secret_status.version,
     }
 
 
@@ -444,7 +489,7 @@ def recent_audits(
             text(
                 f"""
                 SELECT id, provider_id, model_id, status, diagnostic_code,
-                       diagnostic_message, duration_ms, created_at
+                       diagnostic_message, duration_ms, secret_version, created_at
                 FROM model_connectivity_audits
                 WHERE {' AND '.join(clauses)}
                 ORDER BY created_at DESC, id DESC
@@ -469,6 +514,7 @@ def recent_audits(
                 str(row["diagnostic_message"]) if row["diagnostic_message"] is not None else None
             ),
             "duration_ms": row["duration_ms"],
+            "secret_version": row["secret_version"],
             "created_at": _iso_timestamp(row["created_at"]),
         }
         for row in rows
@@ -597,6 +643,7 @@ def _provider_response(
         "secret_configured": secret_status.configured,
         "secret_status": secret_status.status,
         "secret_fingerprint": secret_status.fingerprint,
+        "secret_version": secret_status.version,
         "health_status": str(row.get("health_status") or "unknown"),
         "health_checked_at": _iso_timestamp(row.get("health_checked_at")),
         "health_error": row.get("health_error"),
