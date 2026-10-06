@@ -674,6 +674,30 @@ def test_provider_key_rotation_revokes_old_version_and_delete_disables_provider(
             {"id": provider["provider_id"]},
         ).all()
     assert statuses == [(1, "revoked"), (2, "revoked"), (3, "revoked")]
+    with app.state.session_factory() as session:
+        lifecycle = session.execute(
+            text(
+                "SELECT diagnostic_code, status, secret_version, diagnostic_message "
+                "FROM model_connectivity_audits WHERE provider_id=:id "
+                "AND model_id='__secret_lifecycle__' ORDER BY created_at, id"
+            ),
+            {"id": provider["provider_id"]},
+        ).all()
+    assert sorted(row[0] for row in lifecycle) == [
+        "secret_revoked",
+        "secret_rotated",
+        "secret_rotated",
+    ]
+    assert sorted((row[0], row[1], row[2]) for row in lifecycle) == [
+        ("secret_revoked", "revoked", 3),
+        ("secret_rotated", "succeeded", 2),
+        ("secret_rotated", "succeeded", 3),
+    ]
+    assert all(
+        row[3] is None or len(str(row[3]).removeprefix("fingerprint:")) <= 12
+        for row in lifecycle
+    )
+    assert "sk-issue37" not in json.dumps([tuple(row) for row in lifecycle])
     connectivity = client.post(
         f"/v1/model-config/providers/{provider['provider_id']}/connectivity-test",
         headers={"X-CSRF-Token": csrf, "Idempotency-Key": "rotation-connectivity"},
@@ -860,6 +884,20 @@ def test_legacy_environment_secret_migrates_once_and_survives_environment_remova
     assert migrated_body["secret_version"] == 1
     assert "env:" not in migrated.text
     assert legacy_value not in migrated.text
+    app: Any = client.app
+    with app.state.session_factory() as session:
+        lifecycle = session.execute(
+            text(
+                "SELECT diagnostic_code, status, secret_version, diagnostic_message "
+                "FROM model_connectivity_audits WHERE provider_id=:id "
+                "AND model_id='__secret_lifecycle__'"
+            ),
+            {"id": provider["provider_id"]},
+        ).all()
+    assert [(row[0], row[1], row[2]) for row in lifecycle] == [
+        ("secret_migrated", "succeeded", 1)
+    ]
+    assert legacy_value not in json.dumps([tuple(row) for row in lifecycle])
     repeat = client.post(
         f"/v1/model-config/providers/{provider['provider_id']}/secret/migrate",
         headers={
@@ -871,7 +909,6 @@ def test_legacy_environment_secret_migrates_once_and_survives_environment_remova
     assert repeat.status_code == 200
     assert repeat.json()["secret_version"] == 1
     monkeypatch.delenv(legacy_name)
-    app: Any = client.app
     captured: dict[str, str] = {}
 
     def probe(
@@ -989,6 +1026,65 @@ def test_failed_legacy_secret_migration_preserves_environment_reference(
     refreshed = client.get("/v1/model-config/providers").json()[0]
     assert refreshed["secret_source"] == "legacy_env"
     assert refreshed["enabled"] is True
+
+
+def test_failed_legacy_migration_can_retry_with_same_etag_and_new_idempotency_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy_name = "ZHIHENG_PRIVATE_ISSUE38_RETRY"
+    monkeypatch.delenv(legacy_name, raising=False)
+    store = ProviderSecretStore(master_key_backend=InMemoryMasterKeyBackend())
+    client = _empty_client(tmp_path, store)
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "migration-retry-create"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Retry Provider",
+            "base_url": "https://models.example.test/v1",
+            "secret_ref": f"env:{legacy_name}",
+            "text_models": ["model-a"],
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200
+    provider = created.json()
+    failed = client.post(
+        f"/v1/model-config/providers/{provider['provider_id']}/secret/migrate",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": provider["etag"],
+            "Idempotency-Key": "migration-retry-failed",
+        },
+    )
+    assert failed.status_code == 422
+    after_failure = client.get("/v1/model-config/providers").json()[0]
+    assert after_failure["etag"] == provider["etag"]
+    assert after_failure["secret_source"] == "legacy_env"
+    monkeypatch.setenv(legacy_name, "sk-issue38-retry")
+    retried = client.post(
+        f"/v1/model-config/providers/{provider['provider_id']}/secret/migrate",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": after_failure["etag"],
+            "Idempotency-Key": "migration-retry-success",
+        },
+    )
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["secret_source"] == "local"
+    assert retried.json()["secret_version"] == 1
+    assert "sk-issue38-retry" not in retried.text
+    app: Any = client.app
+    with app.state.session_factory() as session:
+        versions = session.execute(
+            text(
+                "SELECT secret_version, status FROM provider_secret_records "
+                "WHERE provider_id=:id"
+            ),
+            {"id": provider["provider_id"]},
+        ).all()
+    assert versions == [(1, "active")]
 
 
 def test_provider_key_idempotency_and_validation_do_not_echo_secret(

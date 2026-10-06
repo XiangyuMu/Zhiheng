@@ -556,8 +556,6 @@ def create_app(
                 if_match,
                 secret_store=app.state.provider_secret_store,
             )
-        except KeyError as exc:
-            raise HTTPException(status_code=422, detail="provider secret migration failed") from exc
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuntimeError as exc:

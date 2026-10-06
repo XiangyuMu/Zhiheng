@@ -293,6 +293,11 @@ def update_provider(
                 secret=api_key,
             )
             secret_ref = stored_secret.secret_ref
+            rotated_secret = stored_secret
+        else:
+            rotated_secret = None
+    else:
+        rotated_secret = None
     revision = f"{current_revision}:updated"
     updated_result = cast(CursorResult[Any], session.execute(
         text(
@@ -333,6 +338,15 @@ def update_provider(
     ))
     if updated_result.rowcount != 1:
         raise RuntimeError("provider configuration changed; refresh and retry")
+    if rotated_secret is not None:
+        _record_secret_lifecycle_audit(
+            session,
+            provider_id=provider_id,
+            action="rotated",
+            status="succeeded",
+            secret_version=rotated_secret.version,
+            fingerprint=rotated_secret.fingerprint,
+        )
     updated = _provider_row(session, provider_id)
     if updated is None:
         raise RuntimeError("provider update was not persisted")
@@ -365,6 +379,11 @@ def delete_provider_secret(
     if reserved.rowcount != 1:
         raise RuntimeError("provider configuration changed; refresh and retry")
     secret_ref = row.get("secret_ref")
+    prior_status = (
+        secret_store.status(session, secret_ref=secret_ref, provider_id=provider_id)
+        if secret_store is not None
+        else None
+    )
     if secret_store is not None:
         secret_store.revoke(session, provider_id=provider_id)
     elif secret_ref and str(secret_ref).startswith("local:"):
@@ -387,6 +406,14 @@ def delete_provider_secret(
     ))
     if updated_result.rowcount != 1:
         raise RuntimeError("provider configuration changed; refresh and retry")
+    _record_secret_lifecycle_audit(
+        session,
+        provider_id=provider_id,
+        action="revoked",
+        status="revoked",
+        secret_version=prior_status.version if prior_status is not None else None,
+        fingerprint=prior_status.fingerprint if prior_status is not None else None,
+    )
     updated = _provider_row(session, provider_id)
     if updated is None:
         raise RuntimeError("provider secret deletion was not persisted")
@@ -455,10 +482,59 @@ def migrate_provider_secret(
     ))
     if updated_result.rowcount != 1:
         raise RuntimeError("provider configuration changed; refresh and retry")
+    _record_secret_lifecycle_audit(
+        session,
+        provider_id=provider_id,
+        action="migrated",
+        status="succeeded",
+        secret_version=stored.version,
+        fingerprint=stored.fingerprint,
+    )
     updated = _provider_row(session, provider_id)
     if updated is None:
         raise RuntimeError("provider secret migration was not persisted")
     return _provider_response(updated, secret_store=secret_store, session=session)
+
+
+def _record_secret_lifecycle_audit(
+    session: Session,
+    *,
+    provider_id: str,
+    action: str,
+    status: str,
+    secret_version: int | None,
+    fingerprint: str | None,
+) -> None:
+    """Record a non-sensitive Provider secret lifecycle event.
+
+    Lifecycle records deliberately use a synthetic model id and only retain a
+    short fingerprint.  They must never contain a secret reference,
+    ciphertext, or plaintext key.
+    """
+    safe_fingerprint = fingerprint[:12] if fingerprint else None
+    message = f"fingerprint:{safe_fingerprint}" if safe_fingerprint else None
+    session.execute(
+        text(
+            """
+            INSERT INTO model_connectivity_audits (
+                id, provider_id, model_id, status, diagnostic_code,
+                diagnostic_message, duration_ms, secret_version
+            ) VALUES (
+                :id, :provider_id, :model_id, :status, :diagnostic_code,
+                :diagnostic_message, NULL, :secret_version
+            )
+            """
+        ),
+        {
+            "id": new_id(),
+            "provider_id": provider_id,
+            "model_id": "__secret_lifecycle__",
+            "status": status,
+            "diagnostic_code": f"secret_{action}",
+            "diagnostic_message": message,
+            "secret_version": secret_version,
+        },
+    )
 
 
 def connectivity_test(
