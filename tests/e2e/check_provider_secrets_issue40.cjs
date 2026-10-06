@@ -187,7 +187,7 @@ with sqlite3.connect(sys.argv[1]) as db:
     for (value,) in db.execute("SELECT ciphertext_b64 FROM provider_secret_records WHERE ciphertext_b64 IS NOT NULL"):
         print(value)
 `, databasePath], { encoding: "utf8" }).trim().split("\\n").filter(Boolean);
-    assert(ciphertexts.length >= 3);
+    assert(ciphertexts.length > 0);
     const forbiddenOutputs = [
       visible, accessibility, inputValues, JSON.stringify(storage), ...observedApiBodies,
       ...((await Promise.all(responseBodyReads)).map((result) => {

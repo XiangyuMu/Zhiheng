@@ -120,7 +120,15 @@ with sqlite3.connect(sys.argv[1]) as db:
         return;
       }
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ choices: [{ message: { content: "restored provider answer" } }] }));
+      response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+        answer: "restored provider answer",
+        claims: [],
+        conflicts: [],
+        assumptions: [],
+        insufficiencies: [],
+        output_tokens: 3,
+        personalization_refs: [],
+      }) } }] }));
       return;
     }
     response.writeHead(404);
