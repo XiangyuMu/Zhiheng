@@ -1,6 +1,7 @@
 /* Issue #40: browser acceptance for encrypted Provider secret lifecycle. */
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const http = require("node:http");
 const path = require("node:path");
 const { chromium } = require("playwright");
 
@@ -14,6 +15,18 @@ const syntheticKey = "sk-issue40-browser-synthetic-key";
 const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
 
 (async () => {
+  const providerServer = http.createServer((request, response) => {
+    if (request.url === "/api/tags") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ models: [{ name: "model-a" }] }));
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise((resolve) => providerServer.listen(0, "127.0.0.1", resolve));
+  const providerPort = providerServer.address().port;
+  const providerUrl = `http://127.0.0.1:${providerPort}`;
   const browser = await chromium.launch({ headless: true, channel: "chromium" });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
   const page = await context.newPage();
@@ -52,7 +65,8 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     await page.locator("#model-provider-form").waitFor({ state: "hidden" });
     await page.getByRole("button", { name: "新增 Provider", exact: true }).click();
     await page.locator("#provider-name").fill("Issue 40 Browser Provider");
-    await page.locator("#provider-base-url").fill("https://models.example.test/v1");
+    await page.locator("#provider-kind").selectOption("ollama");
+    await page.locator("#provider-base-url").fill(providerUrl);
     await page.locator("#provider-api-key").fill(syntheticKey);
     await page.locator("#provider-text-models").fill("model-a");
     await page.locator("#provider-enabled").check();
@@ -96,8 +110,8 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     evidence.deletion = { enabled: deleted.enabled, secret_status: deleted.secret_status };
 
     const legacy = await api("/v1/model-config/providers", { method: "POST", body: {
-      provider_kind: "openai-compatible", display_name: "Issue 40 Legacy Provider",
-      base_url: "https://models.example.test/v1", secret_ref: legacyRef,
+      provider_kind: "ollama", display_name: "Issue 40 Legacy Provider",
+      base_url: providerUrl, secret_ref: legacyRef,
       text_models: ["model-a"], enabled: true,
     }});
     await page.reload();
@@ -108,6 +122,8 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     assert.equal(migrated.secret_source, "local");
     assert.equal(migrated.secret_version, 1);
     assert(!JSON.stringify(migrated).includes(legacyRef));
+    const migratedConnectivity = await api(`/v1/model-config/providers/${migrated.provider_id}/connectivity-test`, { method: "POST" });
+    assert.equal(migratedConnectivity.status, "succeeded");
     evidence.migration = { provider_id: migrated.provider_id, secret_source: migrated.secret_source, secret_version: migrated.secret_version };
     const audit = await api(`/v1/model-config/audits?provider_id=${migrated.provider_id}`);
     assert(!JSON.stringify(audit).includes(syntheticKey));
@@ -158,5 +174,5 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
   } catch (error) {
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "failed", error: error.stack || String(error), evidence, browserErrors: errors }, null, 2));
     throw error;
-  } finally { await context.close(); await browser.close(); }
+  } finally { await context.close(); await browser.close(); await new Promise((resolve) => providerServer.close(resolve)); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
