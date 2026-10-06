@@ -102,6 +102,57 @@ def test_native_keyring_rejects_symlinked_lock_directory(
         NativeKeyringMasterKeyBackend().get_or_create_master_key("instance-a")
 
 
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_native_keyring_allows_private_lock_below_standard_user_directories(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform: str
+) -> None:
+    monkeypatch.setattr("zhiheng.secrets.store.sys.platform", platform)
+    monkeypatch.setattr("zhiheng.secrets.store.Path.home", classmethod(lambda cls: tmp_path))
+    parent = (
+        tmp_path / ".local" / "state"
+        if platform == "linux"
+        else tmp_path / "Library" / "Application Support"
+    )
+    parent.mkdir(parents=True)
+    for directory in [tmp_path, *parent.parents]:
+        if directory.is_relative_to(tmp_path):
+            directory.chmod(0o755)
+    keyring = _FakeKeyring()
+    _FakeKeyring.values = {}
+    monkeypatch.setattr(
+        "zhiheng.secrets.store.import_module",
+        lambda name: SimpleNamespace(Keyring=lambda: keyring),
+    )
+
+    key = NativeKeyringMasterKeyBackend().get_or_create_master_key("instance-a")
+
+    assert len(key) == 32
+    lock_dir = (
+        tmp_path / ".local" / "state" / "zhiheng" / "locks"
+        if platform == "linux"
+        else tmp_path / "Library" / "Application Support" / "Zhiheng" / "locks"
+    )
+    assert (lock_dir.stat().st_mode & 0o077) == 0
+
+
+def test_native_keyring_rejects_group_writable_parent_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("zhiheng.secrets.store.sys.platform", "linux")
+    monkeypatch.setattr("zhiheng.secrets.store.Path.home", classmethod(lambda cls: tmp_path))
+    parent = tmp_path / ".local"
+    parent.mkdir()
+    parent.chmod(0o775)
+    keyring = _FakeKeyring()
+    monkeypatch.setattr(
+        "zhiheng.secrets.store.import_module",
+        lambda name: SimpleNamespace(Keyring=lambda: keyring),
+    )
+
+    with pytest.raises(MasterKeyUnavailable, match="lock directory is insecure"):
+        NativeKeyringMasterKeyBackend().get_or_create_master_key("instance-a")
+
+
 def test_native_keyring_rejects_foreign_lock_directory_owner(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

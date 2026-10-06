@@ -235,7 +235,17 @@ def _ensure_secure_lock_directory(path: Path) -> None:
             entry_stat = current.lstat()
         except OSError as exc:
             raise MasterKeyUnavailable("native keyring lock directory is unavailable") from exc
-        if not _is_secure_directory(entry_stat):
+        # Existing home subdirectories such as ~/.local and ~/Library are
+        # commonly 0755.  They are safe when owned by the current user and
+        # not writable by group/other; only the lock directory itself must be
+        # private so another local user cannot inspect or replace its lock.
+        is_leaf = current == path
+        directory_is_safe = (
+            _is_secure_directory(entry_stat)
+            if is_leaf
+            else _is_safe_parent_directory(entry_stat)
+        )
+        if not directory_is_safe:
             raise MasterKeyUnavailable("native keyring lock directory is insecure")
 
 
@@ -249,6 +259,14 @@ def _is_secure_directory(entry_stat: os.stat_result) -> bool:
         _current_user_id() == entry_stat.st_uid
         and stat.S_ISDIR(entry_stat.st_mode)
         and (entry_stat.st_mode & 0o077) == 0
+    )
+
+
+def _is_safe_parent_directory(entry_stat: os.stat_result) -> bool:
+    return (
+        _current_user_id() == entry_stat.st_uid
+        and stat.S_ISDIR(entry_stat.st_mode)
+        and (entry_stat.st_mode & 0o022) == 0
     )
 
 
