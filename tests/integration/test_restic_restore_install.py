@@ -13,11 +13,14 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from scripts import restore_restic
+from zhiheng.api.main import create_app
 from zhiheng.backup import BackupArtifact
 from zhiheng.core.config import Settings
 from zhiheng.db.maintenance import acquire_database_lock
@@ -27,6 +30,7 @@ from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextE
 from zhiheng.knowledge.object_store import LocalKnowledgeObjectStore, StoredTextArtifacts
 from zhiheng.privacy.erase_journal import ExternalEraseJournal
 from zhiheng.retrieval.repository import CitationContextRepository, LexicalRetriever
+from zhiheng.secrets import InMemoryMasterKeyBackend, ProviderSecretStore
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTIC_PASSWORD = "synthetic-restic-restore-password"
@@ -93,7 +97,12 @@ def _ingest(session: Session, artifacts: StoredTextArtifacts) -> str:
     return str(ingested.knowledge_object_id)
 
 
-def _make_backup(tmp_path: Path, binary: str) -> tuple[Path, str, str]:
+def _make_backup(
+    tmp_path: Path,
+    binary: str,
+    *,
+    provider_secret_store: ProviderSecretStore | None = None,
+) -> tuple[Path, str, str]:
     source_db = tmp_path / "source.db"
     source_objects = tmp_path / "source-objects"
     session_factory = _session_factory(source_db)
@@ -104,6 +113,33 @@ def _make_backup(tmp_path: Path, binary: str) -> tuple[Path, str, str]:
         # snapshot is taken, so restored search observes the normal serving
         # qualification contract.
         mark_formal_knowledge_indexed(session, knowledge_object_id)
+        if provider_secret_store is not None:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO model_provider_configs (
+                      id, provider_kind, display_name, enabled, policy_json, secret_ref,
+                      model_allowlist_json, endpoint_url, endpoint_origin, policy_revision
+                    ) VALUES (
+                      'provider-restic', 'openai-compatible', 'Restic Provider', 1, '{}',
+                      NULL, '[\"model-a\"]', 'https://models.example.test/v1',
+                      'https://models.example.test', 'rev-1'
+                    )
+                    """
+                )
+            )
+            stored = provider_secret_store.store(
+                session,
+                provider_id="provider-restic",
+                secret=SecretStr("sk-restic-provider-secret"),
+            )
+            session.execute(
+                text(
+                    "UPDATE model_provider_configs SET secret_ref=:secret_ref "
+                    "WHERE id='provider-restic'"
+                ),
+                {"secret_ref": stored.secret_ref},
+            )
     engine = session_factory.kw["bind"]
     assert isinstance(engine, Engine)
     engine.dispose()
@@ -229,6 +265,94 @@ def test_restic_restore_installs_clean_bundle_into_new_target(tmp_path: Path) ->
     assert len(object_paths) == 3
     assert all(path.is_relative_to(target_objects) for path in object_paths)
     assert all(path.read_bytes() == RESTORE_TEXT.encode() for path in object_paths)
+
+
+def test_restic_restore_preserves_provider_ciphertext_and_supports_reentry(
+    tmp_path: Path,
+) -> None:
+    binary = _restic_binary()
+    master_keys = InMemoryMasterKeyBackend()
+    source_store = ProviderSecretStore(master_key_backend=master_keys)
+    repository, snapshot_id, _ = _make_backup(
+        tmp_path,
+        binary,
+        provider_secret_store=source_store,
+    )
+    target_db = tmp_path / "target" / "zhiheng.db"
+    target_objects = tmp_path / "target" / "objects"
+    journal_path = tmp_path / "target" / "erase-journal.jsonl"
+    _empty_journal(journal_path)
+
+    result = _run_restore(
+        _restore_env(repository, binary, snapshot_id, target_db, target_objects, journal_path)
+    )
+    recovery = json.loads(result.stdout)["provider_secret_recovery"]
+    assert recovery["encrypted_records_in_database"] is True
+    with sqlite3.connect(target_db) as connection:
+        row = connection.execute(
+            "SELECT secret_version, algorithm, nonce_b64, ciphertext_b64, aad_json "
+            "FROM provider_secret_records WHERE provider_id='provider-restic'"
+        ).fetchone()
+    assert row is not None
+    assert row[0] == 1
+    assert row[1] == "AES-256-GCM"
+    assert all(isinstance(value, str) and value for value in row[2:])
+
+    settings = Settings(environment="test", database_url=f"sqlite:///{target_db}")
+    available = TestClient(
+        create_app(
+            settings,
+            secret_store=ProviderSecretStore(master_key_backend=master_keys),
+        )
+    )
+    bootstrap = available.post(
+        "/auth/bootstrap",
+        json={"username": "restore-owner", "password": "restore-owner-password"},
+    )
+    assert bootstrap.status_code == 200
+    providers = available.get("/v1/model-config/providers")
+    assert providers.status_code == 200
+    assert providers.json()[0]["secret_status"] == "configured"
+
+    unavailable = TestClient(
+        create_app(
+            settings,
+            secret_store=ProviderSecretStore(
+                master_key_backend=InMemoryMasterKeyBackend(available=False)
+            ),
+        )
+    )
+    login_unavailable = unavailable.post(
+        "/auth/login",
+        json={"username": "restore-owner", "password": "restore-owner-password"},
+    )
+    assert login_unavailable.status_code == 200
+    unavailable_listing = unavailable.get("/v1/model-config/providers")
+    assert unavailable_listing.status_code == 200
+    assert unavailable_listing.json()[0]["secret_status"] == "unavailable"
+
+    reentry_backend = InMemoryMasterKeyBackend()
+    reentry = TestClient(
+        create_app(settings, secret_store=ProviderSecretStore(master_key_backend=reentry_backend))
+    )
+    login_reentry = reentry.post(
+        "/auth/login",
+        json={"username": "restore-owner", "password": "restore-owner-password"},
+    )
+    assert login_reentry.status_code == 200
+    csrf = login_reentry.json()["csrf_token"]
+    current = reentry.get("/v1/model-config/providers").json()[0]
+    replaced = reentry.patch(
+        "/v1/model-config/providers/provider-restic",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": current["etag"],
+            "Idempotency-Key": "restic-provider-reentry",
+        },
+        json={"api_key": "sk-restic-reentered-secret"},
+    )
+    assert replaced.status_code == 200, replaced.text
+    assert replaced.json()["secret_status"] == "configured"
 
 
 def test_restic_restore_supports_real_search_and_original_source_resolution(
