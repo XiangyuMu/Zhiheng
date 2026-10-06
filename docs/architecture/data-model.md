@@ -90,3 +90,11 @@ Candidate memory rows cannot be referenced by `memory_current_state`. A database
 - `serving_strategy_releases`: stable releases plus explicitly enabled canary releases.
 
 These views are the final authorization boundary for retrieval, answer generation and recommendations.
+
+Provider audit records carry an explicit `audit_kind`: `connectivity` or
+`secret_lifecycle`. Connectivity queries (`/v1/model-config/audits`) exclude
+lifecycle events. Authenticated `/v1/model-config/secret-audits` returns
+rotation, revocation and migration history with `model_id: null`, version,
+status, time and a short fingerprint only. Model identifiers never determine
+an event's kind; real models may use any otherwise permitted identifier.
+Migration 0041 preserves previously recorded lifecycle history.

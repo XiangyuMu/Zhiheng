@@ -679,7 +679,7 @@ def test_provider_key_rotation_revokes_old_version_and_delete_disables_provider(
             text(
                 "SELECT diagnostic_code, status, secret_version, diagnostic_message "
                 "FROM model_connectivity_audits WHERE provider_id=:id "
-                "AND model_id='__secret_lifecycle__' ORDER BY created_at, id"
+                "AND audit_kind='secret_lifecycle' ORDER BY created_at, id"
             ),
             {"id": provider["provider_id"]},
         ).all()
@@ -698,6 +698,17 @@ def test_provider_key_rotation_revokes_old_version_and_delete_disables_provider(
         for row in lifecycle
     )
     assert "sk-issue37" not in json.dumps([tuple(row) for row in lifecycle])
+    events = client.get(
+        f"/v1/model-config/secret-audits?provider_id={provider['provider_id']}"
+    )
+    assert events.status_code == 200
+    assert events.headers["cache-control"] == "no-store"
+    assert len(events.json()) == 3
+    assert all(event["model_id"] is None for event in events.json())
+    assert all(event["audit_kind"] == "secret_lifecycle" for event in events.json())
+    assert client.get(
+        f"/v1/model-config/audits?provider_id={provider['provider_id']}"
+    ).json() == []
     connectivity = client.post(
         f"/v1/model-config/providers/{provider['provider_id']}/connectivity-test",
         headers={"X-CSRF-Token": csrf, "Idempotency-Key": "rotation-connectivity"},
@@ -890,7 +901,7 @@ def test_legacy_environment_secret_migrates_once_and_survives_environment_remova
             text(
                 "SELECT diagnostic_code, status, secret_version, diagnostic_message "
                 "FROM model_connectivity_audits WHERE provider_id=:id "
-                "AND model_id='__secret_lifecycle__'"
+                "AND audit_kind='secret_lifecycle'"
             ),
             {"id": provider["provider_id"]},
         ).all()
@@ -1507,3 +1518,38 @@ def test_connectivity_failure_marks_unhealthy_and_records_secret_free_audit(
     assert audit_body[0]["diagnostic_code"] == "network_error"
     assert "secret_ref" not in json.dumps(audit_body)
     assert "ZHIHENG_PRIVATE_TEST_SECRET" not in json.dumps(audit_body)
+
+
+def test_audit_kind_upgrade_preserves_history_without_model_id_collision(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    csrf = _login(client)
+    assert csrf
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{tmp_path / 'zhiheng.db'}")
+    command.downgrade(config, "0040_provider_secret_rotation")
+    app: Any = client.app
+    with session_scope(app.state.session_factory) as session:
+        for identifier, code, duration in (
+            ("old-lifecycle", "secret_rotated", None),
+            ("real-model", "ok", 5),
+        ):
+            session.execute(
+                text(
+                    "INSERT INTO model_connectivity_audits "
+                    "(id, provider_id, model_id, status, diagnostic_code, duration_ms) "
+                    "VALUES (:id, 'provider-test', '__secret_lifecycle__', "
+                    "'succeeded', :code, :duration)"
+                ),
+                {"id": identifier, "code": code, "duration": duration},
+            )
+    command.upgrade(config, "head")
+    command.upgrade(config, "head")
+    connectivity = client.get("/v1/model-config/audits").json()
+    lifecycle = client.get("/v1/model-config/secret-audits").json()
+    assert [(row["id"], row["model_id"]) for row in connectivity] == [
+        ("real-model", "__secret_lifecycle__")
+    ]
+    assert [(row["id"], row["model_id"]) for row in lifecycle] == [("old-lifecycle", None)]
+    command.downgrade(config, "0040_provider_secret_rotation")
+    command.upgrade(config, "head")
+    assert client.get("/v1/model-config/secret-audits").json() == lifecycle

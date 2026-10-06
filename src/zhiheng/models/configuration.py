@@ -507,8 +507,8 @@ def _record_secret_lifecycle_audit(
 ) -> None:
     """Record a non-sensitive Provider secret lifecycle event.
 
-    Lifecycle records deliberately use a synthetic model id and only retain a
-    short fingerprint.  They must never contain a secret reference,
+    Lifecycle records have an explicit kind and only retain a
+    short fingerprint. They must never contain a secret reference,
     ciphertext, or plaintext key.
     """
     safe_fingerprint = fingerprint[:12] if fingerprint else None
@@ -518,17 +518,17 @@ def _record_secret_lifecycle_audit(
             """
             INSERT INTO model_connectivity_audits (
                 id, provider_id, model_id, status, diagnostic_code,
-                diagnostic_message, duration_ms, secret_version
+                diagnostic_message, duration_ms, secret_version, audit_kind
             ) VALUES (
                 :id, :provider_id, :model_id, :status, :diagnostic_code,
-                :diagnostic_message, NULL, :secret_version
+                :diagnostic_message, NULL, :secret_version, 'secret_lifecycle'
             )
             """
         ),
         {
             "id": new_id(),
             "provider_id": provider_id,
-            "model_id": "__secret_lifecycle__",
+            "model_id": "",
             "status": status,
             "diagnostic_code": f"secret_{action}",
             "diagnostic_message": message,
@@ -637,9 +637,13 @@ def recent_audits(
     status: str | None = None,
     since: str | None = None,
     until: str | None = None,
+    audit_kind: str = "connectivity",
 ) -> list[dict[str, object]]:
-    clauses = ["1 = 1"]
+    if audit_kind not in {"connectivity", "secret_lifecycle"}:
+        raise ValueError("unsupported audit kind")
+    clauses = ["audit_kind = :audit_kind"]
     params: dict[str, object] = {"limit": max(1, min(limit, 200)), "offset": max(offset, 0)}
+    params["audit_kind"] = audit_kind
     if provider_id:
         clauses.append("provider_id = :provider_id")
         params["provider_id"] = provider_id
@@ -659,7 +663,7 @@ def recent_audits(
         session.execute(
             text(
                 f"""
-                SELECT id, provider_id, model_id, status, diagnostic_code,
+                SELECT id, provider_id, model_id, audit_kind, status, diagnostic_code,
                        diagnostic_message, duration_ms, secret_version, created_at
                 FROM model_connectivity_audits
                 WHERE {' AND '.join(clauses)}
@@ -676,7 +680,8 @@ def recent_audits(
         {
             "id": str(row["id"]),
             "provider_id": str(row["provider_id"]),
-            "model_id": str(row["model_id"]),
+            "model_id": str(row["model_id"]) if row["audit_kind"] == "connectivity" else None,
+            "audit_kind": str(row["audit_kind"]),
             "status": str(row["status"]),
             "diagnostic_code": (
                 str(row["diagnostic_code"]) if row["diagnostic_code"] is not None else None

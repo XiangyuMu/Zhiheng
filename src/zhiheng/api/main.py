@@ -797,6 +797,22 @@ def create_app(
             until=until,
         )
 
+    @app.get("/v1/model-config/secret-audits", tags=["models"])
+    def model_secret_audits(
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        limit: int = 50,
+        offset: int = 0,
+        provider_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        _require_session(session, session_service, session_token)
+        response.headers["Cache-Control"] = "no-store"
+        return recent_audits(
+            session, limit=limit, offset=offset, provider_id=provider_id,
+            audit_kind="secret_lifecycle",
+        )
+
     @app.put("/v1/model-config", tags=["models"])
     def model_config_update(
         payload: ModelConfigUpdate,
