@@ -69,6 +69,8 @@ fs.mkdirSync(output, { recursive: true });
     await page.getByText("Provider 配置已保存").waitFor();
 
     const card = page.locator("li.provider-card").filter({ hasText: "Issue 47 Browser Ollama" });
+    await card.getByRole("button", { name: "刷新目录", exact: true }).click();
+    await page.getByText(/目录刷新失败：/).waitFor();
     await card.getByPlaceholder("手动添加模型 ID").fill("issue47-chat");
     await card.getByRole("button", { name: "添加模型", exact: true }).click();
     await page.getByText("模型 issue47-chat 已添加").waitFor();
@@ -84,6 +86,22 @@ fs.mkdirSync(output, { recursive: true });
     const defaultsResult = await defaultsResponse;
     if (!defaultsResult.ok()) throw new Error(`default model update failed: ${defaultsResult.status()} ${await defaultsResult.text()} payload=${defaultPayload}`);
     await page.getByText("默认模型已更新").waitFor();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert(overflow <= 1, `settings page overflows narrow viewport by ${overflow}px`);
+    const refreshButton = card.getByRole("button", { name: "刷新目录", exact: true });
+    await refreshButton.focus();
+    assert.equal(await refreshButton.evaluate((element) => document.activeElement === element), true);
+    await page.reload();
+    const restoredCard = page.locator("li.provider-card").filter({ hasText: "Issue 47 Browser Ollama" });
+    await restoredCard.waitFor();
+    assert.equal(await restoredCard.getByRole("checkbox", { name: /Issue 47 Browser Ollama issue47-chat text 能力/ }).isChecked(), true);
+    await page.waitForFunction(() => document.querySelector("#default-text-model option:checked")?.textContent === "Issue 47 Browser Ollama / issue47-chat");
+    assert.equal(
+      await page.locator("#default-text-model option:checked").textContent(),
+      "Issue 47 Browser Ollama / issue47-chat",
+    );
 
     const text = await page.locator("body").innerText();
     assert(!text.includes("ciphertext_b64"));
