@@ -1408,6 +1408,38 @@ def test_defaults_are_read_from_persisted_route_and_stale_etag_is_rejected(
     assert stale.status_code == 412
 
 
+def test_defaults_explicit_null_clears_a_persisted_route(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    csrf = _login(client)
+    provider = client.get("/v1/model-config/providers").json()[0]
+    initial = client.get("/v1/model-config/status").json()["defaults"]
+
+    saved = client.put(
+        "/v1/model-config/defaults",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": initial["etag"],
+            "Idempotency-Key": "defaults-explicit-null-save",
+        },
+        json={"text": {"provider_id": provider["provider_id"], "model_id": "model-a"}},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["text"]["model_id"] == "model-a"
+
+    cleared = client.put(
+        "/v1/model-config/defaults",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": saved.json()["etag"],
+            "Idempotency-Key": "defaults-explicit-null-clear",
+        },
+        json={"text": None},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["text"] is None
+    assert client.get("/v1/model-config/status").json()["defaults"]["text"] is None
+
+
 def test_defaults_reject_incomplete_persisted_route(tmp_path: Path) -> None:
     client = _client(tmp_path)
     app: Any = client.app

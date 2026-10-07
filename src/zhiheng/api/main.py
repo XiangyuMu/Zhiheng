@@ -877,23 +877,27 @@ def create_app(
         current_embedding_route = current_defaults.get("embedding")
         text_route: dict[str, object] | None = (
             payload.text.model_dump()
+            if payload.text is not None
+            else None
             if "text" in payload.model_fields_set
-            and payload.text is not None
             else dict(current_text_route)
             if isinstance(current_text_route, dict)
             else None
         )
         multimodal_route: dict[str, object] | None = (
             payload.multimodal.model_dump()
+            if payload.multimodal is not None
+            else None
             if "multimodal" in payload.model_fields_set
-            and payload.multimodal is not None
             else dict(current_multimodal_route)
             if isinstance(current_multimodal_route, dict)
             else None
         )
         embedding_route: dict[str, object] | None = (
             payload.embedding.model_dump()
-            if "embedding" in payload.model_fields_set and payload.embedding is not None
+            if payload.embedding is not None
+            else None
+            if "embedding" in payload.model_fields_set
             else dict(current_embedding_route)
             if isinstance(current_embedding_route, dict)
             else None
