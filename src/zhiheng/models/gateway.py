@@ -272,6 +272,7 @@ class ModelGateway:
             )
             if row is None:
                 raise PermissionError("provider is not configured")
+            row = _attach_normalized_model(session, row, route.model_id)
             current = _route_from_provider_row(row, route.model_id, self._settings)
             if current != route or current.secret_ref != route.secret_ref:
                 raise PermissionError("provider credential changed before dispatch")
@@ -303,6 +304,8 @@ class ModelGateway:
                 .mappings()
                 .one_or_none()
             )
+            if row is not None:
+                row = _attach_normalized_model(session, row, request.model_id)
         if row is None:
             raise PermissionError("provider is not configured")
         return _route_from_provider_row(row, request.model_id, self._settings)
@@ -606,6 +609,7 @@ class ModelGateway:
             if row is None:
                 session.rollback()
                 raise PermissionError("provider is not configured")
+            row = _attach_normalized_model(session, row, route.model_id)
             current_route = _route_from_provider_row(row, route.model_id, self._settings)
             self._validate_existing_approval(
                 session,
@@ -767,11 +771,19 @@ def _route_from_provider_row(row: Any, model_id: str, settings: Settings) -> _Pr
         raise PermissionError("provider is not enabled")
 
     policy = _json_object(row["policy_json"])
-    allowed_models = _json_list(row.get("model_allowlist_json"))
-    allowed_models.extend(_json_list(row.get("text_model_allowlist_json")))
-    allowed_models.extend(_json_list(row.get("multimodal_model_allowlist_json")))
-    if not allowed_models:
-        allowed_models = _json_list(policy.get("allowed_models"))
+    if "normalized_model_capabilities" in row:
+        capabilities = _json_list(row.get("normalized_model_capabilities"))
+        if not bool(row.get("normalized_model_enabled")) or bool(row.get("normalized_model_stale")):
+            raise PermissionError("model record is disabled or stale")
+        if not capabilities:
+            raise PermissionError("model capabilities are not confirmed")
+        allowed_models = [model_id]
+    else:
+        allowed_models = _json_list(row.get("model_allowlist_json"))
+        allowed_models.extend(_json_list(row.get("text_model_allowlist_json")))
+        allowed_models.extend(_json_list(row.get("multimodal_model_allowlist_json")))
+        if not allowed_models:
+            allowed_models = _json_list(policy.get("allowed_models"))
     allowed_models = list(dict.fromkeys(allowed_models))
     if model_id not in allowed_models:
         raise PermissionError("model is not allowlisted for provider")
@@ -819,6 +831,28 @@ def _route_from_provider_row(row: Any, model_id: str, settings: Settings) -> _Pr
         secret_ref=str(row["secret_ref"]) if row["secret_ref"] is not None else None,
         enabled=bool(row["enabled"]),
     )
+
+
+def _attach_normalized_model(session: Session, row: Any, model_id: str) -> Any:
+    """Attach normalized model authority before route validation and dispatch."""
+    values = dict(row)
+    record = (
+        session.execute(
+            text(
+                "SELECT confirmed_capabilities_json, enabled, stale "
+                "FROM model_provider_models WHERE provider_id=:provider_id AND model_id=:model_id"
+            ),
+            {"provider_id": row["id"], "model_id": model_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if record is None:
+        raise PermissionError("model is not allowlisted for provider")
+    values["normalized_model_capabilities"] = record["confirmed_capabilities_json"]
+    values["normalized_model_enabled"] = record["enabled"]
+    values["normalized_model_stale"] = record["stale"]
+    return values
 
 
 def _route_fingerprint(route: _ProviderRoute) -> str:

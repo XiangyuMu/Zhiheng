@@ -471,6 +471,7 @@ def create_app(
         session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
         csrf_header: str | None = Header(default=None, alias="X-CSRF-Token"),
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        if_match: str | None = Header(default=None, alias="If-Match"),
     ) -> dict[str, object]:
         operation_key = _require_model_mutation(
             request, session, session_service, session_token, csrf_header, idempotency_key
@@ -632,12 +633,15 @@ def create_app(
         session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
         csrf_header: str | None = Header(default=None, alias="X-CSRF-Token"),
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        if_match: str | None = Header(default=None, alias="If-Match"),
     ) -> dict[str, object]:
         operation_key = _require_model_mutation(
             request, session, session_service, session_token, csrf_header, idempotency_key
         )
+        if not if_match:
+            raise HTTPException(status_code=412, detail="missing If-Match")
         fingerprint = _model_config_fingerprint(
-            f"provider:model:patch:{provider_id}:{model_id}", payload.model_dump()
+            f"provider:model:patch:{provider_id}:{model_id}:{if_match}", payload.model_dump()
         )
         cached = _model_config_idempotent_result(app, operation_key, fingerprint)
         if cached is not None:
@@ -650,11 +654,15 @@ def create_app(
                 confirmed_capabilities=payload.confirmed_capabilities,
                 enabled=payload.enabled,
                 protocol=payload.protocol,
+                if_match=if_match,
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=412, detail=str(exc)) from exc
+        response.headers["ETag"] = str(result["etag"])
         response.headers["Cache-Control"] = "no-store"
         _remember_model_config_result(app, operation_key, fingerprint, result)
         return result

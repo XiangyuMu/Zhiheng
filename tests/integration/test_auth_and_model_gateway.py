@@ -81,6 +81,24 @@ def _insert_provider(
             "policy_revision": policy_revision,
         },
     )
+    session.execute(
+        text(
+            """
+            INSERT INTO model_provider_models (
+              id, provider_id, model_id, display_name, source, protocol,
+              suggested_capabilities_json, confirmed_capabilities_json, enabled, stale
+            ) VALUES (
+              :record_id, :provider_id, :model_id, :model_id, 'legacy',
+              'chat_completions', '[\"text\"]', '[\"text\"]', 1, 0
+            )
+            """
+        ),
+        {
+            "record_id": f"{provider_id}-model",
+            "provider_id": provider_id,
+            "model_id": model_id,
+        },
+    )
 
 
 def _insert_approval(

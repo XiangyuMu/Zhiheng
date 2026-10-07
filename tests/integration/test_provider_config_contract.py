@@ -396,8 +396,12 @@ def test_model_capability_confirmation_controls_embedding_default(tmp_path: Path
     assert denied.status_code == 422
     confirmed = client.patch(
         f"/v1/model-config/providers/{provider['provider_id']}/models/chat-model",
-        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "embedding-confirm"},
-        json={"confirmed_capabilities": ["text", "embedding"]},
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "embedding-confirm",
+            "If-Match": provider["etag"],
+        },
+        json={"confirmed_capabilities": ["embedding"], "protocol": "embeddings"},
     )
     assert confirmed.status_code == 200
     current = client.get("/v1/model-config/status").json()["defaults"]

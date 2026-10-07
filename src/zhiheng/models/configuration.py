@@ -791,7 +791,7 @@ def set_defaults(
             {"id": new_id(), **values},
         )
     else:
-        session.execute(
+        result = session.execute(
             text(
                 """
                 UPDATE model_route_defaults
@@ -803,11 +803,13 @@ def set_defaults(
                     embedding_model_id = :embedding_model_id,
                     etag = :etag,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id
+                WHERE id = :id AND etag = :if_match
                 """
             ),
-            {"id": current["id"], **values},
+            {"id": current["id"], "if_match": if_match, **values},
         )
+        if getattr(result, "rowcount", 0) != 1:
+            raise RuntimeError("model defaults changed; refresh and retry")
     return {
         "etag": next_etag,
         "text": _route_response(text_provider, text_model),
@@ -968,7 +970,7 @@ def refresh_provider_models(
                     "suggested_capabilities_json, confirmed_capabilities_json, "
                     "enabled, stale, last_seen_at) "
                     "VALUES (:id, :provider_id, :model_id, :display_name, 'discovered', :protocol, "
-                    "'[\"text\"]', '[\"text\"]', 1, 0, CURRENT_TIMESTAMP)"
+                    "'[\"text\"]', '[]', 1, 0, CURRENT_TIMESTAMP)"
                 ),
                 {
                     "id": new_id(),
@@ -1024,19 +1026,24 @@ def update_provider_model(
     confirmed_capabilities: list[str] | None = None,
     enabled: bool | None = None,
     protocol: str | None = None,
+    if_match: str | None = None,
 ) -> dict[str, object]:
     row = _provider_row(session, provider_id)
     if row is None:
         raise LookupError("provider not found")
-    current = session.execute(
+    if if_match is not None and str(row["policy_revision"]) != if_match:
+        raise RuntimeError("provider configuration changed; refresh and retry")
+    current_row = session.execute(
         text(
-            "SELECT confirmed_capabilities_json FROM model_provider_models "
+            "SELECT confirmed_capabilities_json, protocol FROM model_provider_models "
             "WHERE provider_id=:provider_id AND model_id=:model_id"
         ),
         {"provider_id": provider_id, "model_id": model_id},
-    ).scalar_one_or_none()
-    if current is None:
+    ).mappings().one_or_none()
+    if current_row is None:
         raise LookupError("model not found")
+    current = current_row["confirmed_capabilities_json"]
+    effective_protocol = (protocol or str(current_row["protocol"])).strip()
     capabilities = (
         _clean_models(confirmed_capabilities)
         if confirmed_capabilities is not None
@@ -1045,6 +1052,12 @@ def update_provider_model(
     allowed = {"text", "multimodal", "embedding"}
     if any(capability not in allowed for capability in capabilities):
         raise ValueError("unsupported model capability")
+    if "embedding" in capabilities and effective_protocol != "embeddings":
+        raise ValueError("embedding capability requires embeddings protocol")
+    if effective_protocol == "embeddings" and any(
+        capability != "embedding" for capability in capabilities
+    ):
+        raise ValueError("embeddings protocol only supports embedding capability")
     values: dict[str, object] = {
         "provider_id": provider_id,
         "model_id": model_id,
@@ -1057,8 +1070,17 @@ def update_provider_model(
     if protocol is not None:
         if not protocol.strip():
             raise ValueError("protocol must not be empty")
+        supported = {
+            "openai": {"responses", "chat_completions", "embeddings"},
+            "deepseek": {"responses", "chat_completions"},
+            "openai-compatible": {"chat_completions"},
+            "ollama": {"chat_completions"},
+        }
+        if protocol.strip() not in supported.get(str(row["provider_kind"]), set()):
+            raise ValueError("protocol is not supported by provider")
         updates.append("protocol=:protocol")
         values["protocol"] = protocol.strip()
+    revision = f"{row['policy_revision']}:updated"
     session.execute(
         text(
             "UPDATE model_provider_models SET "
@@ -1067,6 +1089,19 @@ def update_provider_model(
         ),
         values,
     )
+    revision_result = session.execute(
+        text(
+            "UPDATE model_provider_configs SET policy_revision=:policy_revision, "
+            "updated_at=CURRENT_TIMESTAMP WHERE id=:provider_id AND policy_revision=:if_match"
+        ),
+        {
+            "provider_id": provider_id,
+            "policy_revision": revision,
+            "if_match": if_match or row["policy_revision"],
+        },
+    )
+    if getattr(revision_result, "rowcount", 0) != 1:
+        raise RuntimeError("provider configuration changed; refresh and retry")
     updated = _provider_row(session, provider_id)
     if updated is None:
         raise RuntimeError("provider was not found after model update")
@@ -1322,9 +1357,18 @@ def _validate_route(
     if row is None or bool(row.get("archived", False)) or not bool(row["enabled"]):
         raise ValueError(f"{modality} route provider is unavailable")
     records = _model_records(session, provider_id)
-    models = _models_from_records(records, modality)
-    if model_id not in models:
+    matching = [record for record in records if record["model_id"] == model_id]
+    if not matching:
         raise ValueError(f"{modality} route model is not allowlisted")
+    model = matching[0]
+    confirmed = cast(list[object], model["confirmed_capabilities"])
+    if not model["enabled"] or model["stale"] or modality not in confirmed:
+        raise ValueError(f"{modality} route model is not allowlisted")
+    protocol = str(model["protocol"])
+    if modality == "embedding" and protocol != "embeddings":
+        raise ValueError("embedding route requires an embeddings protocol")
+    if modality in {"text", "multimodal"} and protocol == "embeddings":
+        raise ValueError(f"{modality} route cannot use an embeddings model")
 
 
 def _route_response(provider_id: str | None, model_id: str | None) -> dict[str, str] | None:
