@@ -392,13 +392,17 @@ const MINIMAL_PDF = Buffer.from(
       await page.locator("#question").fill("固定条件下复习有效");
       await page.locator("#answer-form button[type=submit]").click();
       await page.locator("#answer-result").waitFor({ state: "visible", timeout: 20000 });
-      await page.locator("#citations .source-card").filter({ hasText: conclusionTitle }).first().waitFor({ timeout: 20000 });
+      const conditionalCitation = page.locator("#citations .source-card")
+        .filter({ hasText: conclusionTitle })
+        .filter({ hasText: "如果在固定条件" })
+        .first();
+      await conditionalCitation.waitFor({ timeout: 20000 });
       const answerText = await page.locator("#answer").innerText();
       const citationText = await page.locator("#citations").innerText();
       assert((answerText.includes("如果") || citationText.includes("如果")) && (answerText.includes("固定条件") || citationText.includes("固定条件")));
       assert(!answerText.includes("已过期的复习结论"));
       assert(!citationText.includes("已过期的复习结论"));
-      await page.locator("#citations .source-card").filter({ hasText: conclusionTitle }).first().click();
+      await conditionalCitation.click();
       await page.locator("#citation-context-text").filter({ hasText: "如果在固定条件" }).waitFor();
       await page.keyboard.press("Escape");
       await shot("conditional-answer");
