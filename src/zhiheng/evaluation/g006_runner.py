@@ -582,6 +582,21 @@ class ProtectedFixedSuiteRunner:
                         """
                     )
                 )
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO model_provider_models (
+                          id, provider_id, model_id, display_name, source, protocol,
+                          suggested_capabilities_json, confirmed_capabilities_json,
+                          enabled, stale
+                        ) VALUES (
+                          'fixed-provider-model', 'fixed-provider', 'synthetic-model',
+                          'synthetic-model', 'legacy', 'chat_completions',
+                          '[\"text\"]', '[\"text\"]', 1, 0
+                        )
+                        """
+                    )
+                )
             gateway = ModelGateway._for_test(
                 settings=settings,
                 session_factory=factory,
