@@ -51,7 +51,7 @@ fs.mkdirSync(output, { recursive: true });
     await page.locator("#password").fill("issue17 workspace passphrase");
     await page.locator("#form button").click();
     await page.waitForURL("**/knowledge-agent**");
-    async function api(url, options = {}) {
+    async function apiResult(url, options = {}) {
       return page.evaluate(async ({ url, options }) => {
         const csrf = document.cookie.split(";").map((value) => value.trim())
           .find((value) => value.startsWith("zhiheng_csrf="))?.slice(13) || "";
@@ -68,9 +68,15 @@ fs.mkdirSync(output, { recursive: true });
           body: options.body === undefined ? undefined : JSON.stringify(options.body),
         });
         const body = await response.json();
-        if (!response.ok) throw new Error(`${response.status}: ${body.detail || JSON.stringify(body)}`);
-        return body;
+        return { status: response.status, ok: response.ok, body };
       }, { url, options });
+    }
+    async function api(url, options = {}) {
+      const result = await apiResult(url, options);
+      if (!result.ok) {
+        throw new Error(`${result.status}: ${result.body.detail || JSON.stringify(result.body)}`);
+      }
+      return result.body;
     }
     await page.goto(`${base}/knowledge-agent#settings`);
     await page.locator("#model-config-list").waitFor();
@@ -153,12 +159,13 @@ fs.mkdirSync(output, { recursive: true });
         enabled: true,
       },
     });
-    const deepSeekModel = await api(`/v1/model-config/providers/${deepSeek.provider_id}/models/issue46-deepseek-chat`, {
+    const deepSeekModel = await apiResult(`/v1/model-config/providers/${deepSeek.provider_id}/models/issue46-deepseek-chat`, {
       method: "PATCH",
       headers: { "If-Match": deepSeek.etag },
       body: { confirmed_capabilities: ["embedding"], protocol: "embeddings" },
-    }).catch((error) => ({ error: String(error) }));
-    assert.match(deepSeekModel.error || "", /422|embedding|protocol/i);
+    });
+    assert.equal(deepSeekModel.status, 422);
+    assert.match(JSON.stringify(deepSeekModel.body), /embedding|protocol/i);
 
     const unsupportedTitle = `Issue 46 unsupported ${Date.now()}`;
     await page.goto(`${base}/knowledge-agent#library`);
