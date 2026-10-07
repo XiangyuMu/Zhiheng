@@ -392,7 +392,7 @@ const MINIMAL_PDF = Buffer.from(
       await page.locator("#question").fill("固定条件下复习有效");
       await page.locator("#answer-form button[type=submit]").click();
       await page.locator("#answer-result").waitFor({ state: "visible", timeout: 20000 });
-      await page.locator("#citations .source-card").filter({ hasText: conclusionTitle }).waitFor({ timeout: 20000 });
+      await page.locator("#citations .source-card").filter({ hasText: conclusionTitle }).first().waitFor({ timeout: 20000 });
       const answerText = await page.locator("#answer").innerText();
       const citationText = await page.locator("#citations").innerText();
       assert((answerText.includes("如果") || citationText.includes("如果")) && (answerText.includes("固定条件") || citationText.includes("固定条件")));
