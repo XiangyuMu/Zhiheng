@@ -23,6 +23,15 @@ from zhiheng.secrets import ProviderSecretStore, SecretStatus
 ALLOWED_PROVIDER_KINDS = frozenset({"ollama", "openai", "deepseek", "openai-compatible"})
 
 
+def _supported_protocols(provider_kind: str) -> set[str]:
+    return {
+        "openai": {"responses", "chat_completions", "embeddings"},
+        "deepseek": {"responses", "chat_completions"},
+        "openai-compatible": {"chat_completions"},
+        "ollama": {"chat_completions"},
+    }.get(provider_kind, set())
+
+
 @dataclass(frozen=True)
 class ProviderInput:
     provider_kind: str
@@ -962,6 +971,8 @@ def add_provider_model(
     ).scalar_one_or_none()
     if existing is not None:
         raise ValueError("model already exists for provider")
+    if protocol.strip() not in _supported_protocols(str(row["provider_kind"])):
+        raise ValueError("protocol is not supported by provider")
     session.execute(
         text(
             "INSERT INTO model_provider_models "
@@ -969,7 +980,7 @@ def add_provider_model(
             "suggested_capabilities_json, confirmed_capabilities_json, "
             "enabled, stale, last_seen_at) "
             "VALUES (:id, :provider_id, :model_id, :display_name, 'manual', :protocol, "
-            "'[\"text\"]', '[\"text\"]', 1, 0, CURRENT_TIMESTAMP)"
+            "'[\"text\"]', '[]', 0, 0, CURRENT_TIMESTAMP)"
         ),
         {
             "id": new_id(),
@@ -1119,19 +1130,16 @@ def update_provider_model(
         "confirmed": json.dumps(capabilities),
     }
     updates = ["confirmed_capabilities_json=:confirmed", "updated_at=CURRENT_TIMESTAMP"]
+    if enabled is None and confirmed_capabilities is not None:
+        updates.append("enabled=:enabled")
+        values["enabled"] = bool(capabilities)
     if enabled is not None:
         updates.append("enabled=:enabled")
         values["enabled"] = enabled
     if protocol is not None:
         if not protocol.strip():
             raise ValueError("protocol must not be empty")
-        supported = {
-            "openai": {"responses", "chat_completions", "embeddings"},
-            "deepseek": {"responses", "chat_completions"},
-            "openai-compatible": {"chat_completions"},
-            "ollama": {"chat_completions"},
-        }
-        if protocol.strip() not in supported.get(str(row["provider_kind"]), set()):
+        if protocol.strip() not in _supported_protocols(str(row["provider_kind"])):
             raise ValueError("protocol is not supported by provider")
         updates.append("protocol=:protocol")
         values["protocol"] = protocol.strip()

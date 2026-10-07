@@ -19,8 +19,10 @@ from zhiheng.core.config import Settings
 from zhiheng.core.ids import new_id, sha256_json, sha256_text
 from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
 from zhiheng.models._transports import (
+    DeepSeekResponsesTransport,
     ModelTransport,
     OllamaGenerateTransport,
+    OpenAIChatCompletionsTransport,
     OpenAICompatibleChatTransport,
     OpenAIResponsesTransport,
     TransportResponse,
@@ -142,6 +144,7 @@ class _ProviderRoute:
     policy_revision: str
     secret_ref: str | None
     enabled: bool
+    protocol: str
 
 
 class ModelGateway:
@@ -159,9 +162,12 @@ class ModelGateway:
         self._privacy_pipeline = privacy_pipeline or PrivacyPipeline()
         self._secret_store = secret_store or EnvironmentSecretStore()
         self._transports: dict[str, ModelTransport] = {
-            "ollama": OllamaGenerateTransport(),
-            "openai": OpenAIResponsesTransport(self._secret_store),
-            "openai-compatible": OpenAICompatibleChatTransport(self._secret_store),
+            "ollama:chat_completions": OllamaGenerateTransport(),
+            "openai:responses": OpenAIResponsesTransport(self._secret_store),
+            "openai:chat_completions": OpenAIChatCompletionsTransport(self._secret_store),
+            "deepseek:responses": DeepSeekResponsesTransport(self._secret_store),
+            "deepseek:chat_completions": OpenAICompatibleChatTransport(self._secret_store),
+            "openai-compatible:chat_completions": OpenAICompatibleChatTransport(self._secret_store),
         }
         self._before_claim_hook = before_claim_hook
 
@@ -183,14 +189,17 @@ class ModelGateway:
             secret_store=secret_store,
             before_claim_hook=before_claim_hook,
         )
-        gateway._transports = transports
+        gateway._transports = {
+            key if ":" in key else f"{key}:chat_completions": transport
+            for key, transport in transports.items()
+        }
         return gateway
 
     def complete(self, request: ModelRequest) -> ModelResponse:
         route = self._read_route(request)
         if request.requires_local and route.provider_kind != "ollama":
             raise PermissionError("source policy requires an approved local model")
-        transport = self._transport_for(route.provider_kind)
+        transport = self._transport_for(route.provider_kind, route.protocol)
         privacy = self._privacy_pipeline.prepare_for_model(request.payload)
         approved_parts = self._prepare_parts_for_network(request.parts)
         # Bind prepared content identity into the approval/audit hash without
@@ -727,10 +736,8 @@ class ModelGateway:
             )
             session.commit()
 
-    def _transport_for(self, provider_kind: str) -> ModelTransport:
-        if provider_kind == "deepseek":
-            provider_kind = "openai-compatible"
-        transport = self._transports.get(provider_kind)
+    def _transport_for(self, provider_kind: str, protocol: str) -> ModelTransport:
+        transport = self._transports.get(f"{provider_kind}:{protocol}")
         if transport is None:
             raise PermissionError("model transport is not configured")
         return transport
@@ -775,8 +782,10 @@ def _route_from_provider_row(row: Any, model_id: str, settings: Settings) -> _Pr
         capabilities = _json_list(row.get("normalized_model_capabilities"))
         if not bool(row.get("normalized_model_enabled")) or bool(row.get("normalized_model_stale")):
             raise PermissionError("model record is disabled or stale")
-        if not capabilities:
-            raise PermissionError("model capabilities are not confirmed")
+        if "text" not in capabilities:
+            raise PermissionError("model text capability is not confirmed")
+        if row.get("normalized_model_protocol") not in {"responses", "chat_completions"}:
+            raise PermissionError("model protocol does not support text generation")
         allowed_models = [model_id]
     else:
         allowed_models = _json_list(row.get("model_allowlist_json"))
@@ -830,6 +839,7 @@ def _route_from_provider_row(row: Any, model_id: str, settings: Settings) -> _Pr
         policy_revision=policy_revision,
         secret_ref=str(row["secret_ref"]) if row["secret_ref"] is not None else None,
         enabled=bool(row["enabled"]),
+        protocol=str(row.get("normalized_model_protocol", "chat_completions")),
     )
 
 
@@ -839,7 +849,7 @@ def _attach_normalized_model(session: Session, row: Any, model_id: str) -> Any:
     record = (
         session.execute(
             text(
-                "SELECT confirmed_capabilities_json, enabled, stale "
+                "SELECT confirmed_capabilities_json, enabled, stale, protocol "
                 "FROM model_provider_models WHERE provider_id=:provider_id AND model_id=:model_id"
             ),
             {"provider_id": row["id"], "model_id": model_id},
@@ -852,6 +862,7 @@ def _attach_normalized_model(session: Session, row: Any, model_id: str) -> Any:
     values["normalized_model_capabilities"] = record["confirmed_capabilities_json"]
     values["normalized_model_enabled"] = record["enabled"]
     values["normalized_model_stale"] = record["stale"]
+    values["normalized_model_protocol"] = record["protocol"]
     return values
 
 
@@ -866,6 +877,7 @@ def _route_fingerprint(route: _ProviderRoute) -> str:
                 "endpoint_origin": route.endpoint_origin,
                 "policy_revision": route.policy_revision,
                 "secret_ref": route.secret_ref,
+                "protocol": route.protocol,
             },
             sort_keys=True,
             separators=(",", ":"),

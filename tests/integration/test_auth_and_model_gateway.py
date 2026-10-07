@@ -223,6 +223,7 @@ def _test_route_fingerprint(
                 "endpoint_origin": endpoint_origin,
                 "policy_revision": policy_revision,
                 "secret_ref": secret_ref,
+                "protocol": "chat_completions",
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -1402,3 +1403,89 @@ def test_g003_migration_rejects_existing_multi_user_0001_database(tmp_path: Path
 
     with pytest.raises(RuntimeError, match="more than one auth user"):
         command.upgrade(cfg, "head")
+
+
+@pytest.mark.parametrize(
+    ('capabilities', 'protocol'),
+    [(['embedding'], 'embeddings'), (['text'], 'embeddings'), ([], 'chat_completions')],
+)
+def test_generation_rejects_ineligible_model_before_audit(
+    tmp_path: Path, capabilities: list[str], protocol: str,
+) -> None:
+    db_path, settings, factory = _migrated_session_factory(tmp_path)
+    spy = SpyTransport(db_path=db_path, calls=[])
+    gateway = ModelGateway._for_test(
+        session_factory=factory,
+        settings=settings.model_copy(update={'external_models_enabled': True}),
+        transports={'openai-compatible': spy},
+    )
+    with session_scope(factory) as session:
+        _insert_provider(session)
+        session.execute(
+            text('UPDATE model_provider_models SET confirmed_capabilities_json=:caps, '
+                 'protocol=:protocol'),
+            {'caps': json.dumps(capabilities), 'protocol': protocol},
+        )
+    with pytest.raises(PermissionError):
+        gateway.complete(ModelRequest(
+            task_id='ineligible-generation', provider_id='provider-openai',
+            model_id='gpt-test', payload='A public factual question',
+        ))
+    assert spy.calls == []
+    with session_scope(factory) as session:
+        assert session.execute(text('SELECT count(*) FROM model_call_audits')).scalar_one() == 0
+
+
+@pytest.mark.parametrize(
+    ('provider_kind', 'protocol', 'endpoint', 'path'),
+    [
+        ('deepseek', 'responses', 'https://api.deepseek.com/v1', '/responses'),
+        ('deepseek', 'chat_completions', 'https://api.deepseek.com', '/chat/completions'),
+        ('openai', 'chat_completions', 'https://api.openai.com/v1', '/chat/completions'),
+    ],
+)
+def test_gateway_dispatches_saved_protocol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    provider_kind: str, protocol: str, endpoint: str, path: str,
+) -> None:
+    from urllib.parse import urlsplit
+
+    import httpx
+
+    _, settings, factory = _migrated_session_factory(tmp_path)
+    monkeypatch.setenv('ZHIHENG_PRIVATE_TEST_SECRET', 'synthetic-secret')
+    calls: list[str] = []
+
+    def post(url: str, **kwargs: Any) -> httpx.Response:
+        calls.append(url)
+        payload = kwargs['json']
+        assert payload['model'] == 'gpt-test'
+        result: dict[str, Any]
+        if protocol == 'responses':
+            assert payload['input'] == 'A public factual question'
+            result = {'output_text': 'answer'}
+        else:
+            assert payload['messages'][0]['content'] == 'A public factual question'
+            result = {'choices': [{'message': {'content': 'answer'}}]}
+        return httpx.Response(200, json=result, request=httpx.Request('POST', url))
+
+    monkeypatch.setattr(httpx, 'post', post)
+    origin = urlsplit(endpoint)
+    with session_scope(factory) as session:
+        _insert_provider(
+            session, provider_kind=provider_kind, endpoint_url=endpoint,
+            endpoint_origin=f'{origin.scheme}://{origin.netloc}',
+        )
+        session.execute(text('UPDATE model_provider_models SET protocol=:protocol'),
+                        {'protocol': protocol})
+    gateway = ModelGateway(
+        session_factory=factory,
+        settings=settings.model_copy(update={'external_models_enabled': True}),
+        privacy_pipeline=PrivacyPipeline(analyzer=DeterministicPatternAnalyzer()),
+    )
+    response = gateway.complete(ModelRequest(
+        task_id='saved-protocol', provider_id='provider-openai', model_id='gpt-test',
+        payload='A public factual question',
+    ))
+    assert response.text == 'answer'
+    assert calls == [endpoint + path]

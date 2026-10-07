@@ -1222,8 +1222,8 @@ function modelCapabilityEditor(provider, record) {
   const wrapper = node("div", undefined, "model-record");
   const heading = node("div", undefined, "model-record-heading");
   heading.append(node("strong", record.model_id));
-  const state = record.stale ? "已过期" : (record.enabled ? "已启用" : "已停用");
-  heading.append(node("span", `${state} · ${record.source} · ${record.protocol}`, "muted"));
+  const recordStatus = record.stale ? "已过期" : (record.enabled ? "已启用" : "已停用");
+  heading.append(node("span", `${recordStatus} · ${record.source} · ${record.protocol}`, "muted"));
   const controls = node("div", undefined, "model-capability-controls");
   const confirmed = new Set(record.confirmed_capabilities || []);
   const checks = ["text", "multimodal", "embedding"].map((capability) => {
@@ -1235,11 +1235,11 @@ function modelCapabilityEditor(provider, record) {
   const save = action("保存能力", async () => {
     save.disabled = true;
     try {
-      const result = await modelMutation(
+      await modelMutation(
         `/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/models/${encodeURIComponent(record.model_id)}`,
         "PATCH", { confirmed_capabilities: checks.filter((input) => input.checked).map((input) => input.dataset.capability) }, provider.etag,
       );
-      showToast(`模型 ${record.model_id} 能力已更新`); state.modelProviders = result; await loadModelConfig();
+      showToast(`模型 ${record.model_id} 能力已更新`); await loadModelConfig();
     } catch (error) { showToast(readableError(error)); save.disabled = false; }
   }, "quiet small");
   controls.append(save); wrapper.append(heading, controls); return wrapper;
