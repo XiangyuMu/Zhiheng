@@ -102,6 +102,12 @@ fs.mkdirSync(output, { recursive: true });
     if (!defaultsResult.ok()) throw new Error(`default model update failed: ${defaultsResult.status()} ${await defaultsResult.text()} payload=${defaultPayload}`);
     await page.getByText("默认模型已更新").waitFor();
 
+    await page.reload();
+    const persistedCard = page.locator("li.provider-card").filter({ hasText: "Issue 47 Browser Provider" });
+    await persistedCard.waitFor();
+    assert.equal(await persistedCard.locator(".model-record").filter({ hasText: "issue47-chat" }).getByRole("checkbox", { name: /Issue 47 Browser Provider issue47-chat text 能力/ }).isChecked(), true);
+    await page.waitForFunction(() => document.querySelector("#default-text-model option:checked")?.textContent === "Issue 47 Browser Provider / issue47-chat");
+
     assert.match(await card.innerText(), /chat_completions/);
     await card.getByRole("button", { name: "刷新目录", exact: true }).click();
     await page.getByText("模型目录已刷新").waitFor();
@@ -121,8 +127,7 @@ fs.mkdirSync(output, { recursive: true });
     await page.reload();
     const restoredCard = page.locator("li.provider-card").filter({ hasText: "Issue 47 Browser Provider" });
     await restoredCard.waitFor();
-    assert.equal(await restoredCard.locator(".model-record").filter({ hasText: "issue47-chat" }).getByRole("checkbox", { name: /Issue 47 Browser Provider issue47-chat text 能力/ }).isChecked(), true);
-    await page.waitForFunction(() => document.querySelector("#default-text-model option:checked")?.textContent === "Issue 47 Browser Provider / issue47-chat");
+    assert.match(await restoredCard.innerText(), /issue47-chat[\s\S]*已过期/);
     assert.equal(
       await page.locator("#default-text-model option:checked").textContent(),
       "Issue 47 Browser Provider / issue47-chat",
