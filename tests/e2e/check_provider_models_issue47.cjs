@@ -53,7 +53,10 @@ fs.mkdirSync(output, { recursive: true });
     await card.getByRole("button", { name: "保存能力", exact: true }).click();
     await page.getByText("模型 issue47-chat 能力已更新").waitFor();
     await page.locator("#default-text-model").selectOption({ label: "Issue 47 Browser Ollama / issue47-chat" });
+    const defaultsResponse = page.waitForResponse("**/v1/model-config/defaults");
     await page.getByRole("button", { name: "保存默认模型", exact: true }).click();
+    const defaultsResult = await defaultsResponse;
+    if (!defaultsResult.ok()) throw new Error(`default model update failed: ${defaultsResult.status()} ${await defaultsResult.text()}`);
     await page.getByText("默认模型已更新").waitFor();
 
     const text = await page.locator("body").innerText();
