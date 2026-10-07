@@ -35,8 +35,30 @@ fs.mkdirSync(output, { recursive: true });
     await page.locator("#password").fill("issue17 workspace passphrase");
     await page.locator("#form button").click();
     await page.waitForURL("**/knowledge-agent**");
+    async function api(url, options = {}) {
+      return page.evaluate(async ({ url, options }) => {
+        const csrf = document.cookie.split(";").map((value) => value.trim())
+          .find((value) => value.startsWith("zhiheng_csrf="))?.slice(13) || "";
+        const response = await fetch(url, {
+          credentials: "same-origin",
+          ...options,
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": crypto.randomUUID(),
+            ...(options.headers || {}),
+          },
+          body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(`${response.status}: ${body.detail || JSON.stringify(body)}`);
+        return body;
+      }, { url, options });
+    }
     await page.goto(`${base}/knowledge-agent#settings`);
     await page.locator("#model-config-list").waitFor();
+    const initialDefaults = (await api("/v1/model-config/status")).defaults;
 
     await page.getByRole("button", { name: "新增 Provider", exact: true }).click();
     await page.locator("#provider-kind").selectOption("ollama");
@@ -76,6 +98,28 @@ fs.mkdirSync(output, { recursive: true });
       default_text_selected: true,
       viewport: { width: 1440, height: 1080 },
     }, null, 2));
+
+    // Leave the shared acceptance database in its pre-test route state so the
+    // following restart and provider-secret scenarios remain independent.
+    const currentDefaults = (await api("/v1/model-config/status")).defaults;
+    await api("/v1/model-config/defaults", {
+      method: "PUT",
+      headers: { "If-Match": currentDefaults.etag },
+      body: {
+        text: initialDefaults.text,
+        multimodal: initialDefaults.multimodal,
+        embedding: initialDefaults.embedding,
+      },
+    });
+    const providers = await api("/v1/model-config/providers?include_archived=true");
+    const provider = providers.find((item) => item.display_name === "Issue 47 Browser Ollama");
+    if (provider) {
+      await api(`/v1/model-config/providers/${provider.provider_id}`, {
+        method: "PATCH",
+        headers: { "If-Match": provider.etag },
+        body: { enabled: false, archived: true },
+      });
+    }
   } finally {
     await browser.close();
   }
