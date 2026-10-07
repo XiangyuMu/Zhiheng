@@ -129,6 +129,7 @@ run_stage "issue14-writes" node tests/e2e/check_issue14_writes.cjs "${BASE_URL}"
 run_stage "import-failures" node tests/e2e/check_import_failures.cjs "${BASE_URL}" "${OUTPUT_DIR}/import-failures"
 run_stage "issue10-matrix" node tests/e2e/check_issue10_matrix.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue10-matrix"
 run_stage "provider-secrets-issue40" node tests/e2e/check_provider_secrets_issue40.cjs "${BASE_URL}" "${OUTPUT_DIR}/provider-secrets-issue40"
+run_stage "provider-models-issue47" node tests/e2e/check_provider_models_issue47.cjs "${BASE_URL}" "${OUTPUT_DIR}/provider-models-issue47"
 
 CURRENT_STAGE="provider-restart"
 unset ZHIHENG_PRIVATE_ISSUE40_LEGACY
