@@ -338,6 +338,11 @@ def knowledge_agent_css(_user_id: AuthDep) -> FileResponse:
     return _static_file("knowledge-agent.css", "text/css; charset=utf-8")
 
 
+@router.get("/design-tokens.css", include_in_schema=False)
+def design_tokens_css(_user_id: AuthDep) -> FileResponse:
+    return _static_file("design-tokens.css", "text/css; charset=utf-8")
+
+
 @router.get("/knowledge-agent.js", include_in_schema=False)
 def knowledge_agent_js(_user_id: AuthDep) -> FileResponse:
     return _static_file("knowledge-agent.js", "text/javascript; charset=utf-8")
