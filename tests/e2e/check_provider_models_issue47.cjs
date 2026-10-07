@@ -44,7 +44,7 @@ fs.mkdirSync(output, { recursive: true });
 
     const card = page.locator("li.provider-card").filter({ hasText: "Issue 47 Browser Ollama" });
     await card.getByPlaceholder("手动添加模型 ID").fill("issue47-chat");
-    await card.getByRole("button", { name: "添加", exact: true }).click();
+    await card.getByRole("button", { name: "添加模型", exact: true }).click();
     await page.getByText("模型 issue47-chat 已添加").waitFor();
 
     const capability = card.getByRole("checkbox", { name: /Issue 47 Browser Ollama issue47-chat text 能力/ });
