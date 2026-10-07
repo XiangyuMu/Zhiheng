@@ -21,6 +21,8 @@ from zhiheng.core.ids import sha256_text
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
 from zhiheng.models import ModelGateway, ModelRequest
 from zhiheng.models._transports import (
+    DeepSeekResponsesTransport,
+    OpenAIEmbeddingsTransport,
     OpenAIResponsesTransport,
     TransportResponse,
     TransportRoute,
@@ -459,6 +461,82 @@ def test_openai_responses_transport_uses_official_sdk_shape(
         },
         {"model": "gpt-test", "input": "sanitized prompt"},
     ]
+
+
+def test_deepseek_responses_transport_uses_configured_v1_path_without_secret_leak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"output_text": "deepseek response"}
+
+    def fake_post(url: str, **kwargs: object) -> FakeResponse:
+        calls.append({"url": url, **kwargs})
+        return FakeResponse()
+
+    monkeypatch.setattr("zhiheng.models._transports.httpx.post", fake_post)
+    monkeypatch.setenv("ZHIHENG_PRIVATE_DEEPSEEK_KEY", "deepseek-secret")
+    transport = DeepSeekResponsesTransport(EnvironmentSecretStore())
+    response = transport.complete(
+        route=TransportRoute(
+            provider_id="provider-deepseek",
+            provider_kind="deepseek",
+            model_id="deepseek-chat",
+            endpoint_url="https://api.deepseek.com/v1",
+            endpoint_origin="https://api.deepseek.com",
+            policy_revision="rev-1",
+            secret_ref="env:ZHIHENG_PRIVATE_DEEPSEEK_KEY",
+        ),
+        payload=_ApprovedOutboundPayload(
+            text="prompt",
+            payload_hash=sha256_text("prompt"),
+            approval_id="approval-1",
+            audit_id="audit-1",
+        ),
+    )
+    assert response.text == "deepseek response"
+    assert calls[0]["url"] == "https://api.deepseek.com/v1/responses"
+    assert calls[0]["headers"] == {"Authorization": "Bearer deepseek-secret"}
+
+
+def test_openai_embeddings_transport_uses_embeddings_wire_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"data": [{"embedding": [1, 2.5]}]}
+
+    captured: dict[str, object] = {}
+
+    def fake_post(url: str, **kwargs: object) -> FakeResponse:
+        captured.update({"url": url, **kwargs})
+        return FakeResponse()
+
+    monkeypatch.setattr("zhiheng.models._transports.httpx.post", fake_post)
+    monkeypatch.setenv("ZHIHENG_PRIVATE_OPENAI_API_KEY", "openai-secret")
+    embeddings = OpenAIEmbeddingsTransport(EnvironmentSecretStore())
+    assert embeddings.embed(
+        route=TransportRoute(
+            provider_id="provider-openai",
+            provider_kind="openai",
+            model_id="text-embedding-3-small",
+            endpoint_url="https://api.openai.com/v1",
+            endpoint_origin="https://api.openai.com",
+            policy_revision="rev-1",
+            secret_ref="env:ZHIHENG_PRIVATE_OPENAI_API_KEY",
+        ),
+        texts=["hello"],
+    ) == [[1.0, 2.5]]
+    assert captured["url"] == "https://api.openai.com/v1/embeddings"
+    assert captured["json"] == {"model": "text-embedding-3-small", "input": ["hello"]}
 
 
 def test_model_gateway_commits_dispatching_before_network_and_sends_only_redacted_payload(

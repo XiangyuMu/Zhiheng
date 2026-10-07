@@ -264,6 +264,93 @@ class OpenAICompatibleChatTransport:
         return TransportResponse(text=text_value, response_hash=sha256_text(text_value))
 
 
+class OpenAIChatCompletionsTransport(OpenAICompatibleChatTransport):
+    """OpenAI Chat Completions adapter with the same approved payload boundary."""
+
+
+class DeepSeekResponsesTransport(OpenAICompatibleChatTransport):
+    """Stateless DeepSeek Responses API adapter.
+
+    DeepSeek accepts the same bearer authentication boundary as its chat API,
+    but the request and response envelopes are different.  The endpoint is
+    joined to the configured base URL so both official forms with and without
+    an explicit ``/v1`` suffix remain valid.
+    """
+
+    def complete(
+        self,
+        *,
+        route: TransportRoute,
+        payload: _ApprovedOutboundPayload,
+    ) -> TransportResponse:
+        if payload.parts:
+            raise PermissionError("deepseek responses transport does not support image parts")
+        if route.secret_ref is None:
+            raise PermissionError("deepseek provider requires secret_ref")
+        api_key = self._secret_store.resolve(
+            route.secret_ref, provider_id=route.provider_id
+        ).get_secret_value()
+        response = httpx.post(
+            f"{route.endpoint_url.rstrip('/')}/responses",
+            json={"model": route.model_id, "input": payload.text},
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        text_value = str(data.get("output_text") or _response_output_text(data))
+        return TransportResponse(text=text_value, response_hash=sha256_text(text_value))
+
+
+class OpenAIEmbeddingsTransport:
+    def __init__(self, secret_store: SecretResolver) -> None:
+        self._secret_store = secret_store
+
+    def embed(
+        self,
+        *,
+        route: TransportRoute,
+        texts: list[str],
+    ) -> list[list[float]]:
+        if route.secret_ref is None:
+            raise PermissionError("openai provider requires secret_ref")
+        api_key = self._secret_store.resolve(
+            route.secret_ref, provider_id=route.provider_id
+        ).get_secret_value()
+        response = httpx.post(
+            f"{route.endpoint_url.rstrip('/')}/embeddings",
+            json={"model": route.model_id, "input": texts},
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        data = response.json().get("data")
+        if not isinstance(data, list):
+            raise ValueError("embedding response format is invalid")
+        return [list(map(float, item["embedding"])) for item in data if isinstance(item, dict)]
+
+
+def _response_output_text(payload: object) -> str:
+    if not isinstance(payload, dict):
+        raise ValueError("responses response format is invalid")
+    output = payload.get("output")
+    if not isinstance(output, list):
+        raise ValueError("responses response format is invalid")
+    parts: list[str] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(str(part["text"]))
+    if not parts:
+        raise ValueError("responses response format is invalid")
+    return "".join(parts)
+
+
 class OpenAIResponsesTransport:
     def __init__(
         self,

@@ -59,6 +59,16 @@ SESSION_COOKIE = "zhiheng_session"
 CSRF_COOKIE = "zhiheng_csrf"
 
 
+def _default_provider_base_url(provider_kind: str) -> str:
+    if provider_kind == "openai":
+        return "https://api.openai.com/v1"
+    if provider_kind == "deepseek":
+        return "https://api.deepseek.com"
+    if provider_kind == "ollama":
+        return "http://127.0.0.1:11434"
+    return "https://api.example.com/v1"
+
+
 class BootstrapRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -98,7 +108,7 @@ class ModelProviderCreate(BaseModel):
 
     provider_kind: str
     display_name: str = Field(min_length=1, max_length=128)
-    base_url: str
+    base_url: str = ""
     secret_ref: str | None = None
     api_key: SecretStr | None = Field(default=None, max_length=4096)
     text_models: list[str] = Field(default_factory=list)
@@ -472,7 +482,9 @@ def create_app(
                 ProviderInput(
                     provider_kind=payload.provider_kind,
                     display_name=payload.display_name,
-                    endpoint_url=payload.base_url,
+                    endpoint_url=(
+                        payload.base_url or _default_provider_base_url(payload.provider_kind)
+                    ),
                     secret_ref=payload.secret_ref,
                     api_key=payload.api_key,
                     text_models=tuple(payload.text_models),
