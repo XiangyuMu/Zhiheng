@@ -111,6 +111,7 @@ fs.mkdirSync(output, { recursive: true });
         embedding: initialDefaults.embedding,
       },
     });
+    const restoredDefaults = (await api("/v1/model-config/status")).defaults;
     const providers = await api("/v1/model-config/providers?include_archived=true");
     const provider = providers.find((item) => item.display_name === "Issue 47 Browser Ollama");
     if (provider) {
@@ -120,6 +121,10 @@ fs.mkdirSync(output, { recursive: true });
         body: { enabled: false, archived: true },
       });
     }
+    fs.writeFileSync(path.join(output, "cleanup.json"), JSON.stringify({
+      restored_defaults: restoredDefaults,
+      archived_provider_id: provider?.provider_id || null,
+    }, null, 2));
   } finally {
     await browser.close();
   }
