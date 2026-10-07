@@ -89,10 +89,11 @@ fs.mkdirSync(output, { recursive: true });
     await card.getByRole("button", { name: "添加模型", exact: true }).click();
     await page.getByText("模型 issue47-chat 已添加").waitFor();
 
-    const capability = card.getByRole("checkbox", { name: /Issue 47 Browser Provider issue47-chat text 能力/ });
+    const modelRecord = card.locator(".model-record").filter({ hasText: "issue47-chat" });
+    const capability = modelRecord.getByRole("checkbox", { name: /Issue 47 Browser Provider issue47-chat text 能力/ });
     assert.equal(await capability.isChecked(), false);
     await capability.check();
-    await card.getByRole("button", { name: "保存能力", exact: true }).click();
+    await modelRecord.getByRole("button", { name: "保存能力", exact: true }).click();
     await page.getByText("模型 issue47-chat 能力已更新").waitFor();
     await page.locator("#default-text-model").selectOption({ label: "Issue 47 Browser Provider / issue47-chat" });
     const defaultsResponse = page.waitForResponse("**/v1/model-config/defaults");
@@ -120,7 +121,7 @@ fs.mkdirSync(output, { recursive: true });
     await page.reload();
     const restoredCard = page.locator("li.provider-card").filter({ hasText: "Issue 47 Browser Provider" });
     await restoredCard.waitFor();
-    assert.equal(await restoredCard.getByRole("checkbox", { name: /Issue 47 Browser Provider issue47-chat text 能力/ }).isChecked(), true);
+    assert.equal(await restoredCard.locator(".model-record").filter({ hasText: "issue47-chat" }).getByRole("checkbox", { name: /Issue 47 Browser Provider issue47-chat text 能力/ }).isChecked(), true);
     await page.waitForFunction(() => document.querySelector("#default-text-model option:checked")?.textContent === "Issue 47 Browser Provider / issue47-chat");
     assert.equal(
       await page.locator("#default-text-model option:checked").textContent(),
