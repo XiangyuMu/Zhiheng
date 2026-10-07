@@ -51,6 +51,7 @@ from zhiheng.models.configuration import (
     refresh_provider_models,
     set_defaults,
     update_provider,
+    update_provider_model,
 )
 from zhiheng.recovery import startup_recovery_barrier
 from zhiheng.secrets import ProviderSecretStore
@@ -139,6 +140,14 @@ class ProviderModelCreate(BaseModel):
     protocol: str = Field(default="chat_completions", min_length=1, max_length=64)
 
 
+class ProviderModelPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmed_capabilities: list[str] | None = None
+    enabled: bool | None = None
+    protocol: str | None = Field(default=None, max_length=64)
+
+
 class ModelRoute(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -151,6 +160,7 @@ class ModelDefaultsPayload(BaseModel):
 
     text: ModelRoute | None = None
     multimodal: ModelRoute | None = None
+    embedding: ModelRoute | None = None
 
 
 def get_db_session(request: Request) -> Generator[Session, None, None]:
@@ -611,6 +621,44 @@ def create_app(
         _remember_model_config_result(app, operation_key, fingerprint, result)
         return result
 
+    @app.patch("/v1/model-config/providers/{provider_id}/models/{model_id}", tags=["models"])
+    def model_provider_model_patch(
+        provider_id: str,
+        model_id: str,
+        payload: ProviderModelPatch,
+        request: Request,
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        csrf_header: str | None = Header(default=None, alias="X-CSRF-Token"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ) -> dict[str, object]:
+        operation_key = _require_model_mutation(
+            request, session, session_service, session_token, csrf_header, idempotency_key
+        )
+        fingerprint = _model_config_fingerprint(
+            f"provider:model:patch:{provider_id}:{model_id}", payload.model_dump()
+        )
+        cached = _model_config_idempotent_result(app, operation_key, fingerprint)
+        if cached is not None:
+            return dict(cached)
+        try:
+            result = update_provider_model(
+                session,
+                provider_id,
+                model_id,
+                confirmed_capabilities=payload.confirmed_capabilities,
+                enabled=payload.enabled,
+                protocol=payload.protocol,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        response.headers["Cache-Control"] = "no-store"
+        _remember_model_config_result(app, operation_key, fingerprint, result)
+        return result
+
     @app.delete("/v1/model-config/providers/{provider_id}", tags=["models"])
     def model_provider_archive(
         provider_id: str,
@@ -817,6 +865,7 @@ def create_app(
         # explicit null still clears that route, matching PUT semantics.
         current_text_route = current_defaults.get("text")
         current_multimodal_route = current_defaults.get("multimodal")
+        current_embedding_route = current_defaults.get("embedding")
         text_route: dict[str, object] | None = (
             payload.text.model_dump()
             if "text" in payload.model_fields_set
@@ -833,9 +882,21 @@ def create_app(
             if isinstance(current_multimodal_route, dict)
             else None
         )
+        embedding_route: dict[str, object] | None = (
+            payload.embedding.model_dump()
+            if "embedding" in payload.model_fields_set and payload.embedding is not None
+            else dict(current_embedding_route)
+            if isinstance(current_embedding_route, dict)
+            else None
+        )
         fingerprint = _model_config_fingerprint(
             "defaults:update",
-            {"text": text_route, "multimodal": multimodal_route, "if_match": if_match},
+            {
+                "text": text_route,
+                "multimodal": multimodal_route,
+                "embedding": embedding_route,
+                "if_match": if_match,
+            },
         )
         cached = _model_config_idempotent_result(app, operation_key, fingerprint)
         if cached is not None:
@@ -847,6 +908,7 @@ def create_app(
                 session,
                 text_route,
                 multimodal_route,
+                embedding_route,
                 if_match or "",
             )
         except RuntimeError as exc:

@@ -67,7 +67,8 @@ def defaults(session: Session) -> dict[str, object]:
                 text(
                     """
                     SELECT etag, text_provider_id, text_model_id,
-                           multimodal_provider_id, multimodal_model_id
+                           multimodal_provider_id, multimodal_model_id,
+                           embedding_provider_id, embedding_model_id
                     FROM model_route_defaults
                     ORDER BY updated_at DESC, id DESC
                     LIMIT 1
@@ -82,7 +83,7 @@ def defaults(session: Session) -> dict[str, object]:
             return {}
         raise
     if route_row is None:
-        return {"etag": "defaults:0", "text": None, "multimodal": None}
+        return {"etag": "defaults:0", "text": None, "multimodal": None, "embedding": None}
     if not isinstance(route_row["etag"], str) or not route_row["etag"]:
         raise RuntimeError("model defaults contain an invalid etag")
     for provider_key, model_key in (
@@ -95,6 +96,7 @@ def defaults(session: Session) -> dict[str, object]:
         "etag": str(route_row["etag"]),
         "text": None,
         "multimodal": None,
+        "embedding": None,
     }
     if route_row["text_provider_id"] is not None and route_row["text_model_id"] is not None:
         result["text"] = {
@@ -108,6 +110,14 @@ def defaults(session: Session) -> dict[str, object]:
         result["multimodal"] = {
             "provider_id": str(route_row["multimodal_provider_id"]),
             "model_id": str(route_row["multimodal_model_id"]),
+        }
+    if (
+        route_row["embedding_provider_id"] is not None
+        and route_row["embedding_model_id"] is not None
+    ):
+        result["embedding"] = {
+            "provider_id": str(route_row["embedding_provider_id"]),
+            "model_id": str(route_row["embedding_model_id"]),
         }
     return result
 
@@ -725,6 +735,7 @@ def set_defaults(
     session: Session,
     text_route: Mapping[str, object] | None,
     multimodal_route: Mapping[str, object] | None,
+    embedding_route: Mapping[str, object] | None,
     if_match: str,
 ) -> dict[str, object]:
     current = (
@@ -732,7 +743,8 @@ def set_defaults(
             text(
                 """
                 SELECT id, etag, text_provider_id, text_model_id,
-                       multimodal_provider_id, multimodal_model_id
+                       multimodal_provider_id, multimodal_model_id,
+                       embedding_provider_id, embedding_model_id
                 FROM model_route_defaults
                 ORDER BY updated_at DESC, id DESC
                 LIMIT 1
@@ -747,8 +759,10 @@ def set_defaults(
         raise RuntimeError("model defaults changed; refresh and retry")
     text_provider, text_model = _route_values(text_route, "text")
     multimodal_provider, multimodal_model = _route_values(multimodal_route, "multimodal")
+    embedding_provider, embedding_model = _route_values(embedding_route, "embedding")
     _validate_route(session, text_provider, text_model, "text")
     _validate_route(session, multimodal_provider, multimodal_model, "multimodal")
+    _validate_route(session, embedding_provider, embedding_model, "embedding")
     next_etag = f"{current_etag}:updated"
     values = {
         "etag": next_etag,
@@ -756,6 +770,8 @@ def set_defaults(
         "text_model_id": text_model,
         "multimodal_provider_id": multimodal_provider,
         "multimodal_model_id": multimodal_model,
+        "embedding_provider_id": embedding_provider,
+        "embedding_model_id": embedding_model,
     }
     if current is None:
         session.execute(
@@ -763,10 +779,12 @@ def set_defaults(
                 """
                 INSERT INTO model_route_defaults (
                   id, text_provider_id, text_model_id,
-                  multimodal_provider_id, multimodal_model_id, etag
+                  multimodal_provider_id, multimodal_model_id,
+                  embedding_provider_id, embedding_model_id, etag
                 ) VALUES (
                   :id, :text_provider_id, :text_model_id,
-                  :multimodal_provider_id, :multimodal_model_id, :etag
+                  :multimodal_provider_id, :multimodal_model_id,
+                  :embedding_provider_id, :embedding_model_id, :etag
                 )
                 """
             ),
@@ -781,6 +799,8 @@ def set_defaults(
                     text_model_id = :text_model_id,
                     multimodal_provider_id = :multimodal_provider_id,
                     multimodal_model_id = :multimodal_model_id,
+                    embedding_provider_id = :embedding_provider_id,
+                    embedding_model_id = :embedding_model_id,
                     etag = :etag,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = :id
@@ -792,6 +812,7 @@ def set_defaults(
         "etag": next_etag,
         "text": _route_response(text_provider, text_model),
         "multimodal": _route_response(multimodal_provider, multimodal_model),
+        "embedding": _route_response(embedding_provider, embedding_model),
     }
 
 
@@ -993,6 +1014,63 @@ def refresh_provider_models(
     if refreshed is None:
         raise RuntimeError("provider was not found after catalog refresh")
     return _provider_response(refreshed, secret_store=secret_store, session=session)
+
+
+def update_provider_model(
+    session: Session,
+    provider_id: str,
+    model_id: str,
+    *,
+    confirmed_capabilities: list[str] | None = None,
+    enabled: bool | None = None,
+    protocol: str | None = None,
+) -> dict[str, object]:
+    row = _provider_row(session, provider_id)
+    if row is None:
+        raise LookupError("provider not found")
+    current = session.execute(
+        text(
+            "SELECT confirmed_capabilities_json FROM model_provider_models "
+            "WHERE provider_id=:provider_id AND model_id=:model_id"
+        ),
+        {"provider_id": provider_id, "model_id": model_id},
+    ).scalar_one_or_none()
+    if current is None:
+        raise LookupError("model not found")
+    capabilities = (
+        _clean_models(confirmed_capabilities)
+        if confirmed_capabilities is not None
+        else _json_list(current)
+    )
+    allowed = {"text", "multimodal", "embedding"}
+    if any(capability not in allowed for capability in capabilities):
+        raise ValueError("unsupported model capability")
+    values: dict[str, object] = {
+        "provider_id": provider_id,
+        "model_id": model_id,
+        "confirmed": json.dumps(capabilities),
+    }
+    updates = ["confirmed_capabilities_json=:confirmed", "updated_at=CURRENT_TIMESTAMP"]
+    if enabled is not None:
+        updates.append("enabled=:enabled")
+        values["enabled"] = enabled
+    if protocol is not None:
+        if not protocol.strip():
+            raise ValueError("protocol must not be empty")
+        updates.append("protocol=:protocol")
+        values["protocol"] = protocol.strip()
+    session.execute(
+        text(
+            "UPDATE model_provider_models SET "
+            + ", ".join(updates)
+            + " WHERE provider_id=:provider_id AND model_id=:model_id"
+        ),
+        values,
+    )
+    updated = _provider_row(session, provider_id)
+    if updated is None:
+        raise RuntimeError("provider was not found after model update")
+    return _provider_response(updated, session=session)
 
 
 def _validate_provider_input(provider: ProviderInput) -> None:
@@ -1244,7 +1322,7 @@ def _validate_route(
     if row is None or bool(row.get("archived", False)) or not bool(row["enabled"]):
         raise ValueError(f"{modality} route provider is unavailable")
     records = _model_records(session, provider_id)
-    models = _models_from_records(records, "text" if modality == "text" else "multimodal")
+    models = _models_from_records(records, modality)
     if model_id not in models:
         raise ValueError(f"{modality} route model is not allowlisted")
 

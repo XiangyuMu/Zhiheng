@@ -369,6 +369,51 @@ def test_model_catalog_failure_preserves_previous_records(
     assert current["catalog_error"] == "catalog_timeout:目录请求超时"
 
 
+def test_model_capability_confirmation_controls_embedding_default(tmp_path: Path) -> None:
+    client = _empty_client(tmp_path)
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "capability-provider"},
+        json={
+            "provider_kind": "openai",
+            "display_name": "Capabilities",
+            "text_models": ["chat-model"],
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200
+    provider = created.json()
+    denied = client.put(
+        "/v1/model-config/defaults",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": client.get("/v1/model-config/status").json()["defaults"]["etag"],
+            "Idempotency-Key": "embedding-denied",
+        },
+        json={"embedding": {"provider_id": provider["provider_id"], "model_id": "chat-model"}},
+    )
+    assert denied.status_code == 422
+    confirmed = client.patch(
+        f"/v1/model-config/providers/{provider['provider_id']}/models/chat-model",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "embedding-confirm"},
+        json={"confirmed_capabilities": ["text", "embedding"]},
+    )
+    assert confirmed.status_code == 200
+    current = client.get("/v1/model-config/status").json()["defaults"]
+    accepted = client.put(
+        "/v1/model-config/defaults",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": current["etag"],
+            "Idempotency-Key": "embedding-accepted",
+        },
+        json={"embedding": {"provider_id": provider["provider_id"], "model_id": "chat-model"}},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["embedding"]["model_id"] == "chat-model"
+
+
 def test_provider_secret_refs_are_validated_and_never_echoed(tmp_path: Path) -> None:
     client = _client(tmp_path)
     csrf = _login(client)
