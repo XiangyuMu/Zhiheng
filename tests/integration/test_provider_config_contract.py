@@ -337,6 +337,52 @@ def test_model_catalog_refresh_preserves_confirmations_and_marks_missing_stale(
     assert refreshed.json()["catalog_status"] == "succeeded"
 
 
+def test_model_catalog_refresh_does_not_reenable_a_disabled_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _empty_client(tmp_path)
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "catalog-disabled-provider"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Disabled catalog model",
+            "base_url": "https://models.example.test/v1",
+            "text_models": ["disabled-model"],
+            "enabled": True,
+        },
+    )
+    provider = created.json()
+    monkeypatch.setattr(
+        "zhiheng.models.configuration.discover_provider_models",
+        lambda **_kwargs: (
+            [type("Model", (), {"model_id": "disabled-model", "display_name": "Disabled"})()],
+            "succeeded",
+            "目录刷新成功",
+        ),
+    )
+    app = cast(FastAPI, client.app)
+    with app.state.session_factory() as session:
+        session.execute(
+            text(
+                "UPDATE model_provider_models SET enabled=0 "
+                "WHERE provider_id=:provider_id AND model_id='disabled-model'"
+            ),
+            {"provider_id": provider["provider_id"]},
+        )
+        session.commit()
+    refreshed = client.post(
+        f"/v1/model-config/providers/{provider['provider_id']}/models/refresh",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "catalog-disabled-refresh"},
+    )
+    assert refreshed.status_code == 200
+    record = next(
+        item for item in refreshed.json()["model_records"] if item["model_id"] == "disabled-model"
+    )
+    assert record["enabled"] is False
+
+
 def test_model_catalog_failure_preserves_previous_records(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

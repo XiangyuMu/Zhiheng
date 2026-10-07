@@ -443,6 +443,63 @@ def test_provider_query_embedding_http_error_falls_back_to_fts(
     session.commit.assert_called_once_with()
 
 
+def test_provider_query_embedding_dimension_error_falls_back_to_fts(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    settings = _settings(tmp_path)
+    route = {
+        "provider_id": "provider-a",
+        "provider_kind": "openai",
+        "model_id": "text-embedding-a",
+        "revision": "revision-a",
+        "endpoint_url": "https://api.openai.com",
+        "endpoint_origin": "https://api.openai.com",
+        "secret_ref": "secret-a",
+    }
+
+    class _Generation:
+        id = "generation-1"
+        model_id = "text-embedding-a"
+        model_revision = "revision-a"
+        dimension = 3
+        normalize = True
+
+    class _Index:
+        def active_generation(self, *args: Any, **kwargs: Any) -> _Generation:
+            del args, kwargs
+            return _Generation()
+
+    class _Hybrid:
+        def search(self, *args: Any, **kwargs: Any) -> str:
+            del args, kwargs
+            return "fts-result"
+
+    app_state = types.SimpleNamespace(embedding_route=route, provider_secret_store=object())
+    retriever = VectorAwareHybridRetriever(
+        settings=settings,
+        app_state=app_state,
+        hybrid=cast(Any, _Hybrid()),
+        vector_index=cast(Any, _Index()),
+    )
+    monkeypatch.setattr(retrieval_module, "embedding_route", lambda session: route)
+
+    class _MalformedEmbedder:
+        def embed_query(self, *args: Any, **kwargs: Any) -> Sequence[float]:
+            del args, kwargs
+            raise ValueError("embedding response dimension does not match active generation")
+
+    monkeypatch.setattr(retriever, "_query_embedder", lambda: _MalformedEmbedder())
+    session = Mock()
+    result = retriever.search(
+        session,
+        "query",
+        release_context=cast(ReleaseContext, types.SimpleNamespace(release_id="stable")),
+    )
+
+    assert cast(Any, result) == "fts-result"
+    session.commit.assert_called_once_with()
+
+
 def test_old_character_regex_tokenizer_is_not_in_production_paths() -> None:
     api_source = Path("src/zhiheng/api/retrieval.py").read_text()
     knowledge_source = Path("src/zhiheng/knowledge/repository.py").read_text()

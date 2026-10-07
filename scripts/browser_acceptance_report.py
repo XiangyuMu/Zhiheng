@@ -622,6 +622,9 @@ def main() -> int:
             "node tests/e2e/check_issue12_relations.cjs",
             "node tests/e2e/check_provider_secrets_issue40.cjs",
             "node tests/e2e/check_provider_secrets_restart.cjs",
+            "node tests/e2e/check_provider_models_issue47.cjs",
+            "node tests/e2e/check_provider_models_restart_issue47.cjs",
+            "node tests/e2e/check_review_center_issue9.cjs",
         ],
         "versions": {
             "node": command_output(["node", "--version"]),

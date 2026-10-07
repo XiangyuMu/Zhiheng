@@ -965,7 +965,9 @@ class ProviderQueryEmbedder:
         )
         vectors = self._transport.embed(route=route, texts=[query])
         if len(vectors) != 1 or len(vectors[0]) != dimension:
-            raise ValueError("embedding response dimension does not match active generation")
+            raise EmbeddingTransportError(
+                "embedding response dimension does not match active generation"
+            )
         values = vectors[0]
         if normalize:
             norm = math.sqrt(sum(value * value for value in values)) or 1.0
@@ -1064,6 +1066,7 @@ class VectorAwareHybridRetriever:
             EmbeddingTransportError,
             PermissionError,
             QueryEmbeddingUnavailableError,
+            ValueError,
         ):
             return self._fts_only(
                 session,

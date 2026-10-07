@@ -838,22 +838,26 @@ def set_defaults(
         "embedding_model_id": embedding_model,
     }
     if current is None:
-        session.execute(
-            text(
-                """
-                INSERT INTO model_route_defaults (
-                  id, text_provider_id, text_model_id,
-                  multimodal_provider_id, multimodal_model_id,
-                  embedding_provider_id, embedding_model_id, etag
-                ) VALUES (
-                  :id, :text_provider_id, :text_model_id,
-                  :multimodal_provider_id, :multimodal_model_id,
-                  :embedding_provider_id, :embedding_model_id, :etag
+        try:
+            with session.begin_nested():
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO model_route_defaults (
+                          id, singleton_key, text_provider_id, text_model_id,
+                          multimodal_provider_id, multimodal_model_id,
+                          embedding_provider_id, embedding_model_id, etag
+                        ) VALUES (
+                          :id, 'default', :text_provider_id, :text_model_id,
+                          :multimodal_provider_id, :multimodal_model_id,
+                          :embedding_provider_id, :embedding_model_id, :etag
+                        )
+                        """
+                    ),
+                    {"id": new_id(), **values},
                 )
-                """
-            ),
-            {"id": new_id(), **values},
-        )
+        except IntegrityError as exc:
+            raise RuntimeError("model defaults changed; refresh and retry") from exc
     else:
         result = session.execute(
             text(
@@ -1050,7 +1054,7 @@ def refresh_provider_models(
             session.execute(
                 text(
                     "UPDATE model_provider_models SET display_name=:display_name, "
-                    "protocol=:protocol, stale=0, enabled=1, "
+                    "protocol=:protocol, stale=0, enabled=:enabled, "
                     "last_seen_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP "
                     "WHERE provider_id=:provider_id AND model_id=:model_id"
                 ),
@@ -1059,6 +1063,9 @@ def refresh_provider_models(
                     "model_id": item.model_id,
                     "display_name": item.display_name,
                     "protocol": protocol,
+                    # Rediscovery is metadata refresh.  A user-disabled model
+                    # must remain disabled until they explicitly re-enable it.
+                    "enabled": int(bool(current.get("enabled", False))),
                 },
             )
     placeholders = ",".join(f":model_{index}" for index in range(len(ids)))
