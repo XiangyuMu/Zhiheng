@@ -1268,7 +1268,7 @@ function renderModelProviders(providers) {
     const refresh = action("刷新目录", async () => {
       refresh.disabled = true; showToast("正在刷新模型目录…");
       try { await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/models/refresh`, "POST", {}, null); showToast("模型目录已刷新"); await loadModelConfig(); }
-      catch (error) { showToast(`目录刷新失败：${readableError(error)}`); await loadModelConfig(); }
+      catch (error) { await loadModelConfig(); showToast(`目录刷新失败：${readableError(error)}`); }
       finally { refresh.disabled = false; }
     }, "quiet small");
     add.append(modelInput, protocol, addButton, refresh);
