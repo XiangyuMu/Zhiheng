@@ -50,6 +50,7 @@ fs.mkdirSync(output, { recursive: true });
     const capability = card.getByRole("checkbox", { name: /Issue 47 Browser Ollama issue47-chat text 能力/ });
     assert.equal(await capability.isChecked(), false);
     await capability.check();
+    await card.getByRole("button", { name: "保存能力", exact: true }).click();
     await page.getByText("模型 issue47-chat 能力已更新").waitFor();
     await page.locator("#default-text-model").selectOption({ label: "Issue 47 Browser Ollama / issue47-chat" });
     await page.getByRole("button", { name: "保存默认模型", exact: true }).click();
