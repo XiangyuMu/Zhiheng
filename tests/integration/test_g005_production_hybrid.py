@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import Mock
 
-import httpx
 from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
@@ -26,6 +25,7 @@ from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
 from zhiheng.evolution.releases import ReleaseContext
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import StoredTextArtifacts
+from zhiheng.models.errors import EmbeddingTransportError
 from zhiheng.retrieval import VectorIndexRepository
 from zhiheng.retrieval.tokenizer import segment_for_fts
 
@@ -426,7 +426,7 @@ def test_provider_query_embedding_http_error_falls_back_to_fts(
     class _ErrorEmbedder:
         def embed_query(self, *args: Any, **kwargs: Any) -> Sequence[float]:
             del args, kwargs
-            raise httpx.HTTPError("provider unavailable")
+            raise EmbeddingTransportError("provider unavailable")
 
     monkeypatch.setattr(retriever, "_query_embedder", lambda: _ErrorEmbedder())
     session = Mock()

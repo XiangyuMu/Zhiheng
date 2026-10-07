@@ -7,7 +7,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 
-import httpx
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -36,9 +35,13 @@ from zhiheng.memory.context import (
 )
 from zhiheng.memory.personal_updates import PersonalUpdateService
 from zhiheng.models import ModelGateway
-from zhiheng.models._transports import OpenAIEmbeddingsTransport, TransportRoute
 from zhiheng.models.configuration import defaults as model_defaults
 from zhiheng.models.configuration import embedding_route
+from zhiheng.models.embeddings import (
+    EmbeddingTransportError,
+    OpenAIEmbeddingsTransport,
+    TransportRoute,
+)
 from zhiheng.query import (
     AgenticBudget,
     AnswerClaim,
@@ -1065,7 +1068,7 @@ class VectorAwareHybridRetriever:
             QueryEmbeddingUnavailableError,
             RuntimeError,
             ValueError,
-            httpx.HTTPError,
+            EmbeddingTransportError,
         ):
             return self._fts_only(
                 session,

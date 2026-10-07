@@ -8,6 +8,7 @@ from openai import OpenAI
 from pydantic import SecretStr
 
 from zhiheng.core.ids import sha256_text
+from zhiheng.models.errors import EmbeddingTransportError
 from zhiheng.secrets import EnvironmentSecretStore, SecretResolver
 
 
@@ -317,13 +318,16 @@ class OpenAIEmbeddingsTransport:
         api_key = self._secret_store.resolve(
             route.secret_ref, provider_id=route.provider_id
         ).get_secret_value()
-        response = httpx.post(
-            f"{route.endpoint_url.rstrip('/')}/embeddings",
-            json={"model": route.model_id, "input": texts},
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=60.0,
-        )
-        response.raise_for_status()
+        try:
+            response = httpx.post(
+                f"{route.endpoint_url.rstrip('/')}/embeddings",
+                json={"model": route.model_id, "input": texts},
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=60.0,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise EmbeddingTransportError("embedding provider request failed") from exc
         data = response.json().get("data")
         if not isinstance(data, list):
             raise ValueError("embedding response format is invalid")

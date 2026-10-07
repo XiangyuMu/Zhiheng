@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import new_id
-from zhiheng.models._transports import discover_provider_models
+from zhiheng.models.embeddings import discover_provider_models
 from zhiheng.secrets import ProviderSecretStore, SecretStatus
 
 ALLOWED_PROVIDER_KINDS = frozenset({"ollama", "openai", "deepseek", "openai-compatible"})
