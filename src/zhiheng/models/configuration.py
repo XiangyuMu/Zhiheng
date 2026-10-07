@@ -135,7 +135,7 @@ def embedding_route(session: Session) -> dict[str, str] | None:
                 """
                 SELECT d.embedding_provider_id AS provider_id,
                        d.embedding_model_id AS model_id,
-                       p.provider_kind, p.policy_revision,
+                       p.provider_kind, p.policy_revision, p.endpoint_url, p.endpoint_origin, p.secret_ref,
                        m.protocol, m.confirmed_capabilities_json,
                        m.enabled AS model_enabled, m.stale AS model_stale,
                        p.enabled AS provider_enabled, p.archived
@@ -167,8 +167,12 @@ def embedding_route(session: Session) -> dict[str, str] | None:
         return None
     return {
         "provider_id": str(row["provider_id"]),
+        "provider_kind": str(row["provider_kind"]),
         "model_id": str(row["model_id"]),
         "revision": str(row["policy_revision"]),
+        "endpoint_url": str(row["endpoint_url"]),
+        "endpoint_origin": str(row["endpoint_origin"]),
+        "secret_ref": str(row["secret_ref"]) if row["secret_ref"] is not None else "",
     }
 
 

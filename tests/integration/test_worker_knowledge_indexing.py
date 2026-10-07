@@ -172,6 +172,9 @@ def test_index_job_marks_unsupported_without_confirmed_embedding_route(tmp_path:
         row = session.execute(
             text("SELECT status, payload_json FROM jobs")
         ).mappings().one()
+        failure = session.execute(
+            text("SELECT error_message FROM job_attempts ORDER BY started_at DESC LIMIT 1")
+        ).scalar_one()
         serving_chunks = session.execute(
             text("SELECT count(*) FROM serving_chunks")
         ).scalar_one()
@@ -183,7 +186,7 @@ def test_index_job_marks_unsupported_without_confirmed_embedding_route(tmp_path:
     assert completed == 1
     assert row["status"] == "unsupported"
     assert payload["failure_code"] == "embedding_model_unavailable"
-    assert "Embedding" in payload["failure_message"] if "failure_message" in payload else True
+    assert "Embedding" in str(failure)
     assert serving_chunks == 1
     assert vectors == 0
 

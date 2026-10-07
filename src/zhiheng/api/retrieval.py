@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import math
 from collections.abc import Generator, Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
@@ -34,6 +35,7 @@ from zhiheng.memory.context import (
 )
 from zhiheng.memory.personal_updates import PersonalUpdateService
 from zhiheng.models import ModelGateway
+from zhiheng.models._transports import OpenAIEmbeddingsTransport, TransportRoute
 from zhiheng.models.configuration import defaults as model_defaults
 from zhiheng.models.configuration import embedding_route
 from zhiheng.query import (
@@ -934,6 +936,39 @@ class _DynamicGatewayAnswerModel:
         ).generate_answer(**kwargs)
 
 
+class ProviderQueryEmbedder:
+    def __init__(self, route: Mapping[str, str], secret_store: Any) -> None:
+        self._route = route
+        self._transport = OpenAIEmbeddingsTransport(secret_store)
+
+    def embed_query(
+        self,
+        query: str,
+        *,
+        model_id: str,
+        model_revision: str,
+        dimension: int,
+        normalize: bool,
+    ) -> Sequence[float]:
+        route = TransportRoute(
+            provider_id=self._route["provider_id"],
+            provider_kind=self._route["provider_kind"],
+            model_id=model_id,
+            endpoint_url=self._route["endpoint_url"],
+            endpoint_origin=self._route["endpoint_origin"],
+            policy_revision=model_revision,
+            secret_ref=self._route["secret_ref"] or None,
+        )
+        vectors = self._transport.embed(route=route, texts=[query])
+        if len(vectors) != 1 or len(vectors[0]) != dimension:
+            raise ValueError("embedding response dimension does not match active generation")
+        values = vectors[0]
+        if normalize:
+            norm = math.sqrt(sum(value * value for value in values)) or 1.0
+            return [value / norm for value in values]
+        return values
+
+
 class VectorAwareHybridRetriever:
     def __init__(
         self,
@@ -992,6 +1027,7 @@ class VectorAwareHybridRetriever:
             if configured_route is not None
             else self._settings.embedding_model_revision
         )
+        self._app_state.embedding_route = configured_route
         generation = self._vector_index.active_generation(
             session,
             model_id=embedding_model_id,
@@ -1040,16 +1076,22 @@ class VectorAwareHybridRetriever:
 
     def _query_embedder(self) -> QueryEmbeddingPort:
         if not hasattr(self._app_state, "query_embedder"):
-            self._app_state.query_embedder = BgeM3QueryEmbedder(
-                model_id=self._settings.embedding_model_id,
-                model_revision=self._settings.embedding_model_revision,
-                dimension=self._settings.embedding_dimension,
-                normalize=self._settings.embedding_normalize,
-                allow_model_download=(
-                    self._settings.external_models_enabled
-                    and self._settings.embedding_model_allow_download
-                ),
-            )
+            route = getattr(self._app_state, "embedding_route", None)
+            if route is not None and hasattr(self._app_state, "provider_secret_store"):
+                self._app_state.query_embedder = ProviderQueryEmbedder(
+                    route, self._app_state.provider_secret_store
+                )
+            else:
+                self._app_state.query_embedder = BgeM3QueryEmbedder(
+                    model_id=self._settings.embedding_model_id,
+                    model_revision=self._settings.embedding_model_revision,
+                    dimension=self._settings.embedding_dimension,
+                    normalize=self._settings.embedding_normalize,
+                    allow_model_download=(
+                        self._settings.external_models_enabled
+                        and self._settings.embedding_model_allow_download
+                    ),
+                )
         return cast(QueryEmbeddingPort, self._app_state.query_embedder)
 
     def _fts_only(

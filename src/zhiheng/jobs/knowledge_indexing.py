@@ -16,9 +16,11 @@ from zhiheng.core.ids import new_id, sha256_text
 from zhiheng.db.session import session_scope
 from zhiheng.jobs.knowledge_contract import job_etag, retry_idempotency_key
 from zhiheng.knowledge import KnowledgeRepository
+from zhiheng.models._transports import OpenAIEmbeddingsTransport, TransportRoute
 from zhiheng.models.configuration import embedding_route
 from zhiheng.retrieval.embeddings import BgeM3QueryEmbedder, QueryEmbeddingUnavailableError
 from zhiheng.retrieval.vector_index import VectorIndexRepository
+from zhiheng.secrets import ProviderSecretStore
 
 KNOWLEDGE_INDEX_JOB_TYPE = "knowledge.index"
 EVENT_INDEX_JOB_TYPE = "event.index"
@@ -80,6 +82,39 @@ class KnowledgeRetryResult:
 class _ServingChunkSnapshot:
     chunk_id: str
     text_hash: str
+
+
+class ProviderTextEmbedder:
+    def __init__(self, route: dict[str, str], secret_store: ProviderSecretStore) -> None:
+        self._route = route
+        self._transport = OpenAIEmbeddingsTransport(secret_store)
+
+    def embed_text(
+        self,
+        text: str,
+        *,
+        model_id: str,
+        model_revision: str,
+        dimension: int,
+        normalize: bool,
+    ) -> Sequence[float]:
+        transport_route = TransportRoute(
+            provider_id=self._route["provider_id"],
+            provider_kind=self._route["provider_kind"],
+            model_id=model_id,
+            endpoint_url=self._route["endpoint_url"],
+            endpoint_origin=self._route["endpoint_origin"],
+            policy_revision=model_revision,
+            secret_ref=self._route["secret_ref"] or None,
+        )
+        vectors = self._transport.embed(route=transport_route, texts=[text])
+        if len(vectors) != 1 or len(vectors[0]) != dimension:
+            raise ValueError("embedding response dimension does not match configured index")
+        values = vectors[0]
+        if normalize:
+            norm = math.sqrt(sum(value * value for value in values)) or 1.0
+            return [value / norm for value in values]
+        return values
 
 
 class BgeM3TextEmbedder:
@@ -590,9 +625,11 @@ class KnowledgeIndexJobExecutor:
         settings: Settings,
         *,
         embedder_factory: Callable[[], TextEmbeddingPort] | None = None,
+        secret_store: ProviderSecretStore | None = None,
     ) -> None:
         self._settings = settings
-        self._embedder_factory = embedder_factory or (lambda: BgeM3TextEmbedder())
+        self._embedder_factory = embedder_factory
+        self._secret_store = secret_store or ProviderSecretStore()
 
     def execute(
         self,
@@ -615,7 +652,12 @@ class KnowledgeIndexJobExecutor:
                     "没有已确认且启用的 Embedding 模型，无法创建向量索引",
                 )
 
-        embedder = self._embedder_factory()
+        if route is not None and self._embedder_factory is None:
+            embedder: TextEmbeddingPort = ProviderTextEmbedder(
+                route, self._secret_store.bind_session_factory(session_factory)
+            )
+        else:
+            embedder = (self._embedder_factory or (lambda: BgeM3TextEmbedder()))()
         embedding_model_id = route["model_id"] if route is not None else self._settings.embedding_model_id
         embedding_model_revision = (
             route["revision"] if route is not None else self._settings.embedding_model_revision

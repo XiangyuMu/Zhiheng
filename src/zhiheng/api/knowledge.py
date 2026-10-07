@@ -1221,10 +1221,10 @@ def knowledge_processing_status(
                   ja.error_class,
                   ja.error_message,
                   ko.lifecycle_status,
-                  EXISTS (
+                  CASE WHEN j.status = 'completed' AND EXISTS (
                     SELECT 1 FROM serving_chunks s
                     WHERE s.source_id = :knowledge_object_id
-                  ) AS searchable
+                  ) THEN 1 ELSE 0 END AS searchable
                 FROM jobs j
                 LEFT JOIN job_attempts ja ON ja.job_id = j.id
                  AND ja.started_at = (
