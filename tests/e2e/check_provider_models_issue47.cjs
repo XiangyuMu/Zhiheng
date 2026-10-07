@@ -16,7 +16,11 @@ fs.mkdirSync(output, { recursive: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
   const page = await context.newPage();
   const errors = [];
+  let defaultPayload = "";
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (request) => {
+    if (request.url().includes("/v1/model-config/defaults")) defaultPayload = request.postData() || "";
+  });
   try {
     await page.goto(`${base}/login`);
     await page.evaluate(async () => {
@@ -56,7 +60,7 @@ fs.mkdirSync(output, { recursive: true });
     const defaultsResponse = page.waitForResponse("**/v1/model-config/defaults");
     await page.getByRole("button", { name: "保存默认模型", exact: true }).click();
     const defaultsResult = await defaultsResponse;
-    if (!defaultsResult.ok()) throw new Error(`default model update failed: ${defaultsResult.status()} ${await defaultsResult.text()}`);
+    if (!defaultsResult.ok()) throw new Error(`default model update failed: ${defaultsResult.status()} ${await defaultsResult.text()} payload=${defaultPayload}`);
     await page.getByText("默认模型已更新").waitFor();
 
     const text = await page.locator("body").innerText();
