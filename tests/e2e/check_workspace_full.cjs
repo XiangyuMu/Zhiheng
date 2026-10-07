@@ -4,7 +4,7 @@
  */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const http = require('node:http');
+const https = require('node:https');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const base = process.argv[2];
@@ -14,7 +14,10 @@ if (!base || !output || !['127.0.0.1', 'localhost'].includes(new URL(base).hostn
 }
 fs.mkdirSync(output, { recursive: true });
 (async () => {
-  const embeddingServer = http.createServer((request, response) => {
+  const embeddingServer = https.createServer({
+    cert: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_CERT),
+    key: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_KEY),
+  }, (request, response) => {
     if (request.method === 'GET' && request.url === '/models') {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ data: [{ id: 'issue17-embedding' }] }));
@@ -32,7 +35,7 @@ fs.mkdirSync(output, { recursive: true });
   });
   await new Promise((resolve) => embeddingServer.listen(0, '127.0.0.1', resolve));
   const embeddingPort = embeddingServer.address().port;
-  const embeddingUrl = `http://127.0.0.1:${embeddingPort}`;
+  const embeddingUrl = `https://127.0.0.1:${embeddingPort}`;
   const browser = await chromium.launch({ headless: true, channel: process.env.BROWSER_CHANNEL || 'chromium' });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
   const page = await context.newPage();
