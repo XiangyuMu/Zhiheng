@@ -391,6 +391,19 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             if relative == "provider-restart/checks.json"
             else {"checks": ["one"], "browserErrors": [], "evidence": {"facts": ["observed"]}},
         )
+    for relative in (
+        "provider-models-issue47/evidence.json",
+        "provider-models-restart/checks.json",
+    ):
+        write_checks(tmp_path, relative, {
+            "checks": [
+                "browser refresh discovers and persists a normalized Provider model",
+                "confirmed default model survives API and Worker restart",
+                "stale model and catalog failure remain visible after refresh",
+                "DeepSeek embedding rejection and unsupported indexing stop polling",
+            ],
+            "browserErrors": [],
+        })
     (tmp_path / "api.log").write_text("api ready")
     (tmp_path / "worker.log").write_text("worker ready")
     (tmp_path / "provider-secrets-issue40" / "provider-secrets.png").write_bytes(b"png")

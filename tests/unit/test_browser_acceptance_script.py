@@ -32,7 +32,7 @@ else
 fi
 """,
     )
-    for command in ("npm", "npx", "curl", "node"):
+    for command in ("npm", "npx", "curl"):
         _write_executable(
             bin_dir / command,
             """#!/usr/bin/env bash
@@ -40,6 +40,18 @@ set -euo pipefail
 exit 0
 """,
         )
+    _write_executable(
+        bin_dir / "node",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == */fake_embedding_provider.cjs ]]; then
+  echo 9999 >"$4"
+  trap 'exit 0' TERM
+  while true; do sleep 0.1; done
+fi
+exit 0
+""",
+    )
     _write_executable(
         bin_dir / "uv",
         """#!/usr/bin/env bash
@@ -56,12 +68,12 @@ case "${1:-}" in
   uvicorn)
     echo api ready
     trap 'echo api shutdown; exit 0' TERM
-    while true; do sleep 1; done
+    while true; do sleep 0.1; done
     ;;
   zhiheng-worker)
     echo worker ready
     trap 'echo worker shutdown; exit 0' TERM
-    while true; do sleep 1; done
+    while true; do sleep 0.1; done
     ;;
 esac
 exit 0
@@ -101,7 +113,7 @@ JSON
         env=env,
         text=True,
         capture_output=True,
-        timeout=10,
+        timeout=30,
     )
 
     assert result.returncode == 0, result.stderr
