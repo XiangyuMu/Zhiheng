@@ -1,3 +1,4 @@
+@import url('/design-tokens.css');
 body { overflow-x: hidden; }
 @import url('/knowledge-agent.css');
 
