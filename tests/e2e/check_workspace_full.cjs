@@ -4,6 +4,7 @@
  */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const http = require('node:http');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const base = process.argv[2];
@@ -13,6 +14,25 @@ if (!base || !output || !['127.0.0.1', 'localhost'].includes(new URL(base).hostn
 }
 fs.mkdirSync(output, { recursive: true });
 (async () => {
+  const embeddingServer = http.createServer((request, response) => {
+    if (request.method === 'GET' && request.url === '/models') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ data: [{ id: 'issue17-embedding' }] }));
+      return;
+    }
+    if (request.method === 'POST' && request.url === '/embeddings') {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({
+        data: [{ embedding: [1, ...Array(1023).fill(0)] }],
+      }));
+      return;
+    }
+    response.writeHead(404, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ error: 'not found' }));
+  });
+  await new Promise((resolve) => embeddingServer.listen(0, '127.0.0.1', resolve));
+  const embeddingPort = embeddingServer.address().port;
+  const embeddingUrl = `http://127.0.0.1:${embeddingPort}`;
   const browser = await chromium.launch({ headless: true, channel: process.env.BROWSER_CHANNEL || 'chromium' });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
   const page = await context.newPage();
@@ -86,6 +106,43 @@ fs.mkdirSync(output, { recursive: true });
     await page.locator('#form button').click();
     await page.waitForURL('**/knowledge-agent#research');
     await page.locator('#library-nav-count').waitFor({ state: 'attached' });
+    const embeddingProvider = await apiJson('/v1/model-config/providers', {
+      method: 'POST',
+      body: {
+        provider_kind: 'openai',
+        display_name: 'Issue 17 Browser Embedding Provider',
+        base_url: embeddingUrl,
+        api_key: 'issue17-browser-embedding-key',
+        enabled: true,
+      },
+    });
+    const embeddingModel = await apiJson(
+      `/v1/model-config/providers/${embeddingProvider.provider_id}/models`,
+      {
+        method: 'POST',
+        body: { model_id: 'issue17-embedding', protocol: 'embeddings' },
+      },
+    );
+    const embeddingConfirmed = await apiJson(
+      `/v1/model-config/providers/${embeddingProvider.provider_id}/models/issue17-embedding`,
+      {
+        method: 'PATCH',
+        headers: { 'If-Match': embeddingProvider.etag },
+        body: { confirmed_capabilities: ['embedding'], protocol: 'embeddings' },
+      },
+    );
+    const defaults = (await apiJson('/v1/model-config/status')).defaults;
+    await apiJson('/v1/model-config/defaults', {
+      method: 'PUT',
+      headers: { 'If-Match': defaults.etag },
+      body: { embedding: { provider_id: embeddingProvider.provider_id, model_id: 'issue17-embedding' } },
+    });
+    evidence.embedding_fixture = {
+      provider_id: embeddingProvider.provider_id,
+      model_id: embeddingModel.model_records.find((item) => item.model_id === 'issue17-embedding')?.model_id,
+      confirmed: embeddingConfirmed.model_records.find((item) => item.model_id === 'issue17-embedding')?.confirmed_capabilities,
+      endpoint: 'loopback',
+    };
     await check('research is the only visible primary workspace', async () => {
       assert(await page.locator('#screen-research').isVisible());
       assert(!await page.locator('#screen-library').isVisible());
@@ -331,5 +388,8 @@ fs.mkdirSync(output, { recursive: true });
     await shot('failure').catch(() => {});
     writeChecks('failed', error);
     throw error;
-  } finally { await browser.close(); }
+  } finally {
+    await browser.close();
+    await new Promise((resolve) => embeddingServer.close(resolve));
+  }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
