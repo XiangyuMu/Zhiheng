@@ -31,9 +31,11 @@ fs.mkdirSync(output, { recursive: true });
   const page = await context.newPage();
   const errors = [];
   let defaultPayload = "";
+  let processingRequests = 0;
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("request", (request) => {
     if (request.url().includes("/v1/model-config/defaults")) defaultPayload = request.postData() || "";
+    if (request.url().includes("/processing")) processingRequests += 1;
   });
   try {
     await page.goto(`${base}/login`);
@@ -155,26 +157,24 @@ fs.mkdirSync(output, { recursive: true });
     }).catch((error) => ({ error: String(error) }));
     assert.match(deepSeekModel.error || "", /422|embedding|protocol/i);
 
-    const imported = await api("/v1/knowledge/imports", {
-      method: "POST",
-      body: {
-        title: `Issue 46 unsupported ${Date.now()}`,
-        text: "缺少已确认 Embedding 模型时仍需保留全文索引。",
-        primary_domain_id: "technology.ai",
-        media_type: "text/plain",
-      },
-    });
-    const importedId = imported.result.knowledge_object_id;
-    let unsupportedTask = null;
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      const tasks = await api("/v1/knowledge/import-tasks?limit=100");
-      unsupportedTask = tasks.items.find((item) => item.source_id === importedId);
-      if (unsupportedTask && ["unsupported", "failed", "succeeded"].includes(unsupportedTask.status)) break;
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-    assert(unsupportedTask, "Issue 46 import task did not become observable");
-    assert.equal(unsupportedTask.status, "unsupported");
-    assert.equal(unsupportedTask.failure.code, "embedding_model_unavailable");
+    const unsupportedTitle = `Issue 46 unsupported ${Date.now()}`;
+    await page.goto(`${base}/knowledge-agent#library`);
+    await page.getByRole("button", { name: /添加资料/ }).first().click();
+    await page.locator("#import-title").fill(unsupportedTitle);
+    await page.locator("#import-text").fill("缺少已确认 Embedding 模型时仍需保留全文检索。");
+    const importResponse = page.waitForResponse("**/v1/knowledge/imports");
+    await page.locator("#import-submit").click();
+    const imported = await importResponse;
+    assert(imported.ok(), `Issue 46 import failed: ${imported.status()}`);
+    const importedPayload = await imported.json();
+    const importedId = importedPayload.result.knowledge_object_id;
+    await page.getByText(/embedding_model_unavailable/).waitFor();
+    const requestsAtTerminal = processingRequests;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(processingRequests, requestsAtTerminal, "unsupported task kept polling");
+    const unsupportedTask = await api(`/v1/knowledge/${importedId}/processing`);
+    assert.equal(unsupportedTask.public_status || unsupportedTask.status, "unsupported");
+    assert.equal(unsupportedTask.error_code || unsupportedTask.failure_code, "embedding_model_unavailable");
     await api(`/v1/knowledge/${importedId}/delete`, { method: "POST" });
     const deepSeekCurrent = (await api("/v1/model-config/providers?include_archived=true"))
       .find((item) => item.provider_id === deepSeek.provider_id);
@@ -198,8 +198,10 @@ fs.mkdirSync(output, { recursive: true });
       catalog_failure_visible: true,
       deepseek_embedding_rejected: true,
       unsupported_index_task: {
-        status: unsupportedTask.status,
-        failure_code: unsupportedTask.failure.code,
+        status: unsupportedTask.public_status || unsupportedTask.status,
+        failure_code: unsupportedTask.error_code || unsupportedTask.failure_code,
+        browser_terminal: true,
+        polling_stopped: true,
       },
       viewports: [{ width: 1440, height: 1080 }, { width: 390, height: 844 }],
     }, null, 2));

@@ -191,6 +191,82 @@ def test_index_job_marks_unsupported_without_confirmed_embedding_route(tmp_path:
     assert vectors == 0
 
 
+@pytest.mark.parametrize("column", ["enabled", "stale"])
+def test_index_job_marks_disabled_or_stale_embedding_route_unsupported(
+    tmp_path: Path, column: str
+) -> None:
+    settings, session_factory = _migrated(tmp_path)
+    text_value = "停用或过期的 Embedding 模型不能创建正式向量索引。"
+    artifacts = stored_text_artifacts(tmp_path, text_value)
+    with session_scope(session_factory) as session:
+        _ingest(session, artifacts, text_value)
+        session.execute(
+            text(
+                """
+                INSERT INTO model_provider_configs (
+                  id, provider_kind, display_name, enabled, policy_json,
+                  model_allowlist_json, endpoint_url, endpoint_origin, policy_revision
+                ) VALUES (
+                  'embedding-provider', 'openai', 'Embedding Provider', 1, '{}',
+                  '[\"text-embedding-a\"]', 'https://api.openai.com/v1',
+                  'https://api.openai.com', 'revision-a'
+                )
+                """
+            )
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO model_provider_models (
+                  id, provider_id, model_id, display_name, source, protocol,
+                  suggested_capabilities_json, confirmed_capabilities_json, enabled, stale
+                ) VALUES (
+                  'embedding-provider-model', 'embedding-provider', 'text-embedding-a',
+                  'text-embedding-a', 'manual', 'embeddings', '[\"embedding\"]',
+                  '[\"embedding\"]', 1, 0
+                )
+                """
+            )
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO model_route_defaults (
+                  id, embedding_provider_id, embedding_model_id, etag
+                ) VALUES (
+                  'embedding-default', 'embedding-provider', 'text-embedding-a',
+                  'defaults:embedding'
+                )
+                """
+            )
+        )
+        disabled_value = 0 if column == "enabled" else 1
+        session.execute(
+            text(
+                f"UPDATE model_provider_models SET {column}=:value "
+                "WHERE id='embedding-provider-model'"
+            ),
+            {"value": disabled_value},
+        )
+
+    assert process_outbox_once(settings) == 1
+    completed = process_knowledge_jobs_once(
+        session_factory,
+        KnowledgeIndexJobExecutor(settings),
+        worker_id="knowledge-worker",
+    )
+    with session_scope(session_factory) as session:
+        row = session.execute(text("SELECT status, payload_json FROM jobs")).mappings().one()
+        vectors = session.execute(
+            text("SELECT count(*) FROM embedding_generations WHERE index_status='active'")
+        ).scalar_one()
+    payload = json.loads(str(row["payload_json"]))
+    assert completed == 1
+    assert row["status"] == "unsupported"
+    assert payload["failure_code"] == "embedding_model_unavailable"
+    assert vectors == 0
+
+
 def test_unknown_outbox_event_fails_explicitly_without_completed_job(tmp_path: Path) -> None:
     settings, session_factory = _migrated(tmp_path)
 
