@@ -23,12 +23,12 @@ fs.mkdirSync(output, { recursive: true });
       const response = await fetch("/auth/bootstrap", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: "issue47-browser", password: "issue47 browser passphrase" }),
+        body: JSON.stringify({ username: "issue17-workspace", password: "issue17 workspace passphrase" }),
       });
       if (!response.ok && response.status !== 409) throw new Error(`bootstrap failed: ${response.status}`);
     });
-    await page.locator("#username").fill("issue47-browser");
-    await page.locator("#password").fill("issue47 browser passphrase");
+    await page.locator("#username").fill("issue17-workspace");
+    await page.locator("#password").fill("issue17 workspace passphrase");
     await page.locator("#form button").click();
     await page.waitForURL("**/knowledge-agent**");
     await page.goto(`${base}/knowledge-agent#settings`);
