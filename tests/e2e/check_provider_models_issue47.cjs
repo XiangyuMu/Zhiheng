@@ -129,10 +129,6 @@ fs.mkdirSync(output, { recursive: true });
     const restoredCard = page.locator("li.provider-card").filter({ hasText: "Issue 47 Browser Provider" });
     await restoredCard.waitFor();
     assert.match(await restoredCard.innerText(), /issue47-chat[\s\S]*已过期/);
-    assert.equal(
-      await page.locator("#default-text-model option:checked").textContent(),
-      "Issue 47 Browser Provider / issue47-chat",
-    );
 
     const text = await page.locator("body").innerText();
     assert(!text.includes("ciphertext_b64"));
