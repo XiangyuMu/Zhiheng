@@ -105,11 +105,7 @@ fs.mkdirSync(output, { recursive: true });
     await api("/v1/model-config/defaults", {
       method: "PUT",
       headers: { "If-Match": currentDefaults.etag },
-      body: {
-        text: initialDefaults.text,
-        multimodal: initialDefaults.multimodal,
-        embedding: initialDefaults.embedding,
-      },
+      body: { text: null, multimodal: null, embedding: null },
     });
     const restoredDefaults = (await api("/v1/model-config/status")).defaults;
     const providers = await api("/v1/model-config/providers?include_archived=true");
