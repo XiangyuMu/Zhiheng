@@ -87,6 +87,9 @@ fs.mkdirSync(output, { recursive: true });
     const card = page.locator("li.provider-card").filter({ hasText: "Issue 47 Browser Provider" });
     await card.getByRole("button", { name: "刷新目录", exact: true }).click();
     await page.getByText("模型目录已刷新").waitFor();
+    const discovered = card.locator(".model-record").filter({ hasText: "issue47-discovered" });
+    await discovered.waitFor();
+    assert.match(await discovered.innerText(), /issue47-discovered[\s\S]*discovered/);
     await card.getByPlaceholder("手动添加模型 ID").fill("issue47-chat");
     await card.getByRole("button", { name: "添加模型", exact: true }).click();
     await page.getByText("模型 issue47-chat 已添加").waitFor();
@@ -188,6 +191,12 @@ fs.mkdirSync(output, { recursive: true });
 
     await page.screenshot({ path: path.join(output, "provider-models-issue47.png"), fullPage: true });
     fs.writeFileSync(path.join(output, "evidence.json"), JSON.stringify({
+      checks: [
+        "browser refresh discovers and persists a normalized Provider model",
+        "confirmed default model survives API and Worker restart",
+        "stale model and catalog failure remain visible after refresh",
+        "DeepSeek embedding rejection and unsupported indexing stop polling",
+      ],
       provider: "Issue 47 Browser Provider",
       model: "issue47-chat",
       initial_text_capability_confirmed: false,
@@ -206,15 +215,6 @@ fs.mkdirSync(output, { recursive: true });
       viewports: [{ width: 1440, height: 1080 }, { width: 390, height: 844 }],
     }, null, 2));
 
-    // Leave the shared acceptance database in its pre-test route state so the
-    // following restart and provider-secret scenarios remain independent.
-    const currentDefaults = (await api("/v1/model-config/status")).defaults;
-    await api("/v1/model-config/defaults", {
-      method: "PUT",
-      headers: { "If-Match": currentDefaults.etag },
-      body: { text: null, multimodal: null, embedding: null },
-    });
-    const restoredDefaults = (await api("/v1/model-config/status")).defaults;
     const providers = await api("/v1/model-config/providers?include_archived=true");
     const provider = providers.find((item) => item.display_name === "Issue 47 Browser Provider");
     if (provider && process.env.ZHIHENG_ISSUE47_KEEP !== "1") {
@@ -225,7 +225,7 @@ fs.mkdirSync(output, { recursive: true });
       });
     }
     fs.writeFileSync(path.join(output, "cleanup.json"), JSON.stringify({
-      restored_defaults: restoredDefaults,
+      defaults_preserved_for_restart: true,
       archived_provider_id: provider?.provider_id || null,
       kept_for_restart: process.env.ZHIHENG_ISSUE47_KEEP === "1",
     }, null, 2));

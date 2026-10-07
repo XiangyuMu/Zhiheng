@@ -61,7 +61,10 @@ fs.mkdirSync(output, { recursive: true });
     assert.equal(model.enabled, false);
     assert.equal(provider.catalog_status, "failed");
     const defaults = (await api("/v1/model-config/status")).defaults;
-    assert.equal(defaults.text, null);
+    assert.deepEqual(defaults.text, {
+      provider_id: provider.provider_id,
+      model_id: "issue47-chat",
+    });
 
     const card = page.locator("li.provider-card").filter({ hasText: "Issue 47 Browser Provider" });
     await card.waitFor();
@@ -74,13 +77,17 @@ fs.mkdirSync(output, { recursive: true });
       headers: { "If-Match": provider.etag },
       body: { enabled: false, archived: true },
     });
+    const currentDefaults = (await api("/v1/model-config/status")).defaults;
+    await api("/v1/model-config/defaults", {
+      method: "PUT",
+      headers: { "If-Match": currentDefaults.etag },
+      body: { text: null, multimodal: null, embedding: null },
+    });
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({
       status: "passed",
       checks: [
-        "catalog model records survive API and Worker restart",
-        "confirmed capabilities and stale disabled state survive restart",
-        "provider catalog failure state remains visible after restart",
-        "narrow settings page remains usable after restart",
+        "confirmed default model survives API and Worker restart",
+        "stale model and catalog failure remain visible after refresh",
       ],
       provider_id: provider.provider_id,
       model_id: model.model_id,
@@ -89,6 +96,7 @@ fs.mkdirSync(output, { recursive: true });
       enabled: model.enabled,
       catalog_status: provider.catalog_status,
       default_text: defaults.text,
+      default_text_survived_restart: true,
     }, null, 2));
   } finally {
     await browser.close();

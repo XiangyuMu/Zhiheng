@@ -121,6 +121,13 @@ PROVIDER_RESTART_CHECKS = {
     "search": "knowledge search remains available after Provider restart",
 }
 
+PROVIDER_MODEL_CHECKS = {
+    "catalog": "browser refresh discovers and persists a normalized Provider model",
+    "defaults": "confirmed default model survives API and Worker restart",
+    "stale_failure": "stale model and catalog failure remain visible after refresh",
+    "embedding": "DeepSeek embedding rejection and unsupported indexing stop polling",
+}
+
 EXPECTED_CHECKS = {
     "workspace_full": Path("workspace-full/checks.json"),
     "relations": Path("relations/checks.json"),
@@ -136,6 +143,8 @@ EXPECTED_CHECKS = {
     "provider_secrets_issue40": Path("provider-secrets-issue40/checks.json"),
     "provider_migration_restart": Path("provider-migration-restart/checks.json"),
     "provider_restart": Path("provider-restart/checks.json"),
+    "provider_models_issue47": Path("provider-models-issue47/evidence.json"),
+    "provider_models_restart_issue47": Path("provider-models-restart/checks.json"),
 }
 
 
@@ -383,6 +392,27 @@ def validate_checks(output: Path) -> dict[str, Any]:
                             result["error"] = "Provider recovery evidence has invalid outcomes"
                             results[name] = result
                             continue
+                if name in {"provider_models_issue47", "provider_models_restart_issue47"}:
+                    required = (
+                        PROVIDER_MODEL_CHECKS
+                        if name == "provider_models_issue47"
+                        else {
+                            "restart": PROVIDER_MODEL_CHECKS["defaults"],
+                            "stale": PROVIDER_MODEL_CHECKS["stale_failure"],
+                        }
+                    )
+                    missing_models = [
+                        label
+                        for label in required.values()
+                        if not any(isinstance(item, str) and item == label for item in checks)
+                    ]
+                    if missing_models:
+                        result["error"] = (
+                            "required Provider model checks missing: "
+                            f"{missing_models}"
+                        )
+                        results[name] = result
+                        continue
                 if name == "context_prompts_issue8":
                     required_issue8 = list(ISSUE8_CHECKS.values())
                     missing_issue8 = [
