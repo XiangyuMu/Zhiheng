@@ -129,7 +129,30 @@ run_stage "issue14-writes" node tests/e2e/check_issue14_writes.cjs "${BASE_URL}"
 run_stage "import-failures" node tests/e2e/check_import_failures.cjs "${BASE_URL}" "${OUTPUT_DIR}/import-failures"
 run_stage "issue10-matrix" node tests/e2e/check_issue10_matrix.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue10-matrix"
 run_stage "provider-secrets-issue40" node tests/e2e/check_provider_secrets_issue40.cjs "${BASE_URL}" "${OUTPUT_DIR}/provider-secrets-issue40"
-run_stage "provider-models-issue47" node tests/e2e/check_provider_models_issue47.cjs "${BASE_URL}" "${OUTPUT_DIR}/provider-models-issue47"
+run_stage "provider-models-issue47" env ZHIHENG_ISSUE47_KEEP=1 node tests/e2e/check_provider_models_issue47.cjs "${BASE_URL}" "${OUTPUT_DIR}/provider-models-issue47"
+
+CURRENT_STAGE="provider-models-restart"
+kill "${WORKER_PID}" 2>/dev/null || true
+kill "${API_PID}" 2>/dev/null || true
+wait "${WORKER_PID}" 2>/dev/null || true
+wait "${API_PID}" 2>/dev/null || true
+API_PID=""
+WORKER_PID=""
+uv run uvicorn zhiheng.api.main:app --host 127.0.0.1 --port "${PORT}" >"${OUTPUT_DIR}/api-provider-models-restart.log" 2>&1 &
+API_PID=$!
+for _ in $(seq 1 60); do
+  if ! kill -0 "${API_PID}" 2>/dev/null; then
+    cat "${OUTPUT_DIR}/api-provider-models-restart.log" >&2
+    exit 1
+  fi
+  if curl --fail --silent "http://127.0.0.1:${PORT}/healthz" >/dev/null; then break; fi
+  sleep 1
+done
+curl --fail --silent "http://127.0.0.1:${PORT}/healthz" >/dev/null
+uv run zhiheng-worker --role worker --idle-seconds 1 >"${OUTPUT_DIR}/worker-provider-models-restart.log" 2>&1 &
+WORKER_PID=$!
+sleep 1
+run_stage "provider-models-restart" node tests/e2e/check_provider_models_restart_issue47.cjs "${BASE_URL}" "${OUTPUT_DIR}/provider-models-restart"
 
 CURRENT_STAGE="provider-restart"
 unset ZHIHENG_PRIVATE_ISSUE40_LEGACY

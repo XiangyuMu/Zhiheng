@@ -158,7 +158,7 @@ fs.mkdirSync(output, { recursive: true });
     const restoredDefaults = (await api("/v1/model-config/status")).defaults;
     const providers = await api("/v1/model-config/providers?include_archived=true");
     const provider = providers.find((item) => item.display_name === "Issue 47 Browser Provider");
-    if (provider) {
+    if (provider && process.env.ZHIHENG_ISSUE47_KEEP !== "1") {
       await api(`/v1/model-config/providers/${provider.provider_id}`, {
         method: "PATCH",
         headers: { "If-Match": provider.etag },
@@ -168,6 +168,7 @@ fs.mkdirSync(output, { recursive: true });
     fs.writeFileSync(path.join(output, "cleanup.json"), JSON.stringify({
       restored_defaults: restoredDefaults,
       archived_provider_id: provider?.provider_id || null,
+      kept_for_restart: process.env.ZHIHENG_ISSUE47_KEEP === "1",
     }, null, 2));
   } finally {
     await new Promise((resolve) => providerServer.close(resolve));
