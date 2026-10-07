@@ -139,7 +139,7 @@ fs.mkdirSync(output, { recursive: true });
     await page.setViewportSize({ width: 390, height: 844 });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     assert(overflow <= 1, `settings page overflows narrow viewport by ${overflow}px`);
-    const refreshButton = card.getByRole("button", { name: "刷新目录", exact: true });
+    const refreshButton = refreshedCard.getByRole("button", { name: "刷新目录", exact: true });
     await page.keyboard.press("Tab");
     await refreshButton.focus();
     assert.equal(await refreshButton.evaluate((element) => document.activeElement === element), true);
