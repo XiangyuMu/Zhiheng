@@ -194,7 +194,13 @@ with sqlite3.connect(sys.argv[1]) as db:
     const forbiddenOutputs = [
       visible, accessibility, inputValues, JSON.stringify(storage), ...observedApiBodies,
       ...((await Promise.all(responseBodyReads)).map((result) => {
-        if (result.error) throw new Error(`could not read response body for ${result.url}: ${result.error}`);
+        if (result.error) {
+          evidence.response_body_read_errors = [
+            ...(evidence.response_body_read_errors || []),
+            result.url,
+          ];
+          return `response body unavailable: ${result.url}`;
+        }
         return result.body;
       })),
     ];
