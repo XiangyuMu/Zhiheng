@@ -121,13 +121,20 @@ fs.mkdirSync(output, { recursive: true });
     await page.waitForFunction(() => document.querySelector("#default-text-model")?.selectedOptions[0]?.textContent === "Issue 47 Browser Provider / issue47-chat");
 
     assert.match(await card.innerText(), /chat_completions/);
+    const staleRefresh = page.waitForResponse("**/v1/model-config/providers/*/models/refresh");
     await card.getByRole("button", { name: "刷新目录", exact: true }).click();
+    assert((await staleRefresh).ok());
     await page.getByText("模型目录已刷新").waitFor();
-    assert.match(await card.innerText(), /issue47-chat[\s\S]*已过期/);
+    await page.reload();
+    const refreshedCard = page.locator("li.provider-card").filter({ hasText: "Issue 47 Browser Provider" });
+    await refreshedCard.waitFor();
+    assert.match(await refreshedCard.innerText(), /issue47-chat[\s\S]*已过期/);
     catalogFailure = true;
-    await card.getByRole("button", { name: "刷新目录", exact: true }).click();
+    const failedRefresh = page.waitForResponse("**/v1/model-config/providers/*/models/refresh");
+    await refreshedCard.getByRole("button", { name: "刷新目录", exact: true }).click();
+    assert.equal((await failedRefresh).status(), 502);
     await page.getByText(/目录刷新失败：/).waitFor();
-    assert.match(await card.innerText(), /issue47-chat[\s\S]*已过期/);
+    assert.match(await refreshedCard.innerText(), /issue47-chat[\s\S]*已过期/);
 
     await page.setViewportSize({ width: 390, height: 844 });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
