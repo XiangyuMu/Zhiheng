@@ -135,7 +135,8 @@ def embedding_route(session: Session) -> dict[str, str] | None:
                 """
                 SELECT d.embedding_provider_id AS provider_id,
                        d.embedding_model_id AS model_id,
-                       p.provider_kind, p.policy_revision, p.endpoint_url, p.endpoint_origin, p.secret_ref,
+                       p.provider_kind, p.policy_revision, p.endpoint_url,
+                       p.endpoint_origin, p.secret_ref,
                        m.protocol, m.confirmed_capabilities_json,
                        m.enabled AS model_enabled, m.stale AS model_stale,
                        p.enabled AS provider_enabled, p.archived
