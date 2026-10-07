@@ -1222,7 +1222,12 @@ function renderModelProviders(providers) {
   $("model-config-list").replaceChildren(...providers.map((provider) => {
     const li = node("li", undefined, "provider-card");
     const title = node("strong", `${provider.display_name || provider.provider_id} · ${provider.provider_kind}`);
-    const detail = node("p", `${provider.enabled ? "已启用" : "已停用"}${provider.archived ? " · 已归档" : ""} · 文本：${(provider.text_models || provider.models || []).join("、") || "未配置"} · 多模态：${(provider.multimodal_models || []).join("、") || "未配置"}`);
+    const catalog = (provider.model_records || []).map((record) => {
+      const state = record.stale ? "已过期" : (record.enabled ? "已启用" : "已停用");
+      const capabilities = (record.confirmed_capabilities || []).join("/") || "未确认能力";
+      return `${record.model_id}（${capabilities} · ${state} · ${record.source} / ${record.protocol}）`;
+    }).join("、");
+    const detail = node("p", `${provider.enabled ? "已启用" : "已停用"}${provider.archived ? " · 已归档" : ""} · 文本：${(provider.text_models || provider.models || []).join("、") || "未配置"} · 多模态：${(provider.multimodal_models || []).join("、") || "未配置"} · 目录：${catalog || "未加载"}`);
     const health = node("p", null);
     const secret = node("span", `密钥：${providerSecretLabel(provider)}`);
     const reveal = action("显示脱敏状态", () => temporarilyShowSecretStatus(provider, secret, reveal), "quiet small");

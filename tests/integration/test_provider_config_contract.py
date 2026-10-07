@@ -8,6 +8,7 @@ import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -45,6 +46,20 @@ def _client(
                   'provider-test', 'openai-compatible', 'Test', 1, '{}',
                   'env:ZHIHENG_PRIVATE_TEST_SECRET', '["model-a"]',
                   'https://models.example.test/v1', 'https://models.example.test', 'rev-1'
+                )
+                """
+            )
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO model_provider_models (
+                  id, provider_id, model_id, display_name, source, protocol,
+                  suggested_capabilities_json, confirmed_capabilities_json,
+                  enabled, stale
+                ) VALUES (
+                  'provider-test-model', 'provider-test', 'model-a', 'model-a',
+                  'legacy', 'chat_completions', '[\"text\"]', '[\"text\"]', 1, 0
                 )
                 """
             )
@@ -163,6 +178,11 @@ def test_provider_management_supports_modal_defaults_health_and_archive(
     assert provider["text_models"] == ["deepseek-chat"]
     assert provider["multimodal_models"] == ["deepseek-vision"]
     assert provider["capabilities"] == {"text": True, "multimodal": True}
+    assert [record["model_id"] for record in provider["model_records"]] == [
+        "deepseek-chat",
+        "deepseek-vision",
+    ]
+    assert all(record["source"] == "manual" for record in provider["model_records"])
     assert provider["secret_status"] == "configured"
     assert "secret_ref" not in json.dumps(provider)
     assert provider["policy_revision"] == provider["etag"]
@@ -211,6 +231,71 @@ def test_provider_management_supports_modal_defaults_health_and_archive(
         ).status_code
         == 200
     )
+
+
+def test_clearing_legacy_model_lists_disables_normalized_records(tmp_path: Path) -> None:
+    client = _empty_client(tmp_path)
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "provider-clear-models"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Clear models",
+            "base_url": "https://models.example.test/v1",
+            "text_models": ["model-to-clear"],
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200
+    provider = created.json()
+    updated = client.patch(
+        f"/v1/model-config/providers/{provider['provider_id']}",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": provider["etag"],
+            "Idempotency-Key": "provider-clear-models-patch",
+        },
+        json={"text_models": [], "multimodal_models": []},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["model_records"][0]["stale"] is True
+    assert updated.json()["model_records"][0]["enabled"] is False
+    assert updated.json()["text_models"] == []
+
+
+def test_connectivity_rejects_stale_normalized_model(tmp_path: Path) -> None:
+    client = _empty_client(tmp_path)
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "provider-stale-connectivity"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Stale connectivity",
+            "base_url": "https://models.example.test/v1",
+            "text_models": ["stale-model"],
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200
+    provider_id = created.json()["provider_id"]
+    app = cast(FastAPI, client.app)
+    with app.state.session_factory() as session:
+        session.execute(
+            text(
+                "UPDATE model_provider_models SET stale=1, enabled=0 "
+                "WHERE provider_id=:provider_id"
+            ),
+            {"provider_id": provider_id},
+        )
+        session.commit()
+    response = client.post(
+        f"/v1/model-config/providers/{provider_id}/connectivity-test",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "stale-connectivity"},
+        params={"model_id": "stale-model"},
+    )
+    assert response.status_code == 422
 
 
 def test_provider_secret_refs_are_validated_and_never_echoed(tmp_path: Path) -> None:

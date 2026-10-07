@@ -210,6 +210,13 @@ def create_provider(
             ),
             {"provider_id": provider_id, "secret_ref": stored_secret.secret_ref},
         )
+    _sync_model_records(
+        session,
+        provider_id=provider_id,
+        text_models=text_models,
+        multimodal_models=multimodal_models,
+        source="manual",
+    )
     row = _provider_row(session, provider_id)
     if row is None:
         raise RuntimeError("provider was not created")
@@ -338,6 +345,13 @@ def update_provider(
     ))
     if updated_result.rowcount != 1:
         raise RuntimeError("provider configuration changed; refresh and retry")
+    _sync_model_records(
+        session,
+        provider_id=provider_id,
+        text_models=text_models,
+        multimodal_models=multimodal_models,
+        source="manual",
+    )
     if rotated_secret is not None:
         _record_secret_lifecycle_audit(
             session,
@@ -551,10 +565,18 @@ def connectivity_test(
         raise ValueError("provider is archived")
     if not bool(row.get("enabled", False)):
         raise ValueError("provider is disabled")
-    selected_model = model_id or _first_model(row)
+    records = _model_records(session, provider_id)
+    available_records = [record for record in records if record["enabled"] and not record["stale"]]
+    selected_model = model_id or (
+        str(available_records[0]["model_id"]) if available_records else None
+    )
     if not selected_model:
         raise ValueError("provider has no configured model")
-    allowed = set(_models_from_row(row, "text") + _models_from_row(row, "multimodal"))
+    allowed = {
+        str(record["model_id"])
+        for record in available_records
+        if cast(list[object], record["confirmed_capabilities"])
+    }
     if selected_model not in allowed:
         raise ValueError("model is not allowlisted for provider")
     secret_status = _secret_status(row, secret_store=secret_store, session=session)
@@ -800,8 +822,9 @@ def _provider_response(
     secret_store: ProviderSecretStore | None = None,
     session: Session | None = None,
 ) -> dict[str, object]:
-    text_models = _models_from_row(row, "text")
-    multimodal_models = _models_from_row(row, "multimodal")
+    records = _model_records(session, str(row["id"])) if session is not None else []
+    text_models = _models_from_records(records, "text")
+    multimodal_models = _models_from_records(records, "multimodal")
     secret_status = _secret_status(row, secret_store=secret_store, session=session)
     return {
         "provider_id": str(row["id"]),
@@ -816,6 +839,7 @@ def _provider_response(
         "multimodal_models": multimodal_models,
         "models": list(dict.fromkeys((*text_models, *multimodal_models))),
         "capabilities": {"text": bool(text_models), "multimodal": bool(multimodal_models)},
+        "model_records": records,
         "secret_configured": secret_status.configured,
         "secret_status": secret_status.status,
         "secret_fingerprint": secret_status.fingerprint,
@@ -897,6 +921,140 @@ def _models_from_row(row: Mapping[str, Any], modality: str) -> list[str]:
     return models
 
 
+def _model_records(session: Session | None, provider_id: str) -> list[dict[str, object]]:
+    if session is None:
+        return []
+    rows = (
+        session.execute(
+            text(
+                """
+                SELECT id, model_id, display_name, source, protocol,
+                       suggested_capabilities_json, confirmed_capabilities_json,
+                       enabled, stale, last_seen_at, created_at, updated_at
+                FROM model_provider_models
+                WHERE provider_id = :provider_id
+                ORDER BY model_id ASC
+                """
+            ),
+            {"provider_id": provider_id},
+        )
+        .mappings()
+        .all()
+    )
+    return [
+        {
+            "id": str(row["id"]),
+            "model_id": str(row["model_id"]),
+            "display_name": str(row["display_name"] or row["model_id"]),
+            "source": str(row["source"]),
+            "protocol": str(row["protocol"]),
+            "suggested_capabilities": _json_list(row["suggested_capabilities_json"]),
+            "confirmed_capabilities": _json_list(row["confirmed_capabilities_json"]),
+            "enabled": bool(row["enabled"]),
+            "stale": bool(row["stale"]),
+            "last_seen_at": _iso_timestamp(row.get("last_seen_at")),
+            "created_at": _iso_timestamp(row.get("created_at")),
+            "updated_at": _iso_timestamp(row.get("updated_at")),
+        }
+        for row in rows
+    ]
+
+
+def _models_from_records(records: list[dict[str, object]], modality: str) -> list[str]:
+    return [
+        str(record["model_id"])
+        for record in records
+        if record["enabled"]
+        and not record["stale"]
+        and modality in cast(list[object], record["confirmed_capabilities"])
+    ]
+
+
+def _sync_model_records(
+    session: Session,
+    *,
+    provider_id: str,
+    text_models: list[str],
+    multimodal_models: list[str],
+    source: str,
+) -> None:
+    """Keep the normalized model catalog aligned with legacy provider fields."""
+    provider_kind = session.execute(
+        text("SELECT provider_kind FROM model_provider_configs WHERE id=:provider_id"),
+        {"provider_id": provider_id},
+    ).scalar_one_or_none()
+    protocol = "responses" if provider_kind == "openai" else "chat_completions"
+    existing = {
+        str(row["model_id"]): dict(row)
+        for row in session.execute(
+            text(
+                "SELECT model_id, confirmed_capabilities_json "
+                "FROM model_provider_models WHERE provider_id = :provider_id"
+            ),
+            {"provider_id": provider_id},
+        ).mappings()
+    }
+    desired = list(dict.fromkeys((*text_models, *multimodal_models)))
+    for model_id in desired:
+        suggested = [
+            cap
+            for cap, models in (("text", text_models), ("multimodal", multimodal_models))
+            if model_id in models
+        ]
+        current = existing.get(model_id)
+        confirmed = _json_list(current["confirmed_capabilities_json"]) if current else suggested
+        if current:
+            session.execute(
+                text(
+                    "UPDATE model_provider_models SET suggested_capabilities_json=:suggested, "
+                    "protocol=:protocol, enabled=1, stale=0, updated_at=CURRENT_TIMESTAMP "
+                    "WHERE provider_id=:provider_id AND model_id=:model_id"
+                ),
+                {
+                    "provider_id": provider_id,
+                    "model_id": model_id,
+                    "suggested": json.dumps(suggested),
+                    "protocol": protocol,
+                },
+            )
+        else:
+            session.execute(
+                text(
+                    "INSERT INTO model_provider_models "
+                    "(id, provider_id, model_id, display_name, source, protocol, "
+                    "suggested_capabilities_json, confirmed_capabilities_json, "
+                    "enabled, stale, last_seen_at) "
+                    "VALUES (:id, :provider_id, :model_id, :display_name, :source, :protocol, "
+                    ":suggested, :confirmed, 1, 0, CURRENT_TIMESTAMP)"
+                ),
+                {
+                    "id": new_id(),
+                    "provider_id": provider_id,
+                    "model_id": model_id,
+                    "display_name": model_id,
+                    "source": source,
+                    "protocol": protocol,
+                    "suggested": json.dumps(suggested),
+                    "confirmed": json.dumps(confirmed),
+                },
+            )
+    params: dict[str, object] = {"provider_id": provider_id}
+    if desired:
+        placeholders = ",".join(f":model_{index}" for index in range(len(desired)))
+        params.update({f"model_{index}": model for index, model in enumerate(desired)})
+        model_filter = f"model_id NOT IN ({placeholders})"
+    else:
+        model_filter = "1=1"
+    session.execute(
+        text(
+            "UPDATE model_provider_models SET stale=1, enabled=0, "
+            "updated_at=CURRENT_TIMESTAMP "
+            f"WHERE provider_id=:provider_id AND {model_filter}"
+        ),
+        params,
+    )
+
+
 def _json_list(value: object) -> list[str]:
     if isinstance(value, str):
         try:
@@ -945,7 +1103,8 @@ def _validate_route(
     row = _provider_row(session, provider_id)
     if row is None or bool(row.get("archived", False)) or not bool(row["enabled"]):
         raise ValueError(f"{modality} route provider is unavailable")
-    models = _models_from_row(row, "text" if modality == "text" else "multimodal")
+    records = _model_records(session, provider_id)
+    models = _models_from_records(records, "text" if modality == "text" else "multimodal")
     if model_id not in models:
         raise ValueError(f"{modality} route model is not allowlisted")
 
