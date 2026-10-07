@@ -1,6 +1,6 @@
 /* Issue #47: browser acceptance for Provider model catalog management. */
 const assert = require("node:assert/strict");
-const https = require("node:https");
+const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
 const { chromium } = require("playwright");
@@ -14,11 +14,8 @@ fs.mkdirSync(output, { recursive: true });
 
 (async () => {
   let catalogFailure = false;
-  const providerServer = https.createServer({
-    key: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_KEY),
-    cert: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_CERT),
-  }, (request, response) => {
-    if (request.url === "/models" && !catalogFailure) {
+  const providerServer = http.createServer((request, response) => {
+    if (request.url === "/api/tags" && !catalogFailure) {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ data: [{ id: "issue47-discovered" }] }));
       return;
@@ -28,7 +25,7 @@ fs.mkdirSync(output, { recursive: true });
   });
   await new Promise((resolve) => providerServer.listen(0, "127.0.0.1", resolve));
   const providerPort = providerServer.address().port;
-  const providerUrl = `https://127.0.0.1:${providerPort}`;
+  const providerUrl = `http://127.0.0.1:${providerPort}`;
   const browser = await chromium.launch({ headless: true, channel: "chromium" });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
   const page = await context.newPage();
@@ -78,7 +75,7 @@ fs.mkdirSync(output, { recursive: true });
     const initialDefaults = (await api("/v1/model-config/status")).defaults;
 
     await page.getByRole("button", { name: "新增 Provider", exact: true }).click();
-    await page.locator("#provider-kind").selectOption("openai-compatible");
+    await page.locator("#provider-kind").selectOption("ollama");
     await page.locator("#provider-name").fill("Issue 47 Browser Provider");
     await page.locator("#provider-base-url").fill(providerUrl);
     await page.locator("#provider-enabled").check();
