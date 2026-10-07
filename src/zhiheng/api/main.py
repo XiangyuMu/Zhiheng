@@ -471,7 +471,6 @@ def create_app(
         session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
         csrf_header: str | None = Header(default=None, alias="X-CSRF-Token"),
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-        if_match: str | None = Header(default=None, alias="If-Match"),
     ) -> dict[str, object]:
         operation_key = _require_model_mutation(
             request, session, session_service, session_token, csrf_header, idempotency_key
@@ -645,6 +644,8 @@ def create_app(
         )
         cached = _model_config_idempotent_result(app, operation_key, fingerprint)
         if cached is not None:
+            response.headers["ETag"] = str(cached.get("etag", ""))
+            response.headers["Cache-Control"] = "no-store"
             return dict(cached)
         try:
             result = update_provider_model(

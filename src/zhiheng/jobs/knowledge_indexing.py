@@ -16,6 +16,7 @@ from zhiheng.core.ids import new_id, sha256_text
 from zhiheng.db.session import session_scope
 from zhiheng.jobs.knowledge_contract import job_etag, retry_idempotency_key
 from zhiheng.knowledge import KnowledgeRepository
+from zhiheng.models.configuration import embedding_route
 from zhiheng.retrieval.embeddings import BgeM3QueryEmbedder, QueryEmbeddingUnavailableError
 from zhiheng.retrieval.vector_index import VectorIndexRepository
 
@@ -46,6 +47,14 @@ class ClaimedKnowledgeJob:
     attempts: int
     lease_owner: str | None = None
     attempt_id: str | None = None
+
+
+class EmbeddingCapabilityUnavailable(RuntimeError):
+    """The configured embedding route cannot perform vector work."""
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
 
 
 class KnowledgeJobExecutorPort(Protocol):
@@ -327,6 +336,7 @@ class KnowledgeJobRepository:
         *,
         code: str,
         message: str,
+        failure_stage: str = "parse",
     ) -> bool:
         """Finish a job as an explicit capability failure without retrying it."""
         if job.lease_owner is None or job.attempt_id is None:
@@ -339,7 +349,7 @@ class KnowledgeJobRepository:
         payload.update(
             {
                 "failure_code": code,
-                "failure_stage": "parse",
+                "failure_stage": failure_stage,
                 "retryable": False,
             }
         )
@@ -598,13 +608,23 @@ class KnowledgeIndexJobExecutor:
                 self._materialize_event_chunk(session, job)
             fts_indexed = KnowledgeRepository().rebuild_fts_index(session)
             serving_chunks = self._serving_chunks(session)
+            route = embedding_route(session)
+            if route is None and self._settings.environment != "test":
+                raise EmbeddingCapabilityUnavailable(
+                    "embedding_model_unavailable",
+                    "没有已确认且启用的 Embedding 模型，无法创建向量索引",
+                )
 
         embedder = self._embedder_factory()
+        embedding_model_id = route["model_id"] if route is not None else self._settings.embedding_model_id
+        embedding_model_revision = (
+            route["revision"] if route is not None else self._settings.embedding_model_revision
+        )
         embeddings_by_chunk_id = {
             chunk.chunk_id: embedder.embed_text(
                 self._chunk_text_by_id(session_factory, chunk.chunk_id),
-                model_id=self._settings.embedding_model_id,
-                model_revision=self._settings.embedding_model_revision,
+                model_id=embedding_model_id,
+                model_revision=embedding_model_revision,
                 dimension=self._settings.embedding_dimension,
                 normalize=self._settings.embedding_normalize,
             )
@@ -617,8 +637,8 @@ class KnowledgeIndexJobExecutor:
             vector_repository = VectorIndexRepository()
             generation_id = vector_repository.create_generation(
                 session,
-                model_id=self._settings.embedding_model_id,
-                model_revision=self._settings.embedding_model_revision,
+                model_id=embedding_model_id,
+                model_revision=embedding_model_revision,
                 dimension=self._settings.embedding_dimension,
                 purpose=self._settings.embedding_purpose,
                 normalize=self._settings.embedding_normalize,
@@ -794,6 +814,18 @@ def process_knowledge_jobs_once(
             executor_for_job = executor
         try:
             result = executor_for_job.execute(session_factory, job)
+        except EmbeddingCapabilityUnavailable as exc:
+            with session_scope(session_factory) as session:
+                completed += int(
+                    job_repository.mark_unsupported(
+                        session,
+                        job,
+                        code=exc.code,
+                        message=str(exc),
+                        failure_stage="index",
+                    )
+                )
+            continue
         except Exception as exc:
             with session_scope(session_factory) as session:
                 job_repository.fail(session, job, exc=exc)

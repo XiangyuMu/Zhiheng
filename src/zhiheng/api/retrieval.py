@@ -35,6 +35,7 @@ from zhiheng.memory.context import (
 from zhiheng.memory.personal_updates import PersonalUpdateService
 from zhiheng.models import ModelGateway
 from zhiheng.models.configuration import defaults as model_defaults
+from zhiheng.models.configuration import embedding_route
 from zhiheng.query import (
     AgenticBudget,
     AnswerClaim,
@@ -971,10 +972,30 @@ class VectorAwareHybridRetriever:
                 rrf_k=rrf_k,
             )
 
+        configured_route = embedding_route(session)
+        if configured_route is None and self._settings.environment != "test":
+            return self._fts_only(
+                session,
+                query,
+                release_context=release_context,
+                limit=limit,
+                overfetch_factor=overfetch_factor,
+                rrf_k=rrf_k,
+            )
+        embedding_model_id = (
+            configured_route["model_id"]
+            if configured_route is not None
+            else self._settings.embedding_model_id
+        )
+        embedding_model_revision = (
+            configured_route["revision"]
+            if configured_route is not None
+            else self._settings.embedding_model_revision
+        )
         generation = self._vector_index.active_generation(
             session,
-            model_id=self._settings.embedding_model_id,
-            model_revision=self._settings.embedding_model_revision,
+            model_id=embedding_model_id,
+            model_revision=embedding_model_revision,
             dimension=self._settings.embedding_dimension,
             purpose=self._settings.embedding_purpose,
         )

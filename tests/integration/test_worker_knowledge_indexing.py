@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -149,6 +150,42 @@ def test_knowledge_index_job_rebuilds_fts_and_active_vector_generation(
     assert active_generation["built_count"] == 1
     assert embedding_count == 1
     assert hits
+
+
+def test_index_job_marks_unsupported_without_confirmed_embedding_route(tmp_path: Path) -> None:
+    settings, session_factory = _migrated(tmp_path)
+    production = settings.model_copy(update={"environment": "production"})
+    text_value = "全文检索在缺少向量模型时仍应可用。"
+    artifacts = stored_text_artifacts(tmp_path, text_value)
+
+    with session_scope(session_factory) as session:
+        _ingest(session, artifacts, text_value)
+
+    assert process_outbox_once(production) == 1
+    completed = process_knowledge_jobs_once(
+        session_factory,
+        KnowledgeIndexJobExecutor(production),
+        worker_id="knowledge-worker",
+    )
+
+    with session_scope(session_factory) as session:
+        row = session.execute(
+            text("SELECT status, payload_json FROM jobs")
+        ).mappings().one()
+        serving_chunks = session.execute(
+            text("SELECT count(*) FROM serving_chunks")
+        ).scalar_one()
+        vectors = session.execute(
+            text("SELECT count(*) FROM embedding_generations WHERE index_status='active'")
+        ).scalar_one()
+
+    payload = json.loads(str(row["payload_json"]))
+    assert completed == 1
+    assert row["status"] == "unsupported"
+    assert payload["failure_code"] == "embedding_model_unavailable"
+    assert "Embedding" in payload["failure_message"] if "failure_message" in payload else True
+    assert serving_chunks == 1
+    assert vectors == 0
 
 
 def test_unknown_outbox_event_fails_explicitly_without_completed_job(tmp_path: Path) -> None:

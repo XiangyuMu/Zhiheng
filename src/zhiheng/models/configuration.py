@@ -89,6 +89,7 @@ def defaults(session: Session) -> dict[str, object]:
     for provider_key, model_key in (
         ("text_provider_id", "text_model_id"),
         ("multimodal_provider_id", "multimodal_model_id"),
+        ("embedding_provider_id", "embedding_model_id"),
     ):
         if (route_row[provider_key] is None) != (route_row[model_key] is None):
             raise RuntimeError("model defaults contain an incomplete route")
@@ -120,6 +121,55 @@ def defaults(session: Session) -> dict[str, object]:
             "model_id": str(route_row["embedding_model_id"]),
         }
     return result
+
+
+def embedding_route(session: Session) -> dict[str, str] | None:
+    """Return the currently eligible embedding route, or ``None``.
+
+    Eligibility is checked at use time so disabling or staling a model
+    immediately prevents new vector work while leaving FTS available.
+    """
+    row = (
+        session.execute(
+            text(
+                """
+                SELECT d.embedding_provider_id AS provider_id,
+                       d.embedding_model_id AS model_id,
+                       p.provider_kind, p.policy_revision,
+                       m.protocol, m.confirmed_capabilities_json,
+                       m.enabled AS model_enabled, m.stale AS model_stale,
+                       p.enabled AS provider_enabled, p.archived
+                FROM model_route_defaults d
+                JOIN model_provider_configs p ON p.id = d.embedding_provider_id
+                JOIN model_provider_models m
+                  ON m.provider_id = d.embedding_provider_id
+                 AND m.model_id = d.embedding_model_id
+                ORDER BY d.updated_at DESC, d.id DESC
+                LIMIT 1
+                """
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        return None
+    capabilities = _json_list(row["confirmed_capabilities_json"])
+    if (
+        row["provider_kind"] == "deepseek"
+        or row["protocol"] != "embeddings"
+        or "embedding" not in capabilities
+        or not bool(row["model_enabled"])
+        or bool(row["model_stale"])
+        or not bool(row["provider_enabled"])
+        or bool(row["archived"])
+    ):
+        return None
+    return {
+        "provider_id": str(row["provider_id"]),
+        "model_id": str(row["model_id"]),
+        "revision": str(row["policy_revision"]),
+    }
 
 
 def list_providers(
