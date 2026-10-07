@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -297,6 +298,33 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         result["error"] = (
                             "required provider restart checks/evidence missing: "
                             f"{missing_provider}"
+                        )
+                        results[name] = result
+                        continue
+                    knowledge_access = evidence_payload.get("knowledge_access")
+                    if (
+                        not isinstance(knowledge_access, dict)
+                        or any(
+                            not isinstance(knowledge_access.get(key), str)
+                            or not knowledge_access[key].strip()
+                            for key in ("knowledge_object_id", "knowledge_version_id")
+                        )
+                        or knowledge_access.get("known_import_matched") is not True
+                        or knowledge_access.get("reader_text_contains_original") is not True
+                        or any(
+                            knowledge_access.get(key) != 200
+                            for key in ("search_status", "reader_status", "original_status")
+                        )
+                        or not re.fullmatch(
+                            r"[0-9a-f]{64}", str(knowledge_access.get("content_sha256", ""))
+                        )
+                        or any(
+                            knowledge_access.get(key) != knowledge_access["content_sha256"]
+                            for key in ("original_source_sha256", "original_content_sha256")
+                        )
+                    ):
+                        result["error"] = (
+                            "provider restart knowledge access evidence is incomplete or invalid"
                         )
                         results[name] = result
                         continue

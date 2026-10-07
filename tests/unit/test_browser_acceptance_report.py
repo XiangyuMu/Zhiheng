@@ -224,6 +224,21 @@ def complete_provider_secret_checks() -> dict[str, object]:
     }
 
 
+def complete_restart_knowledge_access() -> dict[str, object]:
+    return {
+        "knowledge_object_id": "imported-object",
+        "knowledge_version_id": "imported-version",
+        "known_import_matched": True,
+        "search_status": 200,
+        "reader_status": 200,
+        "original_status": 200,
+        "reader_text_contains_original": True,
+        "content_sha256": "a" * 64,
+        "original_source_sha256": "a" * 64,
+        "original_content_sha256": "a" * 64,
+    }
+
+
 def complete_provider_migration_restart_checks() -> dict[str, object]:
     return {
         "checks": PROVIDER_MIGRATION_RESTART_CHECKS,
@@ -234,6 +249,7 @@ def complete_provider_migration_restart_checks() -> dict[str, object]:
             "post_reentry_status": "configured",
             "connectivity": "succeeded",
             "search_status": 200,
+            "knowledge_access": complete_restart_knowledge_access(),
             "legacy_environment_removed": True,
             "model_call": "succeeded",
             "leakage": {
@@ -266,6 +282,7 @@ def complete_provider_restart_checks() -> dict[str, object]:
             "post_reentry_status": "configured",
             "connectivity": "succeeded",
             "search_status": 200,
+            "knowledge_access": complete_restart_knowledge_access(),
             "leakage": {
                 "page": True,
                 "accessibility": True,
@@ -559,3 +576,42 @@ def test_import_failures_require_all_scenarios_and_evidence(
     result = reporter().validate_checks(tmp_path)["import_failures"]
     assert result["status"] == "failed"
     assert "missing" in result["error"]
+
+
+@pytest.mark.parametrize("migration", [True, False])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("knowledge_access", None),
+        ("knowledge_access", {}),
+        ("knowledge_object_id", ""),
+        ("knowledge_version_id", None),
+        ("known_import_matched", False),
+        ("search_status", 500),
+        ("reader_status", 404),
+        ("original_status", 404),
+        ("reader_text_contains_original", False),
+        ("content_sha256", "not-a-hash"),
+        ("original_source_sha256", "b" * 64),
+        ("original_content_sha256", "b" * 64),
+    ],
+)
+def test_provider_restart_requires_imported_source_read_evidence(
+    tmp_path: Path, migration: bool, field: str, value: object
+) -> None:
+    payload: Any = (
+        complete_provider_migration_restart_checks()
+        if migration
+        else complete_provider_restart_checks()
+    )
+    if field == "knowledge_access":
+        payload["evidence"][field] = value
+    else:
+        payload["evidence"]["knowledge_access"][field] = value
+    name = "provider_migration_restart" if migration else "provider_restart"
+    directory = name.replace("_", "-")
+    write_checks(tmp_path, f"{directory}/checks.json", payload)
+    (tmp_path / directory / payload["evidence"]["leakage"]["screenshot"]).write_bytes(b"png")
+    result = reporter().validate_checks(tmp_path)[name]
+    assert result["status"] == "failed"
+    assert result["error"] == "provider restart knowledge access evidence is incomplete or invalid"

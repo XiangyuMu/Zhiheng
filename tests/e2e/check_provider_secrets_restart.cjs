@@ -1,6 +1,7 @@
 /* Issue #40: prove migrated Provider state survives real API/Worker restart. */
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const { createHash } = require("node:crypto");
 const https = require("node:https");
 const { chromium } = require("playwright");
 const { execFileSync } = require("node:child_process");
@@ -22,6 +23,59 @@ fs.mkdirSync(output, { recursive: true });
   let providerServer;
   const evidence = {};
   const responseBodyReads = [];
+  async function verifyImportedKnowledge() {
+    const root = process.env.ZHIHENG_ACCEPTANCE_OUTPUT || output;
+    const baseline = JSON.parse(fs.readFileSync(`${root}/workspace-full/checks.json`, "utf8"))
+      .evidence.importQualification;
+    assert(baseline?.knowledge_object_id && baseline?.knowledge_version_id,
+      "workspace import qualification evidence must exist before restart");
+    const search = await page.evaluate(async () => {
+      const response = await fetch("/v1/knowledge/search?" + new URLSearchParams({
+        q: "中文全文检索 正式视图 原文核验", limit: "5",
+      }), { credentials: "same-origin" });
+      return { status: response.status, body: await response.json() };
+    });
+    assert.equal(search.status, 200);
+    const item = search.body.items.find((entry) => entry.knowledge_object_id === baseline.knowledge_object_id);
+    assert(item, "the imported item must remain searchable after restart");
+    assert.equal(item.title, "中文检索研究记录");
+    assert.equal(item.lifecycle_status, "formal_current");
+    assert.equal(item.knowledge_version_id, baseline.knowledge_version_id);
+    assert.equal(item.content_sha256, baseline.content_sha256);
+    const { reader, original } = await page.evaluate(async (objectId) => {
+      const response = await fetch(`/v1/knowledge/${objectId}/reader`, { credentials: "same-origin" });
+      const source = await fetch(`/v1/knowledge/${objectId}/export?format=original`, {
+        credentials: "same-origin",
+      });
+      return {
+        reader: { status: response.status, body: await response.json() },
+        original: { status: source.status, bytes: Array.from(new Uint8Array(await source.arrayBuffer())) },
+      };
+    }, item.knowledge_object_id);
+    assert.equal(reader.status, 200);
+    assert.equal(reader.body.knowledge_object_id, baseline.knowledge_object_id);
+    assert.equal(reader.body.knowledge_version_id, baseline.knowledge_version_id);
+    assert.equal(reader.body.source.sha256, baseline.original_source_sha256);
+    assert(reader.body.text.includes("中文全文检索必须回查正式视图"));
+    assert(reader.body.text.includes("所有结论都需要回到原文核验"));
+    assert.equal(original.status, 200);
+    const originalHash = createHash("sha256").update(Buffer.from(original.bytes)).digest("hex");
+    assert.equal(originalHash, baseline.original_source_sha256);
+    const access = {
+      knowledge_object_id: item.knowledge_object_id,
+      knowledge_version_id: item.knowledge_version_id,
+      known_import_matched: true,
+      search_status: search.status,
+      reader_status: reader.status,
+      original_status: original.status,
+      reader_text_contains_original: true,
+      content_sha256: item.content_sha256,
+      original_source_sha256: reader.body.source.sha256,
+      original_content_sha256: originalHash,
+    };
+    evidence.knowledge_access = access;
+    return access;
+  }
   async function leakageEvidence(keys, logNames, apiBodies) {
     const root = process.env.ZHIHENG_ACCEPTANCE_OUTPUT || output;
     const logs = logNames.map((name) => {
@@ -203,8 +257,7 @@ with sqlite3.connect(sys.argv[1]) as db:
         return { status: response.status, body: await response.json() };
       }, { providerId: provider.provider_id });
       assert.equal(audit.status, 200, JSON.stringify(audit.body));
-      const search = await page.evaluate(async () => (await fetch("/v1/knowledge/search?sort=updated_desc")).status);
-      assert.equal(search, 200);
+      const knowledgeAccess = await verifyImportedKnowledge();
       const leakage = await leakageEvidence(
         ["issue40-browser-legacy-key"],
         ["api-restart.log", "worker-restart.log"],
@@ -217,12 +270,14 @@ with sqlite3.connect(sys.argv[1]) as db:
         "knowledge search remains available after migration restart",
       ], evidence: { provider_id: provider.provider_id, pre_reentry_status: provider.secret_status,
         post_reentry_status: updated.body.secret_status, connectivity: connectivity.body.status,
-        search_status: search, model_call: "succeeded", model_answer: answer.body.answer,
+        search_status: knowledgeAccess.search_status, knowledge_access: knowledgeAccess,
+        model_call: "succeeded", model_answer: answer.body.answer,
         legacy_environment_removed: true, leakage } }, null, 2));
       return;
     }
     assert.equal(provider.secret_status, "unavailable");
     evidence.pre_reentry_status = provider.secret_status;
+    const knowledgeAccess = await verifyImportedKnowledge();
     const repaired = await page.evaluate(async ({ providerId, etag, csrf, providerUrl }) => {
       const response = await fetch(`/v1/model-config/providers/${providerId}`, {
         method: "PATCH", credentials: "same-origin",
@@ -247,11 +302,6 @@ with sqlite3.connect(sys.argv[1]) as db:
     assert.equal(connectivity.body.status, "succeeded");
     evidence.connectivity = connectivity.body.status;
     assert.deepEqual(receivedAuth.at(-1), "Bearer sk-issue40-reentry-key");
-    const search = await page.evaluate(async () => {
-      const response = await fetch("/v1/knowledge/search?sort=updated_desc", { credentials: "same-origin" });
-      return response.status;
-    });
-    assert.equal(search, 200);
     const leakage = await leakageEvidence(
       ["sk-issue40-reentry-key"],
       ["api-restart-2.log", "worker-restart-2.log"],
@@ -266,7 +316,7 @@ with sqlite3.connect(sys.argv[1]) as db:
       "knowledge search remains available after Provider restart",
     ], evidence: { provider_id: provider.provider_id, pre_reentry_status: "unavailable",
       post_reentry_status: repaired.body.secret_status, connectivity: connectivity.body.status,
-      search_status: search, leakage } }, null, 2));
+      search_status: knowledgeAccess.search_status, knowledge_access: knowledgeAccess, leakage } }, null, 2));
   } catch (error) {
     fs.writeFileSync(`${output}/checks.json`, JSON.stringify({ status: "failed", error: error.stack || String(error), evidence }, null, 2));
     throw error;
