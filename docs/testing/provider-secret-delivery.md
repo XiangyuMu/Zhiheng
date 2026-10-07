@@ -2,16 +2,17 @@
 
 Baseline: `80aae00b3c57fa61b08e83bc689592d762e0a132` on `main`.
 
-This feature is not delivered yet. Each issue is implemented, reviewed against
-its starting commit, and committed before proceeding to the next issue.
+The Provider secret feature is delivered on `main` at commit
+`366fd26143efdc7cd7c86524840d0f65524a37d8`. Each issue was implemented and
+reviewed against its starting commit before the final clean-checkout gate.
 
 | Issue | Observable delivery | Depends on | Current evidence |
 | --- | --- | --- | --- |
-| #36 | Settings input → encrypted persistence → restart/status → protected dispatch | None | In progress |
-| #37 | Settings rotation/deletion/connectivity → concurrency and dispatch fencing | #36 | Pending |
-| #38 | Settings migration from legacy env reference → independent encrypted secret | #36 | Pending |
-| #39 | Real backup/restore → retrieval survives lost key → credential re-entry | #36, #37 | Pending |
-| #40 | Complete browser workflow and same-commit quality/evidence gates | #37, #38, #39 | Pending |
+| #36 | Settings input → encrypted persistence → restart/status → protected dispatch | None | Passed; final evidence |
+| #37 | Settings rotation/deletion/connectivity → concurrency and dispatch fencing | #36 | Passed; final evidence |
+| #38 | Settings migration from legacy env reference → independent encrypted secret | #36 | Passed; final evidence |
+| #39 | Real backup/restore → retrieval survives lost key → credential re-entry | #36, #37 | Passed; final evidence |
+| #40 | Complete browser workflow and same-commit quality/evidence gates | #37, #38, #39 | Passed; final evidence |
 
 ## Agreed test boundaries
 
@@ -41,10 +42,13 @@ prepared request must recheck the current credential version before dispatch.
 
 ## Final evidence
 
-Record the final commit, clean-checkout migration, compile, Ruff, full Mypy,
-complete naturally finished pytest, real API/Worker browser workflow, real
-restic recovery, and both Standards and Spec review reports. Keep results from
-older commits labeled historical. #34 evidence does not prove this feature.
+The final report is stored outside the checkout at
+`/Users/muxy/Projects/Zhiheng-delivery-evidence/366fd26b-delivery/report.json`.
+It records clean-checkout migration, compile, Ruff, full Mypy, naturally
+finished pytest (911 passed in 624.34 seconds), real API/Worker browser
+workflow, real restic recovery, and extraction. The browser report and pytest
+evidence both bind to the same SHA. Older reports, including #34 evidence,
+remain historical and do not prove this feature.
 
 ## Dependency references
 
