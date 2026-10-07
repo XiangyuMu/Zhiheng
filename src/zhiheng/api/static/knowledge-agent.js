@@ -1218,27 +1218,69 @@ function providerSecretLabel(provider) {
   if (provider.secret_status === "missing") return "未配置";
   return "无法使用，请检查本机密钥环或重新设置密钥";
 }
+function modelCapabilityEditor(provider, record) {
+  const wrapper = node("div", undefined, "model-record");
+  const heading = node("div", undefined, "model-record-heading");
+  heading.append(node("strong", record.model_id));
+  const state = record.stale ? "已过期" : (record.enabled ? "已启用" : "已停用");
+  heading.append(node("span", `${state} · ${record.source} · ${record.protocol}`, "muted"));
+  const controls = node("div", undefined, "model-capability-controls");
+  const confirmed = new Set(record.confirmed_capabilities || []);
+  const checks = ["text", "multimodal", "embedding"].map((capability) => {
+    const label = node("label", undefined, "checkbox-line");
+    const input = document.createElement("input"); input.type = "checkbox";
+    input.checked = confirmed.has(capability); input.dataset.capability = capability;
+    label.append(input, document.createTextNode(capability)); controls.append(label); return input;
+  });
+  const save = action("保存能力", async () => {
+    save.disabled = true;
+    try {
+      const result = await modelMutation(
+        `/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/models/${encodeURIComponent(record.model_id)}`,
+        "PATCH", { confirmed_capabilities: checks.filter((input) => input.checked).map((input) => input.dataset.capability) }, provider.etag,
+      );
+      showToast(`模型 ${record.model_id} 能力已更新`); state.modelProviders = result; await loadModelConfig();
+    } catch (error) { showToast(readableError(error)); save.disabled = false; }
+  }, "quiet small");
+  controls.append(save); wrapper.append(heading, controls); return wrapper;
+}
 function renderModelProviders(providers) {
   $("model-config-list").replaceChildren(...providers.map((provider) => {
     const li = node("li", undefined, "provider-card");
     const title = node("strong", `${provider.display_name || provider.provider_id} · ${provider.provider_kind}`);
-    const catalog = (provider.model_records || []).map((record) => {
-      const state = record.stale ? "已过期" : (record.enabled ? "已启用" : "已停用");
-      const capabilities = (record.confirmed_capabilities || []).join("/") || "未确认能力";
-      return `${record.model_id}（${capabilities} · ${state} · ${record.source} / ${record.protocol}）`;
-    }).join("、");
-    const detail = node("p", `${provider.enabled ? "已启用" : "已停用"}${provider.archived ? " · 已归档" : ""} · 文本：${(provider.text_models || provider.models || []).join("、") || "未配置"} · 多模态：${(provider.multimodal_models || []).join("、") || "未配置"} · 目录：${catalog || "未加载"}`);
+    const catalog = node("div", undefined, "model-catalog");
+    (provider.model_records || []).forEach((record) => catalog.append(modelCapabilityEditor(provider, record)));
+    const add = node("div", undefined, "model-add-row");
+    const modelInput = document.createElement("input"); modelInput.placeholder = "手动添加模型 ID";
+    modelInput.setAttribute("aria-label", `为 ${provider.display_name} 添加模型`);
+    const protocol = document.createElement("select"); protocol.setAttribute("aria-label", "模型协议");
+    ["chat_completions", "responses", "embeddings"].forEach((value) => { const option = node("option", value); option.value = value; protocol.append(option); });
+    const addButton = action("添加模型", async () => {
+      const model_id = modelInput.value.trim(); if (!model_id) { showToast("请输入模型 ID"); return; }
+      addButton.disabled = true;
+      try {
+        await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/models`, "POST", { model_id, protocol: protocol.value }, null);
+        showToast(`模型 ${model_id} 已添加`); modelInput.value = ""; await loadModelConfig();
+      } catch (error) { showToast(readableError(error)); addButton.disabled = false; }
+    }, "quiet small");
+    const refresh = action("刷新目录", async () => {
+      refresh.disabled = true; showToast("正在刷新模型目录…");
+      try { await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/models/refresh`, "POST", {}, null); showToast("模型目录已刷新"); await loadModelConfig(); }
+      catch (error) { showToast(`目录刷新失败：${readableError(error)}`); refresh.disabled = false; }
+    }, "quiet small");
+    add.append(modelInput, protocol, addButton, refresh);
+    const detail = node("p", `${provider.enabled ? "已启用" : "已停用"}${provider.archived ? " · 已归档" : ""} · 目录：${(provider.model_records || []).length ? "已加载" : "未加载"}`);
     const health = node("p", null);
     const secret = node("span", `密钥：${providerSecretLabel(provider)}`);
     const reveal = action("显示脱敏状态", () => temporarilyShowSecretStatus(provider, secret, reveal), "quiet small");
     reveal.setAttribute("aria-label", "临时显示 API Key 脱敏状态");
     health.append(secret, document.createTextNode(" · "), reveal, document.createTextNode(` · 状态：${provider.health_status || "未知"}${provider.health_error ? ` · ${provider.health_error}` : ""}`));
     const actions = node("div", undefined, "provider-actions");
-  actions.append(action("编辑", () => openProviderEditor(provider)), action(provider.enabled ? "停用" : "启用", () => toggleProvider(provider)), action("测试连接", () => testProvider(provider)));
-  if (provider.secret_configured) actions.append(action("删除密钥", () => deleteProviderSecret(provider), "danger"));
-  if (provider.secret_source === "legacy_env") actions.append(action("迁移到本地加密", () => migrateProviderSecret(provider), "quiet"));
-  actions.append(action("归档", () => archiveProvider(provider), "danger"));
-    li.append(title, detail, health, actions); return li;
+    actions.append(action("编辑", () => openProviderEditor(provider)), action(provider.enabled ? "停用" : "启用", () => toggleProvider(provider)), action("测试连接", () => testProvider(provider)));
+    if (provider.secret_configured) actions.append(action("删除密钥", () => deleteProviderSecret(provider), "danger"));
+    if (provider.secret_source === "legacy_env") actions.append(action("迁移到本地加密", () => migrateProviderSecret(provider), "quiet"));
+    actions.append(action("归档", () => archiveProvider(provider), "danger"));
+    li.append(title, detail, catalog, add, health, actions); return li;
   }));
 }
 function temporarilyShowSecretStatus(provider, target, button) {
@@ -1258,14 +1300,18 @@ function temporarilyShowSecretStatus(provider, target, button) {
   state.secretTimers.set(provider.provider_id, timer);
 }
 function renderModelDefaults(providers, selected) {
-  const text = $("default-text-model"); const multimodal = $("default-multimodal-model");
-  text.replaceChildren(node("option", "未选择")); multimodal.replaceChildren(node("option", "未选择"));
+  const text = $("default-text-model"); const multimodal = $("default-multimodal-model"); const embedding = $("default-embedding-model");
+  text.replaceChildren(node("option", "未选择")); multimodal.replaceChildren(node("option", "未选择")); embedding.replaceChildren(node("option", "未选择"));
   providers.filter((p) => p.enabled && !p.archived).forEach((provider) => {
-    (provider.text_models || provider.models || []).forEach((model) => { const option = node("option", `${provider.display_name} / ${model}`); option.value = `${provider.provider_id}\n${model}`; text.append(option); });
-    (provider.multimodal_models || []).forEach((model) => { const option = node("option", `${provider.display_name} / ${model}`); option.value = `${provider.provider_id}\n${model}`; multimodal.append(option); });
+    (provider.model_records || []).filter((record) => record.enabled && !record.stale).forEach((record) => {
+      const caps = new Set(record.confirmed_capabilities || []);
+      const add = (select, capability) => { if (!caps.has(capability)) return; const option = node("option", `${provider.display_name} / ${record.model_id}`); option.value = `${provider.provider_id}\n${record.model_id}`; select.append(option); };
+      add(text, "text"); add(multimodal, "multimodal"); add(embedding, "embedding");
+    });
   });
   if (selected.text) text.value = `${selected.text.provider_id}\n${selected.text.model_id}`;
   if (selected.multimodal) multimodal.value = `${selected.multimodal.provider_id}\n${selected.multimodal.model_id}`;
+  if (selected.embedding) embedding.value = `${selected.embedding.provider_id}\n${selected.embedding.model_id}`;
 }
 function parseRoute(value) { if (!value) return null; const [provider_id, model_id] = value.split("\n"); return { provider_id, model_id }; }
 function modelMutation(url, method, payload, etag) {
@@ -1303,7 +1349,7 @@ $("load-model-config").addEventListener("click", () => busy($("load-model-config
 $("add-model-provider").addEventListener("click", () => openProviderEditor(null));
 $("cancel-provider").addEventListener("click", closeProviderEditor);
 $("model-provider-form").addEventListener("submit", saveProvider);
-$("save-model-defaults").addEventListener("click", async () => { try { const result = await modelMutation("/v1/model-config/defaults", "PUT", { text: parseRoute($("default-text-model").value), multimodal: parseRoute($("default-multimodal-model").value) }, state.modelDefaults.etag); state.modelDefaults = result; showToast("默认模型已更新"); } catch (error) { showToast(readableError(error)); } });
+$("save-model-defaults").addEventListener("click", async () => { try { const result = await modelMutation("/v1/model-config/defaults", "PUT", { text: parseRoute($("default-text-model").value), multimodal: parseRoute($("default-multimodal-model").value), embedding: parseRoute($("default-embedding-model").value) }, state.modelDefaults.etag); state.modelDefaults = result; showToast("默认模型已更新"); } catch (error) { showToast(readableError(error)); } });
 $("refresh-model-audits").addEventListener("click", () => busy($("refresh-model-audits"), "刷新中…", loadModelConfig));
 $("apply-model-audit-filters").addEventListener("click", () => busy($("apply-model-audit-filters"), "读取中…", loadModelAudits));
 $("logout").addEventListener("click", () => busy($("logout"), "正在退出…", async () => { await mutate("/auth/logout", {}); location.assign("/login"); }));
