@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 
+import httpx
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -982,6 +983,8 @@ class VectorAwareHybridRetriever:
         self._app_state = app_state
         self._hybrid = hybrid or HybridRetriever()
         self._vector_index = vector_index or VectorIndexRepository()
+        self._query_embedder_cache_key: tuple[str, ...] | None = None
+        self._query_embedder_cache: QueryEmbeddingPort | None = None
 
     def search(
         self,
@@ -1054,7 +1057,16 @@ class VectorAwareHybridRetriever:
                 dimension=generation.dimension,
                 normalize=generation.normalize,
             )
-        except (ImportError, QueryEmbeddingUnavailableError, RuntimeError, ValueError):
+        except (
+            ImportError,
+            KeyError,
+            OSError,
+            PermissionError,
+            QueryEmbeddingUnavailableError,
+            RuntimeError,
+            ValueError,
+            httpx.HTTPError,
+        ):
             return self._fts_only(
                 session,
                 query,
@@ -1075,24 +1087,56 @@ class VectorAwareHybridRetriever:
         )
 
     def _query_embedder(self) -> QueryEmbeddingPort:
-        if not hasattr(self._app_state, "query_embedder"):
-            route = getattr(self._app_state, "embedding_route", None)
-            if route is not None and hasattr(self._app_state, "provider_secret_store"):
-                self._app_state.query_embedder = ProviderQueryEmbedder(
+        route = getattr(self._app_state, "embedding_route", None)
+        cache_key: tuple[str, ...]
+        if route is not None and hasattr(self._app_state, "provider_secret_store"):
+            cache_key = (
+                "provider",
+                str(route.get("provider_id", "")),
+                str(route.get("provider_kind", "")),
+                str(route.get("model_id", "")),
+                str(route.get("revision", "")),
+                str(route.get("endpoint_url", "")),
+                str(route.get("endpoint_origin", "")),
+                str(route.get("secret_ref", "")),
+            )
+            if self._query_embedder_cache_key != cache_key:
+                self._query_embedder_cache = ProviderQueryEmbedder(
                     route, self._app_state.provider_secret_store
                 )
-            else:
-                self._app_state.query_embedder = BgeM3QueryEmbedder(
-                    model_id=self._settings.embedding_model_id,
-                    model_revision=self._settings.embedding_model_revision,
-                    dimension=self._settings.embedding_dimension,
-                    normalize=self._settings.embedding_normalize,
-                    allow_model_download=(
-                        self._settings.external_models_enabled
-                        and self._settings.embedding_model_allow_download
-                    ),
-                )
-        return cast(QueryEmbeddingPort, self._app_state.query_embedder)
+                self._query_embedder_cache_key = cache_key
+                self._app_state.query_embedder = self._query_embedder_cache
+            return cast(QueryEmbeddingPort, self._query_embedder_cache)
+
+        # Tests and embedding integrations may inject a query embedder. Preserve
+        # that explicit seam when no persisted Provider route is active.
+        injected = getattr(self._app_state, "query_embedder", None)
+        if injected is not None and self._query_embedder_cache is None:
+            return cast(QueryEmbeddingPort, injected)
+
+        cache_key = (
+            "local",
+            self._settings.embedding_model_id,
+            self._settings.embedding_model_revision,
+            str(self._settings.embedding_dimension),
+            str(self._settings.embedding_normalize),
+            str(self._settings.external_models_enabled),
+            str(self._settings.embedding_model_allow_download),
+        )
+        if self._query_embedder_cache_key != cache_key:
+            self._query_embedder_cache = BgeM3QueryEmbedder(
+                model_id=self._settings.embedding_model_id,
+                model_revision=self._settings.embedding_model_revision,
+                dimension=self._settings.embedding_dimension,
+                normalize=self._settings.embedding_normalize,
+                allow_model_download=(
+                    self._settings.external_models_enabled
+                    and self._settings.embedding_model_allow_download
+                ),
+            )
+            self._query_embedder_cache_key = cache_key
+            self._app_state.query_embedder = self._query_embedder_cache
+        return cast(QueryEmbeddingPort, self._query_embedder_cache)
 
     def _fts_only(
         self,

@@ -6,7 +6,9 @@ import types
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import Mock
 
+import httpx
 from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
@@ -15,11 +17,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.knowledge_helpers import stored_text_artifacts
+from zhiheng.api import retrieval as retrieval_module
 from zhiheng.api.main import create_app
 from zhiheng.api.retrieval import VectorAwareHybridRetriever
 from zhiheng.core.config import Settings
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
 from zhiheng.evaluation.search_fixtures import mark_formal_knowledge_indexed
+from zhiheng.evolution.releases import ReleaseContext
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import StoredTextArtifacts
 from zhiheng.retrieval import VectorIndexRepository
@@ -326,6 +330,117 @@ def test_api_default_bge_embedder_cannot_download_and_degrades_to_fts(
     assert observed["model_id"] == "BAAI/bge-m3"
     assert observed["kwargs"]["local_files_only"] is True
     assert all({"retriever": "vector", "rank": 1} not in row for row in ranks)
+
+
+def test_provider_query_embedder_cache_rebuilds_when_route_changes(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    settings = _settings(tmp_path)
+    routes = [
+        {
+            "provider_id": "provider-a",
+            "provider_kind": "openai",
+            "model_id": "text-embedding-a",
+            "revision": "revision-a",
+            "endpoint_url": "https://api.openai.com",
+            "endpoint_origin": "https://api.openai.com",
+            "secret_ref": "secret-a",
+        },
+        {
+            "provider_id": "provider-b",
+            "provider_kind": "openai",
+            "model_id": "text-embedding-b",
+            "revision": "revision-b",
+            "endpoint_url": "https://api.openai.com",
+            "endpoint_origin": "https://api.openai.com",
+            "secret_ref": "secret-b",
+        },
+    ]
+    app_state = types.SimpleNamespace(
+        embedding_route=routes[0], provider_secret_store=object()
+    )
+    created: list[dict[str, str]] = []
+
+    class _FakeProviderEmbedder:
+        def __init__(self, route: dict[str, str], secret_store: Any) -> None:
+            del secret_store
+            created.append(route)
+
+    monkeypatch.setattr(retrieval_module, "ProviderQueryEmbedder", _FakeProviderEmbedder)
+    retriever = VectorAwareHybridRetriever(settings=settings, app_state=app_state)
+
+    first = retriever._query_embedder()
+    assert retriever._query_embedder() is first
+    app_state.embedding_route = routes[1]
+    second = retriever._query_embedder()
+
+    assert second is not first
+    assert [route["model_id"] for route in created] == [
+        "text-embedding-a",
+        "text-embedding-b",
+    ]
+
+
+def test_provider_query_embedding_http_error_falls_back_to_fts(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    settings = _settings(tmp_path)
+    route = {
+        "provider_id": "provider-a",
+        "provider_kind": "openai",
+        "model_id": "text-embedding-a",
+        "revision": "revision-a",
+        "endpoint_url": "https://api.openai.com",
+        "endpoint_origin": "https://api.openai.com",
+        "secret_ref": "secret-a",
+    }
+
+    class _Generation:
+        id = "generation-1"
+        model_id = "text-embedding-a"
+        model_revision = "revision-a"
+        dimension = 3
+        normalize = True
+
+    class _Index:
+        def active_generation(self, *args: Any, **kwargs: Any) -> _Generation:
+            del args, kwargs
+            return _Generation()
+
+    class _Hybrid:
+        def search(self, *args: Any, **kwargs: Any) -> str:
+            del args, kwargs
+            return "fts-result"
+
+    app_state = types.SimpleNamespace(
+        embedding_route=route, provider_secret_store=object()
+    )
+    retriever = VectorAwareHybridRetriever(
+        settings=settings,
+        app_state=app_state,
+        hybrid=cast(Any, _Hybrid()),
+        vector_index=cast(Any, _Index()),
+    )
+    monkeypatch.setattr(retrieval_module, "embedding_route", lambda session: route)
+
+    class _ErrorEmbedder:
+        def embed_query(self, *args: Any, **kwargs: Any) -> Sequence[float]:
+            del args, kwargs
+            raise httpx.HTTPError("provider unavailable")
+
+    monkeypatch.setattr(retriever, "_query_embedder", lambda: _ErrorEmbedder())
+    session = Mock()
+
+    result = retriever.search(
+        session,
+        "query",
+        release_context=cast(
+            ReleaseContext, types.SimpleNamespace(release_id="stable")
+        ),
+    )
+
+    assert cast(Any, result) == "fts-result"
+    session.commit.assert_called_once_with()
 
 
 def test_old_character_regex_tokenizer_is_not_in_production_paths() -> None:
