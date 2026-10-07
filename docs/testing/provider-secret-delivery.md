@@ -2,8 +2,8 @@
 
 Baseline: `80aae00b3c57fa61b08e83bc689592d762e0a132` on `main`.
 
-The Provider secret feature is delivered on `main` at commit
-`366fd26143efdc7cd7c86524840d0f65524a37d8`. Each issue was implemented and
+The Provider secret feature is delivered on `main` at the final commit recorded
+in the delivery report. Each issue was implemented and
 reviewed against its starting commit before the final clean-checkout gate.
 
 | Issue | Observable delivery | Depends on | Current evidence |
@@ -42,13 +42,12 @@ prepared request must recheck the current credential version before dispatch.
 
 ## Final evidence
 
-The final report is stored outside the checkout at
-`/Users/muxy/Projects/Zhiheng-delivery-evidence/366fd26b-delivery/report.json`.
-It records clean-checkout migration, compile, Ruff, full Mypy, naturally
-finished pytest (911 passed in 624.34 seconds), real API/Worker browser
-workflow, real restic recovery, and extraction. The browser report and pytest
-evidence both bind to the same SHA. Older reports, including #34 evidence,
-remain historical and do not prove this feature.
+The final report is stored outside the checkout in a SHA-named directory under
+`/Users/muxy/Projects/Zhiheng-delivery-evidence/`. It records clean-checkout
+migration, compile, Ruff, full Mypy, naturally finished pytest, real API/Worker
+browser workflow, real restic recovery, and extraction. The browser report and
+pytest evidence both bind to the same SHA. Older reports, including #34
+evidence, remain historical and do not prove this feature.
 
 ## Dependency references
 
