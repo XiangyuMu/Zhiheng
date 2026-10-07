@@ -1222,13 +1222,14 @@ function modelCapabilityEditor(provider, record) {
   const wrapper = node("div", undefined, "model-record");
   const heading = node("div", undefined, "model-record-heading");
   heading.append(node("strong", record.model_id));
-  const recordStatus = record.stale ? "已过期" : (record.enabled ? "已启用" : "已停用");
+  const recordStatus = record.stale ? "已过期" : (!(record.confirmed_capabilities || []).length ? "待确认" : (record.enabled ? "已启用" : "已停用"));
   heading.append(node("span", `${recordStatus} · ${record.source} · ${record.protocol}`, "muted"));
   const controls = node("div", undefined, "model-capability-controls");
   const confirmed = new Set(record.confirmed_capabilities || []);
   const checks = ["text", "multimodal", "embedding"].map((capability) => {
     const label = node("label", undefined, "checkbox-line");
     const input = document.createElement("input"); input.type = "checkbox";
+    label.setAttribute("aria-label", `${provider.display_name} ${record.model_id} ${capability} 能力`);
     input.checked = confirmed.has(capability); input.dataset.capability = capability;
     label.append(input, document.createTextNode(capability)); controls.append(label); return input;
   });
@@ -1254,7 +1255,8 @@ function renderModelProviders(providers) {
     const modelInput = document.createElement("input"); modelInput.placeholder = "手动添加模型 ID";
     modelInput.setAttribute("aria-label", `为 ${provider.display_name} 添加模型`);
     const protocol = document.createElement("select"); protocol.setAttribute("aria-label", "模型协议");
-    ["chat_completions", "responses", "embeddings"].forEach((value) => { const option = node("option", value); option.value = value; protocol.append(option); });
+    const supportedProtocols = { openai: ["responses", "chat_completions", "embeddings"], deepseek: ["responses", "chat_completions"], "openai-compatible": ["chat_completions"], ollama: ["chat_completions"] }[provider.provider_kind] || ["chat_completions"];
+    supportedProtocols.forEach((value) => { const option = node("option", value); option.value = value; protocol.append(option); });
     const addButton = action("添加模型", async () => {
       const model_id = modelInput.value.trim(); if (!model_id) { showToast("请输入模型 ID"); return; }
       addButton.disabled = true;
@@ -1266,10 +1268,14 @@ function renderModelProviders(providers) {
     const refresh = action("刷新目录", async () => {
       refresh.disabled = true; showToast("正在刷新模型目录…");
       try { await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/models/refresh`, "POST", {}, null); showToast("模型目录已刷新"); await loadModelConfig(); }
-      catch (error) { showToast(`目录刷新失败：${readableError(error)}`); refresh.disabled = false; }
+      catch (error) { showToast(`目录刷新失败：${readableError(error)}`); }
+      finally { refresh.disabled = false; }
     }, "quiet small");
     add.append(modelInput, protocol, addButton, refresh);
-    const detail = node("p", `${provider.enabled ? "已启用" : "已停用"}${provider.archived ? " · 已归档" : ""} · 目录：${(provider.model_records || []).length ? "已加载" : "未加载"}`);
+    const catalogStatus = provider.catalog_status === "failed"
+      ? `失败：${provider.catalog_error || "目录请求失败"}`
+      : provider.catalog_status === "succeeded" ? `成功 · ${provider.catalog_refreshed_at || "刚刚"}` : "未加载";
+    const detail = node("p", `${provider.enabled ? "已启用" : "已停用"}${provider.archived ? " · 已归档" : ""} · 目录：${catalogStatus}`);
     const health = node("p", null);
     const secret = node("span", `密钥：${providerSecretLabel(provider)}`);
     const reveal = action("显示脱敏状态", () => temporarilyShowSecretStatus(provider, secret, reveal), "quiet small");
@@ -1306,7 +1312,8 @@ function renderModelDefaults(providers, selected) {
     (provider.model_records || []).filter((record) => record.enabled && !record.stale).forEach((record) => {
       const caps = new Set(record.confirmed_capabilities || []);
       const add = (select, capability) => { if (!caps.has(capability)) return; const option = node("option", `${provider.display_name} / ${record.model_id}`); option.value = `${provider.provider_id}\n${record.model_id}`; select.append(option); };
-      add(text, "text"); add(multimodal, "multimodal"); add(embedding, "embedding");
+      if (record.protocol !== "embeddings") { add(text, "text"); add(multimodal, "multimodal"); }
+      if (record.protocol === "embeddings") add(embedding, "embedding");
     });
   });
   if (selected.text) text.value = `${selected.text.provider_id}\n${selected.text.model_id}`;
