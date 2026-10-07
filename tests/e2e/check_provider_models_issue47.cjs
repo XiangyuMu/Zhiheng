@@ -17,7 +17,7 @@ fs.mkdirSync(output, { recursive: true });
   const providerServer = http.createServer((request, response) => {
     if (request.url === "/api/tags" && !catalogFailure) {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: [{ id: "issue47-discovered" }] }));
+      response.end(JSON.stringify({ models: [{ name: "issue47-discovered" }] }));
       return;
     }
     response.writeHead(catalogFailure ? 503 : 404, { "content-type": "application/json" });
