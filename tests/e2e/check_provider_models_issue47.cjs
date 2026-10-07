@@ -106,7 +106,8 @@ fs.mkdirSync(output, { recursive: true });
     const persistedCard = page.locator("li.provider-card").filter({ hasText: "Issue 47 Browser Provider" });
     await persistedCard.waitFor();
     assert.equal(await persistedCard.locator(".model-record").filter({ hasText: "issue47-chat" }).getByRole("checkbox", { name: /Issue 47 Browser Provider issue47-chat text 能力/ }).isChecked(), true);
-    await page.waitForFunction(() => document.querySelector("#default-text-model option:checked")?.textContent === "Issue 47 Browser Provider / issue47-chat");
+    await page.locator("#default-text-model").waitFor();
+    await page.waitForFunction(() => document.querySelector("#default-text-model")?.selectedOptions[0]?.textContent === "Issue 47 Browser Provider / issue47-chat");
 
     assert.match(await card.innerText(), /chat_completions/);
     await card.getByRole("button", { name: "刷新目录", exact: true }).click();
