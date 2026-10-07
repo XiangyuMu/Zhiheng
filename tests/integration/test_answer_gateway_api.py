@@ -80,7 +80,7 @@ def _gateway_client(
     app.state.model_gateway._privacy_pipeline = PrivacyPipeline(
         analyzer=DeterministicPatternAnalyzer()
     )
-    app.state.model_gateway._transports = {"openai-compatible": transport}
+    app.state.model_gateway._transports = {"openai-compatible:chat_completions": transport}
     return (
         TestClient(app, raise_server_exceptions=raise_server_exceptions),
         session_factory,
