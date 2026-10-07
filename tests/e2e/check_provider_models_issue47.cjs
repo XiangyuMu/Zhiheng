@@ -174,6 +174,12 @@ fs.mkdirSync(output, { recursive: true });
     assert.equal(deepSeekModel.status, 422);
     assert.match(JSON.stringify(deepSeekModel.body), /embedding|protocol/i);
 
+    const embeddingDefaults = (await api("/v1/model-config/status")).defaults;
+    await api("/v1/model-config/defaults", {
+      method: "PUT",
+      headers: { "If-Match": embeddingDefaults.etag },
+      body: { embedding: null },
+    });
     const unsupportedTitle = `Issue 46 unsupported ${Date.now()}`;
     await page.goto(`${base}/knowledge-agent#library`);
     await page.getByRole("button", { name: /添加资料/ }).first().click();
@@ -192,6 +198,12 @@ fs.mkdirSync(output, { recursive: true });
     const unsupportedTask = await api(`/v1/knowledge/${importedId}/processing`);
     assert.equal(unsupportedTask.public_status || unsupportedTask.status, "unsupported");
     assert.equal(unsupportedTask.error_code || unsupportedTask.failure_code, "embedding_model_unavailable");
+    const restoredDefaults = (await api("/v1/model-config/status")).defaults;
+    await api("/v1/model-config/defaults", {
+      method: "PUT",
+      headers: { "If-Match": restoredDefaults.etag },
+      body: { embedding: embeddingDefaults.embedding },
+    });
     await api(`/v1/knowledge/${importedId}/delete`, { method: "POST" });
     const deepSeekCurrent = (await api("/v1/model-config/providers?include_archived=true"))
       .find((item) => item.provider_id === deepSeek.provider_id);
