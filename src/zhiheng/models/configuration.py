@@ -27,7 +27,7 @@ def _supported_protocols(provider_kind: str) -> set[str]:
     return {
         "openai": {"responses", "chat_completions", "embeddings"},
         "deepseek": {"responses", "chat_completions"},
-        "openai-compatible": {"chat_completions"},
+        "openai-compatible": {"chat_completions", "embeddings"},
         "ollama": {"chat_completions"},
     }.get(provider_kind, set())
 

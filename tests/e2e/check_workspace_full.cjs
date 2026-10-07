@@ -112,7 +112,7 @@ fs.mkdirSync(output, { recursive: true });
     const embeddingProvider = await apiJson('/v1/model-config/providers', {
       method: 'POST',
       body: {
-        provider_kind: 'openai',
+        provider_kind: 'openai-compatible',
         display_name: 'Issue 17 Browser Embedding Provider',
         base_url: embeddingUrl,
         api_key: 'issue17-browser-embedding-key',
