@@ -10,10 +10,12 @@ DB_PATH="${RUN_DIR}/zhiheng.sqlite"
 OBJECT_STORE="${RUN_DIR}/knowledge-object-store"
 PROVIDER_CERT="${RUN_DIR}/provider.crt"
 PROVIDER_KEY="${RUN_DIR}/provider.key"
+EMBEDDING_PORT_FILE="${RUN_DIR}/embedding-port"
 API_LOG="${OUTPUT_DIR}/api.log"
 WORKER_LOG="${OUTPUT_DIR}/worker.log"
 API_PID=""
 WORKER_PID=""
+EMBEDDING_PID=""
 CURRENT_STAGE="initializing"
 GIT_SHA=""
 
@@ -26,6 +28,8 @@ cleanup() {
   if [[ -n "${API_PID}" ]]; then kill "${API_PID}" 2>/dev/null || true; fi
   if [[ -n "${WORKER_PID}" ]]; then wait "${WORKER_PID}" 2>/dev/null || true; fi
   if [[ -n "${API_PID}" ]]; then wait "${API_PID}" 2>/dev/null || true; fi
+  if [[ -n "${EMBEDDING_PID}" ]]; then kill "${EMBEDDING_PID}" 2>/dev/null || true; fi
+  if [[ -n "${EMBEDDING_PID}" ]]; then wait "${EMBEDDING_PID}" 2>/dev/null || true; fi
   rm -rf "${RUN_DIR}"
 }
 finalize() {
@@ -57,6 +61,16 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
 export ZHIHENG_ACCEPTANCE_PROVIDER_CERT="${PROVIDER_CERT}"
 export ZHIHENG_ACCEPTANCE_PROVIDER_KEY="${PROVIDER_KEY}"
 export SSL_CERT_FILE="${PROVIDER_CERT}"
+node "${ROOT_DIR}/tests/e2e/fake_embedding_provider.cjs" \
+  "${PROVIDER_CERT}" "${PROVIDER_KEY}" "${EMBEDDING_PORT_FILE}" \
+  >"${OUTPUT_DIR}/embedding-provider.log" 2>&1 &
+EMBEDDING_PID=$!
+for _ in $(seq 1 30); do
+  [[ -s "${EMBEDDING_PORT_FILE}" ]] && break
+  sleep 1
+done
+[[ -s "${EMBEDDING_PORT_FILE}" ]]
+export ZHIHENG_ACCEPTANCE_EMBEDDING_URL="https://127.0.0.1:$(cat "${EMBEDDING_PORT_FILE}")"
 run_stage() {
   CURRENT_STAGE="$1"
   shift

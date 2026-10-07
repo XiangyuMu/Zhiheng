@@ -14,28 +14,29 @@ if (!base || !output || !['127.0.0.1', 'localhost'].includes(new URL(base).hostn
 }
 fs.mkdirSync(output, { recursive: true });
 (async () => {
-  const embeddingServer = https.createServer({
-    cert: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_CERT),
-    key: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_KEY),
-  }, (request, response) => {
-    if (request.method === 'GET' && request.url === '/models') {
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ data: [{ id: 'issue17-embedding' }] }));
-      return;
-    }
-    if (request.method === 'POST' && request.url === '/embeddings') {
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({
-        data: [{ embedding: [1, ...Array(1023).fill(0)] }],
-      }));
-      return;
-    }
-    response.writeHead(404, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ error: 'not found' }));
-  });
-  await new Promise((resolve) => embeddingServer.listen(0, '127.0.0.1', resolve));
-  const embeddingPort = embeddingServer.address().port;
-  const embeddingUrl = `https://127.0.0.1:${embeddingPort}`;
+  let embeddingServer;
+  let embeddingUrl = process.env.ZHIHENG_ACCEPTANCE_EMBEDDING_URL;
+  if (!embeddingUrl) {
+    embeddingServer = https.createServer({
+      cert: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_CERT),
+      key: fs.readFileSync(process.env.ZHIHENG_ACCEPTANCE_PROVIDER_KEY),
+    }, (request, response) => {
+      if (request.method === 'GET' && request.url === '/models') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ data: [{ id: 'issue17-embedding' }] }));
+        return;
+      }
+      if (request.method === 'POST' && request.url === '/embeddings') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ data: [{ embedding: [1, ...Array(1023).fill(0)] }] }));
+        return;
+      }
+      response.writeHead(404, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ error: 'not found' }));
+    });
+    await new Promise((resolve) => embeddingServer.listen(0, '127.0.0.1', resolve));
+    embeddingUrl = `https://127.0.0.1:${embeddingServer.address().port}`;
+  }
   const browser = await chromium.launch({ headless: true, channel: process.env.BROWSER_CHANNEL || 'chromium' });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1080 } });
   const page = await context.newPage();
@@ -393,6 +394,6 @@ fs.mkdirSync(output, { recursive: true });
     throw error;
   } finally {
     await browser.close();
-    await new Promise((resolve) => embeddingServer.close(resolve));
+    if (embeddingServer) await new Promise((resolve) => embeddingServer.close(resolve));
   }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
