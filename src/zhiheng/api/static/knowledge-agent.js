@@ -1320,7 +1320,11 @@ function renderModelDefaults(providers, selected) {
   if (selected.multimodal) multimodal.value = `${selected.multimodal.provider_id}\n${selected.multimodal.model_id}`;
   if (selected.embedding) embedding.value = `${selected.embedding.provider_id}\n${selected.embedding.model_id}`;
 }
-function parseRoute(value) { if (!value) return null; const [provider_id, model_id] = value.split("\n"); return { provider_id, model_id }; }
+function parseRoute(value) {
+  if (!value || value === "未选择") return null;
+  const [provider_id, model_id] = value.split("\n");
+  return provider_id && model_id ? { provider_id, model_id } : null;
+}
 function modelMutation(url, method, payload, etag) {
   const headers = { "Content-Type": "application/json", "X-CSRF-Token": readCookie("zhiheng_csrf"), "Idempotency-Key": crypto.randomUUID() };
   if (etag) headers["If-Match"] = etag;
