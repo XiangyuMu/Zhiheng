@@ -1061,14 +1061,9 @@ class VectorAwareHybridRetriever:
                 normalize=generation.normalize,
             )
         except (
-            ImportError,
-            KeyError,
-            OSError,
+            EmbeddingTransportError,
             PermissionError,
             QueryEmbeddingUnavailableError,
-            RuntimeError,
-            ValueError,
-            EmbeddingTransportError,
         ):
             return self._fts_only(
                 session,

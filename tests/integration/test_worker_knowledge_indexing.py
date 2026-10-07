@@ -341,3 +341,55 @@ def test_vector_generation_is_not_activated_when_serving_chunk_changes_after_emb
     assert attempt[0] == "failed"
     assert attempt[1] == "ValueError"
     assert "serving chunk set changed" in attempt[2]
+
+
+def test_vector_generation_is_not_activated_when_embedding_route_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings, session_factory = _migrated(tmp_path)
+    text_value = "激活向量代次前必须复核 Embedding 模型资格。"
+    artifacts = stored_text_artifacts(tmp_path, text_value)
+    route = {
+        "provider_id": "provider-openai",
+        "provider_kind": "openai",
+        "model_id": "BAAI/bge-m3",
+        "revision": "synthetic-worker-revision",
+        "endpoint_url": "https://api.openai.com/v1",
+        "endpoint_origin": "https://api.openai.com",
+        "secret_ref": "env:TEST_EMBEDDING_KEY",
+    }
+    with session_scope(session_factory) as session:
+        _ingest(session, artifacts, text_value)
+
+    assert process_outbox_once(settings) == 1
+    routes = iter((route, None))
+    observed_routes: list[object] = []
+
+    def next_route(_session: Session) -> dict[str, str] | None:
+        value = next(routes)
+        observed_routes.append(value)
+        return value
+
+    monkeypatch.setattr(
+        "zhiheng.jobs.knowledge_indexing.embedding_route",
+        next_route,
+    )
+    completed = process_knowledge_jobs_once(
+        session_factory,
+        KnowledgeIndexJobExecutor(settings, embedder_factory=lambda: _FakeEmbedder()),
+        worker_id="knowledge-worker",
+    )
+
+    with session_scope(session_factory) as session:
+        job_status = session.execute(text("SELECT status FROM jobs")).scalar_one()
+        active_count = session.execute(
+            text("SELECT count(*) FROM embedding_generations WHERE index_status = 'active'")
+        ).scalar_one()
+        job_payload = json.loads(
+            str(session.execute(text("SELECT payload_json FROM jobs")).scalar_one())
+        )
+
+    assert completed == 1, observed_routes
+    assert job_status == "unsupported"
+    assert active_count == 0
+    assert job_payload["failure_code"] == "embedding_route_changed"

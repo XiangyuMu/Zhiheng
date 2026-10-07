@@ -646,7 +646,7 @@ class KnowledgeIndexJobExecutor:
             fts_indexed = KnowledgeRepository().rebuild_fts_index(session)
             serving_chunks = self._serving_chunks(session)
             route = embedding_route(session)
-            if route is None and self._settings.environment != "test":
+            if route is None and self._embedder_factory is None:
                 raise EmbeddingCapabilityUnavailable(
                     "embedding_model_unavailable",
                     "没有已确认且启用的 Embedding 模型，无法创建向量索引",
@@ -676,6 +676,11 @@ class KnowledgeIndexJobExecutor:
         with session_scope(session_factory) as session:
             self._require_current_job_lease(session, job)
             self._require_current_serving_snapshot(session, serving_chunks)
+            if route is not None and embedding_route(session) != route:
+                raise EmbeddingCapabilityUnavailable(
+                    "embedding_route_changed",
+                    "Embedding 模型配置在索引期间发生变化，请重新创建索引任务",
+                )
             vector_repository = VectorIndexRepository()
             generation_id = vector_repository.create_generation(
                 session,

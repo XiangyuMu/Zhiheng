@@ -134,6 +134,58 @@ fs.mkdirSync(output, { recursive: true });
     assert(!text.includes("ciphertext_b64"));
     assert(!text.includes("api_key"));
     assert(errors.length === 0, errors.join("; "));
+
+    // Issue #46: DeepSeek cannot be promoted to an Embedding route, and a
+    // disabled/stale route leaves an indexing task in a durable unsupported
+    // state instead of allowing the Worker to create vectors.
+    const deepSeek = await api("/v1/model-config/providers", {
+      method: "POST",
+      body: {
+        provider_kind: "deepseek",
+        display_name: "Issue 46 DeepSeek Provider",
+        base_url: "https://api.deepseek.com",
+        text_models: ["issue46-deepseek-chat"],
+        enabled: true,
+      },
+    });
+    const deepSeekModel = await api(`/v1/model-config/providers/${deepSeek.provider_id}/models/issue46-deepseek-chat`, {
+      method: "PATCH",
+      headers: { "If-Match": deepSeek.etag },
+      body: { confirmed_capabilities: ["embedding"], protocol: "embeddings" },
+    }).catch((error) => ({ error: String(error) }));
+    assert.match(deepSeekModel.error || "", /422|embedding|protocol/i);
+
+    const imported = await api("/v1/knowledge/imports", {
+      method: "POST",
+      body: {
+        title: `Issue 46 unsupported ${Date.now()}`,
+        text: "缺少已确认 Embedding 模型时仍需保留全文索引。",
+        primary_domain_id: "technology.ai",
+        media_type: "text/plain",
+      },
+    });
+    const importedId = imported.result.knowledge_object_id;
+    let unsupportedTask = null;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const tasks = await api("/v1/knowledge/import-tasks?limit=100");
+      unsupportedTask = tasks.items.find((item) => item.source_id === importedId);
+      if (unsupportedTask && ["unsupported", "failed", "succeeded"].includes(unsupportedTask.status)) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    assert(unsupportedTask, "Issue 46 import task did not become observable");
+    assert.equal(unsupportedTask.status, "unsupported");
+    assert.equal(unsupportedTask.failure.code, "embedding_model_unavailable");
+    await api(`/v1/knowledge/${importedId}/delete`, { method: "POST" });
+    const deepSeekCurrent = (await api("/v1/model-config/providers?include_archived=true"))
+      .find((item) => item.provider_id === deepSeek.provider_id);
+    if (deepSeekCurrent) {
+      await api(`/v1/model-config/providers/${deepSeek.provider_id}`, {
+        method: "PATCH",
+        headers: { "If-Match": deepSeekCurrent.etag },
+        body: { enabled: false, archived: true },
+      });
+    }
+
     await page.screenshot({ path: path.join(output, "provider-models-issue47.png"), fullPage: true });
     fs.writeFileSync(path.join(output, "evidence.json"), JSON.stringify({
       provider: "Issue 47 Browser Provider",
@@ -144,6 +196,11 @@ fs.mkdirSync(output, { recursive: true });
       protocol: "chat_completions",
       stale_model_visible: true,
       catalog_failure_visible: true,
+      deepseek_embedding_rejected: true,
+      unsupported_index_task: {
+        status: unsupportedTask.status,
+        failure_code: unsupportedTask.failure.code,
+      },
       viewports: [{ width: 1440, height: 1080 }, { width: 390, height: 844 }],
     }, null, 2));
 
