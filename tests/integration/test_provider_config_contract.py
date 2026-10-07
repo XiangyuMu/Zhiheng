@@ -298,6 +298,77 @@ def test_connectivity_rejects_stale_normalized_model(tmp_path: Path) -> None:
     assert response.status_code == 422
 
 
+def test_model_catalog_refresh_preserves_confirmations_and_marks_missing_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _empty_client(tmp_path)
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "catalog-provider"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Catalog",
+            "base_url": "https://models.example.test/v1",
+            "text_models": ["old-model"],
+            "enabled": True,
+        },
+    )
+    provider = created.json()
+    monkeypatch.setattr(
+        "zhiheng.models.configuration.discover_provider_models",
+        lambda **_kwargs: (
+            [
+                type("Model", (), {"model_id": "new-model", "display_name": "New model"})(),
+            ],
+            "succeeded",
+            "目录刷新成功",
+        ),
+    )
+    refreshed = client.post(
+        f"/v1/model-config/providers/{provider['provider_id']}/models/refresh",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "catalog-refresh"},
+    )
+    assert refreshed.status_code == 200
+    records = {record["model_id"]: record for record in refreshed.json()["model_records"]}
+    assert records["new-model"]["source"] == "discovered"
+    assert records["old-model"]["stale"] is True
+    assert records["old-model"]["enabled"] is False
+    assert refreshed.json()["catalog_status"] == "succeeded"
+
+
+def test_model_catalog_failure_preserves_previous_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _empty_client(tmp_path)
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "catalog-failure-provider"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Catalog failure",
+            "base_url": "https://models.example.test/v1",
+            "text_models": ["kept-model"],
+            "enabled": True,
+        },
+    )
+    provider = created.json()
+    monkeypatch.setattr(
+        "zhiheng.models.configuration.discover_provider_models",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("catalog_timeout:目录请求超时")),
+    )
+    failed = client.post(
+        f"/v1/model-config/providers/{provider['provider_id']}/models/refresh",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "catalog-failure"},
+    )
+    assert failed.status_code == 502
+    current = client.get("/v1/model-config/providers").json()[0]
+    assert current["model_records"][0]["model_id"] == "kept-model"
+    assert current["catalog_status"] == "failed"
+    assert current["catalog_error"] == "catalog_timeout:目录请求超时"
+
+
 def test_provider_secret_refs_are_validated_and_never_echoed(tmp_path: Path) -> None:
     client = _client(tmp_path)
     csrf = _login(client)

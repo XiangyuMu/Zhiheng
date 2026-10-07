@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import new_id
+from zhiheng.models._transports import discover_provider_models
 from zhiheng.secrets import ProviderSecretStore, SecretStatus
 
 ALLOWED_PROVIDER_KINDS = frozenset({"ollama", "openai", "deepseek", "openai-compatible"})
@@ -127,6 +128,7 @@ def list_providers(
                        multimodal_model_allowlist_json, model_allowlist_json,
                        endpoint_url, endpoint_origin, policy_revision,
                        health_status, health_checked_at, health_error,
+                       catalog_status, catalog_refreshed_at, catalog_error,
                        created_at, updated_at
                 FROM model_provider_configs
                 {where}
@@ -803,6 +805,7 @@ def _provider_row(session: Session, provider_id: str) -> Mapping[str, Any] | Non
                        multimodal_model_allowlist_json, model_allowlist_json,
                        endpoint_url, endpoint_origin, policy_revision,
                        health_status, health_checked_at, health_error,
+                       catalog_status, catalog_refreshed_at, catalog_error,
                        created_at, updated_at
                 FROM model_provider_configs
                 WHERE id = :provider_id
@@ -848,11 +851,148 @@ def _provider_response(
         "health_status": str(row.get("health_status") or "unknown"),
         "health_checked_at": _iso_timestamp(row.get("health_checked_at")),
         "health_error": row.get("health_error"),
+        "catalog_status": str(row.get("catalog_status") or "unknown"),
+        "catalog_refreshed_at": _iso_timestamp(row.get("catalog_refreshed_at")),
+        "catalog_error": row.get("catalog_error"),
         "policy_revision": str(row["policy_revision"]),
         "etag": str(row["policy_revision"]),
         "created_at": _iso_timestamp(row.get("created_at")),
         "updated_at": _iso_timestamp(row.get("updated_at")),
     }
+
+
+def add_provider_model(
+    session: Session,
+    provider_id: str,
+    *,
+    model_id: str,
+    display_name: str | None = None,
+    protocol: str = "chat_completions",
+) -> dict[str, object]:
+    row = _provider_row(session, provider_id)
+    if row is None:
+        raise LookupError("provider not found")
+    cleaned_id = model_id.strip()
+    if not cleaned_id:
+        raise ValueError("model_id must not be empty")
+    existing = session.execute(
+        text(
+            "SELECT id FROM model_provider_models "
+            "WHERE provider_id=:provider_id AND model_id=:model_id"
+        ),
+        {"provider_id": provider_id, "model_id": cleaned_id},
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise ValueError("model already exists for provider")
+    session.execute(
+        text(
+            "INSERT INTO model_provider_models "
+            "(id, provider_id, model_id, display_name, source, protocol, "
+            "suggested_capabilities_json, confirmed_capabilities_json, "
+            "enabled, stale, last_seen_at) "
+            "VALUES (:id, :provider_id, :model_id, :display_name, 'manual', :protocol, "
+            "'[\"text\"]', '[\"text\"]', 1, 0, CURRENT_TIMESTAMP)"
+        ),
+        {
+            "id": new_id(),
+            "provider_id": provider_id,
+            "model_id": cleaned_id,
+            "display_name": (display_name or cleaned_id).strip(),
+            "protocol": protocol,
+        },
+    )
+    return _provider_response(_provider_row(session, provider_id) or row, session=session)
+
+
+def refresh_provider_models(
+    session: Session,
+    provider_id: str,
+    *,
+    secret_store: ProviderSecretStore | None = None,
+) -> dict[str, object]:
+    row = _provider_row(session, provider_id)
+    if row is None:
+        raise LookupError("provider not found")
+    try:
+        discovered, _status, _message = discover_provider_models(
+            endpoint_url=str(row["endpoint_url"]),
+            provider_kind=str(row["provider_kind"]),
+            secret_ref=str(row["secret_ref"]) if row["secret_ref"] is not None else None,
+            provider_id=provider_id,
+            secret_store=secret_store,
+        )
+    except (PermissionError, RuntimeError) as exc:
+        code, _, message = str(exc).partition(":")
+        session.execute(
+            text(
+                "UPDATE model_provider_configs SET catalog_status='failed', "
+                "catalog_error=:error, catalog_refreshed_at=CURRENT_TIMESTAMP WHERE id=:id"
+            ),
+            {"id": provider_id, "error": f"{code}:{message}"},
+        )
+        raise ValueError(f"{code}:{message}") from exc
+    protocol = "responses" if row["provider_kind"] == "openai" else "chat_completions"
+    existing = {
+        str(item["model_id"]): item
+        for item in _model_records(session, provider_id)
+    }
+    ids = [item.model_id for item in discovered]
+    for item in discovered:
+        current = existing.get(item.model_id)
+        if current is None:
+            session.execute(
+                text(
+                    "INSERT INTO model_provider_models "
+                    "(id, provider_id, model_id, display_name, source, protocol, "
+                    "suggested_capabilities_json, confirmed_capabilities_json, "
+                    "enabled, stale, last_seen_at) "
+                    "VALUES (:id, :provider_id, :model_id, :display_name, 'discovered', :protocol, "
+                    "'[\"text\"]', '[\"text\"]', 1, 0, CURRENT_TIMESTAMP)"
+                ),
+                {
+                    "id": new_id(),
+                    "provider_id": provider_id,
+                    "model_id": item.model_id,
+                    "display_name": item.display_name,
+                    "protocol": protocol,
+                },
+            )
+        else:
+            session.execute(
+                text(
+                    "UPDATE model_provider_models SET display_name=:display_name, "
+                    "protocol=:protocol, stale=0, enabled=1, "
+                    "last_seen_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP "
+                    "WHERE provider_id=:provider_id AND model_id=:model_id"
+                ),
+                {
+                    "provider_id": provider_id,
+                    "model_id": item.model_id,
+                    "display_name": item.display_name,
+                    "protocol": protocol,
+                },
+            )
+    placeholders = ",".join(f":model_{index}" for index in range(len(ids)))
+    params: dict[str, object] = {"provider_id": provider_id}
+    params.update({f"model_{index}": model_id for index, model_id in enumerate(ids)})
+    session.execute(
+        text(
+            "UPDATE model_provider_models SET stale=1, enabled=0, updated_at=CURRENT_TIMESTAMP "
+            f"WHERE provider_id=:provider_id AND model_id NOT IN ({placeholders})"
+        ),
+        params,
+    )
+    session.execute(
+        text(
+            "UPDATE model_provider_configs SET catalog_status='succeeded', catalog_error=NULL, "
+            "catalog_refreshed_at=CURRENT_TIMESTAMP WHERE id=:id"
+        ),
+        {"id": provider_id},
+    )
+    refreshed = _provider_row(session, provider_id)
+    if refreshed is None:
+        raise RuntimeError("provider was not found after catalog refresh")
+    return _provider_response(refreshed, secret_store=secret_store, session=session)
 
 
 def _validate_provider_input(provider: ProviderInput) -> None:

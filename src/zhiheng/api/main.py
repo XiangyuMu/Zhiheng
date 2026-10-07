@@ -40,6 +40,7 @@ from zhiheng.db.session import create_session_factory, create_sqlite_engine, ses
 from zhiheng.models.configuration import (
     ALLOWED_PROVIDER_KINDS,
     ProviderInput,
+    add_provider_model,
     connectivity_test,
     create_provider,
     defaults,
@@ -47,6 +48,7 @@ from zhiheng.models.configuration import (
     list_providers,
     migrate_provider_secret,
     recent_audits,
+    refresh_provider_models,
     set_defaults,
     update_provider,
 )
@@ -117,6 +119,14 @@ class ModelProviderPatch(BaseModel):
     multimodal_models: list[str] | None = None
     enabled: bool | None = None
     archived: bool | None = None
+
+
+class ProviderModelCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str = Field(min_length=1, max_length=256)
+    display_name: str | None = Field(default=None, max_length=256)
+    protocol: str = Field(default="chat_completions", min_length=1, max_length=64)
 
 
 class ModelRoute(BaseModel):
@@ -519,6 +529,72 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         response.headers["ETag"] = str(result["etag"])
+        response.headers["Cache-Control"] = "no-store"
+        _remember_model_config_result(app, operation_key, fingerprint, result)
+        return result
+
+    @app.post("/v1/model-config/providers/{provider_id}/models", tags=["models"])
+    def model_provider_model_create(
+        provider_id: str,
+        payload: ProviderModelCreate,
+        request: Request,
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        csrf_header: str | None = Header(default=None, alias="X-CSRF-Token"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ) -> dict[str, object]:
+        operation_key = _require_model_mutation(
+            request, session, session_service, session_token, csrf_header, idempotency_key
+        )
+        fingerprint = _model_config_fingerprint(
+            f"provider:model:create:{provider_id}", payload.model_dump()
+        )
+        cached = _model_config_idempotent_result(app, operation_key, fingerprint)
+        if cached is not None:
+            return dict(cached)
+        try:
+            result = add_provider_model(
+                session,
+                provider_id,
+                model_id=payload.model_id,
+                display_name=payload.display_name,
+                protocol=payload.protocol,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        response.headers["Cache-Control"] = "no-store"
+        _remember_model_config_result(app, operation_key, fingerprint, result)
+        return result
+
+    @app.post("/v1/model-config/providers/{provider_id}/models/refresh", tags=["models"])
+    def model_provider_model_refresh(
+        provider_id: str,
+        request: Request,
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        csrf_header: str | None = Header(default=None, alias="X-CSRF-Token"),
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ) -> dict[str, object]:
+        operation_key = _require_model_mutation(
+            request, session, session_service, session_token, csrf_header, idempotency_key
+        )
+        fingerprint = _model_config_fingerprint(f"provider:model:refresh:{provider_id}", {})
+        cached = _model_config_idempotent_result(app, operation_key, fingerprint)
+        if cached is not None:
+            return dict(cached)
+        try:
+            result = refresh_provider_models(
+                session, provider_id, secret_store=app.state.provider_secret_store
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, PermissionError) as exc:
+            session.commit()
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         response.headers["Cache-Control"] = "no-store"
         _remember_model_config_result(app, operation_key, fingerprint, result)
         return result

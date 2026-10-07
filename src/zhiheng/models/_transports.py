@@ -11,6 +11,65 @@ from zhiheng.core.ids import sha256_text
 from zhiheng.secrets import EnvironmentSecretStore, SecretResolver
 
 
+@dataclass(frozen=True)
+class DiscoveredModel:
+    model_id: str
+    display_name: str
+
+
+def discover_provider_models(
+    *,
+    endpoint_url: str,
+    provider_kind: str,
+    secret_ref: str | None,
+    provider_id: str,
+    secret_store: SecretResolver | None = None,
+    timeout: float = 10.0,
+) -> tuple[list[DiscoveredModel], str, str]:
+    """Fetch and normalize a provider catalog without exposing its response body."""
+    headers: dict[str, str] = {}
+    if provider_kind != "ollama":
+        if not secret_ref:
+            raise PermissionError("missing secret_ref")
+        resolver = secret_store or EnvironmentSecretStore()
+        secret = resolver.resolve(secret_ref, provider_id=provider_id).get_secret_value()
+        headers["Authorization"] = f"Bearer {secret}"
+    url = (
+        f"{endpoint_url.rstrip('/')}/api/tags"
+        if provider_kind == "ollama"
+        else f"{endpoint_url.rstrip('/')}/models"
+    )
+    try:
+        response = httpx.get(url, headers=headers, timeout=timeout)
+    except httpx.TimeoutException as exc:
+        raise RuntimeError("catalog_timeout:目录请求超时") from exc
+    except httpx.RequestError as exc:
+        raise RuntimeError("catalog_network_error:无法连接到供应商目录") from exc
+    if response.status_code in {401, 403}:
+        raise PermissionError("catalog_authentication_failed:目录认证失败")
+    if response.status_code == 404:
+        raise RuntimeError("catalog_unsupported:供应商不支持模型目录")
+    if response.status_code >= 400:
+        raise RuntimeError(f"catalog_http_error:供应商目录返回 HTTP {response.status_code}")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("catalog_response_format_error:供应商目录格式无法识别") from exc
+    values = payload.get("models") if provider_kind == "ollama" else payload.get("data")
+    if not isinstance(values, list):
+        raise RuntimeError("catalog_response_format_error:供应商目录格式无法识别")
+    result: list[DiscoveredModel] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        identifier = item.get("name") if provider_kind == "ollama" else item.get("id")
+        if isinstance(identifier, str) and identifier.strip():
+            result.append(DiscoveredModel(identifier.strip(), identifier.strip()))
+    if not result:
+        raise RuntimeError("catalog_response_format_error:供应商目录没有模型")
+    return result, "succeeded", "目录刷新成功"
+
+
 def probe_provider_connectivity(
     *,
     endpoint_url: str,
