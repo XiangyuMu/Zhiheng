@@ -846,6 +846,7 @@ def create_app(
         return {
             "defaults": defaults(session),
             "providers": providers,
+            "external_models_enabled": app_settings.external_models_enabled,
             "healthy_providers": sum(1 for item in providers if item["health_status"] == "healthy"),
             "unhealthy_providers": sum(
                 1 for item in providers if item["health_status"] == "unhealthy"

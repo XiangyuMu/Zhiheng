@@ -1171,8 +1171,11 @@ async function loadModelConfig() {
     const failureHint = recentFailure
       ? ` · 最近失败：${modelDiagnosticNames[recentFailure.diagnostic_code] || "调用失败"}`
       : "";
+    const externalHint = status.external_models_enabled === false
+      ? " · 外部模型调用已关闭，需启用服务器配置后才能生成回答"
+      : "";
     $("model-status").textContent = providers.length
-      ? `已配置 ${providers.length} 个模型服务${failureHint}`
+      ? `已配置 ${providers.length} 个模型服务${failureHint}${externalHint}`
       : "尚未配置模型服务。系统可检索资料，生成能力取决于服务器配置。";
   } catch (error) { $("model-status").textContent = readableError(error); }
 }
