@@ -1266,19 +1266,23 @@ function renderModelProviders(providers) {
         showToast(`模型 ${model_id} 已添加`); modelInput.value = ""; await loadModelConfig();
       } catch (error) { showToast(readableError(error)); addButton.disabled = false; }
     }, "quiet small");
-    const refresh = action("刷新目录", async () => {
-      refresh.disabled = true; showToast("正在刷新模型目录…");
+    const runRefresh = async (trigger) => {
+      trigger.disabled = true; trigger.setAttribute("aria-busy", "true"); showToast("正在探测模型目录…");
       try { await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/models/refresh`, "POST", {}, null); showToast("模型目录已刷新"); await loadModelConfig(); }
       catch (error) { await loadModelConfig(); showToast(`目录刷新失败：${readableError(error)}`); }
-      finally { refresh.disabled = false; }
-    }, "quiet small");
+      finally { trigger.disabled = false; trigger.removeAttribute("aria-busy"); }
+    };
+    const refresh = action("刷新目录", () => runRefresh(refresh), "quiet small");
     if (!modelRecords.length) {
       const empty = node("div", undefined, "model-catalog-empty");
+      const failed = provider.catalog_status === "failed";
       empty.append(
-        node("strong", "尚未配置模型"),
-        node("p", "点击“探测可用模型”从 Provider 目录读取模型；不支持目录的服务可手动添加模型 ID。"),
+        node("strong", failed ? "模型目录探测失败" : "尚未配置模型"),
+        node("p", failed
+          ? `上次探测失败：${provider.catalog_error || "目录请求失败"}。可以重试；不支持目录的服务可手动添加模型 ID。`
+          : "点击“探测可用模型”从 Provider 目录读取模型；不支持目录的服务可手动添加模型 ID。"),
       );
-      const discover = action("探测可用模型", () => refresh.click(), "secondary small");
+      const discover = action(failed ? "重新探测模型" : "探测可用模型", () => runRefresh(discover), "secondary small");
       discover.setAttribute("aria-label", `探测 ${provider.display_name || provider.provider_id} 的可用模型`);
       empty.append(discover);
       catalog.append(empty);
