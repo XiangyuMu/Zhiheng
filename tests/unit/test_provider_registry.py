@@ -89,3 +89,40 @@ def test_siliconflow_discovery_uses_embedding_catalog_filter(monkeypatch) -> Non
     assert status == "succeeded"
     assert [item.model_id for item in models] == ["BAAI/bge-m3"]
     assert requested == ["https://api.siliconflow.cn/v1/models?sub_type=embedding"]
+
+
+def test_model_id_with_slash_can_save_capability_over_http(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    bootstrap = client.post(
+        "/auth/bootstrap", json={"username": "owner", "password": "correct horse battery staple"}
+    )
+    csrf = bootstrap.json()["csrf_token"]
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "siliconflow-provider"},
+        json={
+            "provider_kind": "siliconflow",
+            "display_name": "SiliconFlow",
+            "base_url": "https://api.siliconflow.cn/v1",
+            "api_key": "synthetic-key",
+        },
+    )
+    assert created.status_code == 200
+    provider = created.json()
+    model_id = "Pro/BAAI/bge-m3"
+    added = client.post(
+        f"/v1/model-config/providers/{provider['provider_id']}/models",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "siliconflow-model"},
+        json={"model_id": model_id, "protocol": "embeddings"},
+    )
+    assert added.status_code == 200
+    updated = client.patch(
+        f"/v1/model-config/providers/{provider['provider_id']}/models/{model_id}",
+        headers={
+            "X-CSRF-Token": csrf,
+            "If-Match": added.json()["etag"],
+            "Idempotency-Key": "siliconflow-model-capability",
+        },
+        json={"confirmed_capabilities": ["embedding"]},
+    )
+    assert updated.status_code == 200, updated.text

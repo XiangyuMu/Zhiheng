@@ -636,7 +636,7 @@ def create_app(
         _remember_model_config_result(app, operation_key, fingerprint, result)
         return result
 
-    @app.patch("/v1/model-config/providers/{provider_id}/models/{model_id}", tags=["models"])
+    @app.patch("/v1/model-config/providers/{provider_id}/models/{model_id:path}", tags=["models"])
     def model_provider_model_patch(
         provider_id: str,
         model_id: str,
