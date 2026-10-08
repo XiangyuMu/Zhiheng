@@ -382,6 +382,16 @@ function fileKind(file) {
 async function submitImportBatch(items) {
   if (!items.length) return null;
   try {
+    for (const item of items) {
+      if (!item.task_id && item.source_id) {
+        try {
+          const processing = await fetchJson(`/v1/knowledge/${encodeURIComponent(item.source_id)}/processing`);
+          if (processing.job_id) item.task_id = processing.job_id;
+        } catch (_) {
+          // The batch remains visible even when the optional projection is not available.
+        }
+      }
+    }
     const response = await mutate("/v1/knowledge/import-batches", {
       items: items.map((item) => ({
         source_id: item.source_id || item.task_id,
@@ -1317,7 +1327,17 @@ function renderModelProviders(providers) {
     reveal.setAttribute("aria-label", "临时显示 API Key 脱敏状态");
     health.append(secret, document.createTextNode(" · "), reveal, document.createTextNode(` · 状态：${provider.health_status || "未知"}${provider.health_error ? ` · ${provider.health_error}` : ""}`));
     const actions = node("div", undefined, "provider-actions");
-    actions.append(action("编辑", () => openProviderEditor(provider)), action(provider.enabled ? "停用" : "启用", () => toggleProvider(provider)), action("测试连接", () => testProvider(provider)));
+    const testModel = document.createElement("select");
+    testModel.setAttribute("aria-label", `${provider.display_name} 测试模型`);
+    const testable = modelRecords.filter((record) => record.enabled && !record.stale && (record.confirmed_capabilities || []).length);
+    testable.forEach((record) => {
+      const option = node("option", record.model_id); option.value = record.model_id; testModel.append(option);
+    });
+    if (!testable.length) testModel.append(node("option", "请先保存模型能力"));
+    testModel.disabled = !testable.length;
+    const testButton = action("测试连接", () => testProvider(provider, testModel.value));
+    testButton.disabled = !testable.length;
+    actions.append(action("编辑", () => openProviderEditor(provider)), action(provider.enabled ? "停用" : "启用", () => toggleProvider(provider)), testModel, testButton);
     if (provider.secret_configured) actions.append(action("删除密钥", () => deleteProviderSecret(provider), "danger"));
     if (provider.secret_source === "legacy_env") actions.append(action("迁移到本地加密", () => migrateProviderSecret(provider), "quiet"));
     actions.append(action("归档", () => archiveProvider(provider), "danger"));
@@ -1405,7 +1425,7 @@ async function saveProvider(event) {
 }
 async function toggleProvider(provider) { try { await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}`, "PATCH", { enabled: !provider.enabled }, provider.etag); await loadModelConfig(); } catch (error) { showToast(readableError(error)); } }
 async function archiveProvider(provider) { try { await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}`, "PATCH", { archived: true, enabled: false }, provider.etag); await loadModelConfig(); } catch (error) { showToast(readableError(error)); } }
-async function testProvider(provider) { try { showToast("正在测试连接…"); const result = await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/connectivity-test`, "POST", {}, null); showToast(result.status === "succeeded" ? "连接测试成功" : `连接失败：${result.message}`); await loadModelConfig(); } catch (error) { showToast(readableError(error)); } }
+async function testProvider(provider, modelId) { try { showToast("正在测试连接…"); const result = await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/connectivity-test?model_id=${encodeURIComponent(modelId)}`, "POST", {}, null); showToast(result.status === "succeeded" ? `模型 ${result.model_id} 目录连通检查成功（尚未验证生成或向量化）` : `连接失败：${result.message}`); await loadModelConfig(); } catch (error) { showToast(readableError(error)); } }
 async function deleteProviderSecret(provider) { if (!window.confirm("删除此 Provider 密钥并立即停用 Provider？")) return; try { await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/secret`, "DELETE", {}, provider.etag); showToast("密钥已删除，Provider 已停用"); await loadModelConfig(); } catch (error) { showToast(readableError(error)); } }
 async function migrateProviderSecret(provider) { try { showToast("正在迁移密钥…"); await modelMutation(`/v1/model-config/providers/${encodeURIComponent(provider.provider_id)}/secret/migrate`, "POST", {}, provider.etag); showToast("密钥已迁移到本地加密存储"); await loadModelConfig(); } catch (error) { showToast(readableError(error)); } }
 function renderModelAudits(audits) { $("model-audit-list").replaceChildren(...(audits || []).map((audit) => { const tr = node("tr"); const code = audit.diagnostic_code || audit.error_class || ""; const payloadHash = audit.payload_hash || ""; const responseHash = audit.response_hash || ""; const hash = payloadHash || responseHash ? `请求 ${payloadHash.slice(0, 12) || "—"} · 响应 ${responseHash.slice(0, 12) || "—"}` : "—"; tr.append(node("td", audit.sent_at || audit.created_at || ""), node("td", `${audit.provider_id} / ${audit.model_id}`), node("td", modelAuditStatusNames[audit.status] || audit.status || ""), node("td", audit.duration_ms == null ? "—" : `${audit.duration_ms} ms`), node("td", modelDiagnosticNames[code] || (audit.status === "failed" ? "调用失败" : "—")), node("td", hash)); return tr; })); }

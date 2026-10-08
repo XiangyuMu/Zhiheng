@@ -1869,3 +1869,47 @@ def test_audit_kind_upgrade_preserves_history_without_model_id_collision(tmp_pat
     command.downgrade(config, "0040_provider_secret_rotation")
     command.upgrade(config, "head")
     assert client.get("/v1/model-config/secret-audits").json() == lifecycle
+
+
+def test_connectivity_selects_confirmed_model_among_unconfirmed_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _empty_client(tmp_path)
+    csrf = _login(client)
+    created = client.post(
+        '/v1/model-config/providers',
+        headers={'X-CSRF-Token': csrf, 'Idempotency-Key': 'selection-provider'},
+        json={'provider_kind': 'siliconflow', 'display_name': 'Selection',
+              'base_url': 'https://api.siliconflow.cn/v1', 'enabled': True},
+    )
+    assert created.status_code == 200
+    provider = created.json()
+    app = cast(FastAPI, client.app)
+    with app.state.session_factory() as session:
+        for index, model in enumerate(('BAAI/bge-m3', 'Pro/BAAI/bge-m3')):
+            session.execute(text(
+                'INSERT INTO model_provider_models '
+                '(id, provider_id, model_id, source, protocol, '
+                'suggested_capabilities_json, confirmed_capabilities_json, enabled, stale) '
+                "VALUES (:id,:provider,:model,'discovered','embeddings',"
+                "'[\"embedding\"]',:confirmed,1,0)"
+            ), {'id': f'selection-{index}', 'provider': provider['provider_id'],
+                'model': model, 'confirmed': '["embedding"]' if index else '[]'})
+        session.commit()
+    probed: list[str] = []
+
+    def probe(**kwargs: Any) -> tuple[str, str, str]:
+        probed.append(kwargs['model_id'])
+        return 'succeeded', 'ok', '连接正常'
+
+    monkeypatch.setattr('zhiheng.models.gateway.probe_model_provider_connectivity', probe)
+    endpoint = f"/v1/model-config/providers/{provider['provider_id']}/connectivity-test"
+    response = client.post(endpoint, headers={
+        'X-CSRF-Token': csrf, 'Idempotency-Key': 'selection-test'})
+    assert response.status_code == 200, response.text
+    assert response.json()['model_id'] == 'Pro/BAAI/bge-m3'
+    assert probed == ['Pro/BAAI/bge-m3']
+    rejected = client.post(endpoint, params={'model_id': 'BAAI/bge-m3'}, headers={
+        'X-CSRF-Token': csrf, 'Idempotency-Key': 'selection-unconfirmed'})
+    assert rejected.status_code == 422
+    assert probed == ['Pro/BAAI/bge-m3']

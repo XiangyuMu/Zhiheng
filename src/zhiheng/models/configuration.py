@@ -651,9 +651,12 @@ def connectivity_test(
         raise ValueError("provider is disabled")
     records = _model_records(session, provider_id)
     available_records = [record for record in records if record["enabled"] and not record["stale"]]
+    confirmed_records = [record for record in available_records if record["confirmed_capabilities"]]
     selected_model = model_id or (
-        str(available_records[0]["model_id"]) if available_records else None
+        str(confirmed_records[0]["model_id"]) if confirmed_records else None
     )
+    if not selected_model and available_records:
+        raise ValueError("请先保存模型能力，再测试连接")
     if not selected_model:
         raise ValueError("provider has no configured model")
     allowed = {

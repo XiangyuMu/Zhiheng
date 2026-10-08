@@ -192,9 +192,10 @@ def _project_batch_item(session: Session, item: dict[str, Any]) -> dict[str, Any
              AND ja.started_at=(SELECT max(ja2.started_at) FROM job_attempts ja2
                                 WHERE ja2.job_id=j.id)
             WHERE j.id=:task_id
+               OR json_extract(j.payload_json,'$.knowledge_object_id')=:source_id
             """
             ),
-            {"task_id": task_id},
+            {"task_id": task_id, "source_id": str(item.get("source_id") or "")},
         )
         .mappings()
         .first()
