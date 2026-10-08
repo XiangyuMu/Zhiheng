@@ -72,7 +72,7 @@ def test_siliconflow_discovery_uses_embedding_catalog_filter(monkeypatch) -> Non
         status_code = 200
 
         def json(self) -> dict[str, object]:
-            return {"data": [{"id": "BAAI/bge-m3"}]}
+            return {"data": [{"id": "BAAI/bge-m3"}, {"id": "Qwen/Qwen3-VL-Embedding-8B"}]}
 
     def fake_get(url: str, **_: object) -> Response:
         requested.append(url)

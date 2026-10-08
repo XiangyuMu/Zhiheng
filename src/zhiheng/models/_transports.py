@@ -66,6 +66,8 @@ def discover_provider_models(
             continue
         identifier = item.get("name") if provider_kind == "ollama" else item.get("id")
         if isinstance(identifier, str) and identifier.strip():
+            if provider_kind == "siliconflow" and "-VL-Embedding" in identifier:
+                continue
             result.append(DiscoveredModel(identifier.strip(), identifier.strip()))
     if not result:
         raise RuntimeError("catalog_response_format_error:供应商目录没有模型")
