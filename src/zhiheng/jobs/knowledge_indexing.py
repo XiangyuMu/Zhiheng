@@ -186,6 +186,9 @@ class KnowledgeJobRepository:
             raise ValueError("only failed or dead knowledge jobs can be retried")
 
         retry_key = retry_idempotency_key(operation_key)
+        retry_payload = _json_object(row["payload_json"])
+        for failure_key in ("failure_code", "failure_stage", "retryable"):
+            retry_payload.pop(failure_key, None)
         session.execute(
             text(
                 """
@@ -201,7 +204,11 @@ class KnowledgeJobRepository:
                 "id": new_id(),
                 "job_type": KNOWLEDGE_INDEX_JOB_TYPE,
                 "idempotency_key": retry_key,
-                "payload_json": row["payload_json"],
+                "payload_json": json.dumps(
+                    retry_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
             },
         )
         retry_row = (

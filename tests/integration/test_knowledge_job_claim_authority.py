@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -120,6 +121,69 @@ def test_failed_knowledge_job_retry_creates_fenced_job_and_replays_idempotently(
             ).scalar_one()
             == "failed"
         )
+
+
+def test_failed_knowledge_job_retry_clears_stale_failure_projection_fields(
+    tmp_path: Path,
+) -> None:
+    _settings, factory = _migrated(tmp_path)
+    repository = KnowledgeJobRepository()
+    with factory.begin() as session:
+        job_id = _enqueue_knowledge_job(
+            session,
+            "knowledge-retry-clears-failure",
+            knowledge_object_id="synthetic-knowledge",
+        )
+        session.execute(
+            text("UPDATE jobs SET payload_json=:payload WHERE id=:id"),
+            {
+                "id": job_id,
+                "payload": json_text(
+                    {
+                        "fixture": "synthetic",
+                        "knowledge_object_id": "synthetic-knowledge",
+                        "failure_code": "indexing_failed",
+                        "failure_stage": "index",
+                        "retryable": True,
+                    }
+                ),
+            },
+        )
+        claimed = repository.claim_available(session, worker_id="worker")[0]
+        assert repository.fail(session, claimed, exc=ValueError("index failed")) is True
+        session.execute(text("UPDATE jobs SET status='failed' WHERE id=:id"), {"id": job_id})
+
+    with factory.begin() as session:
+        row = dict(
+            session.execute(
+                text(
+                    "SELECT id, status, attempts, max_attempts, updated_at, payload_json "
+                    "FROM jobs WHERE id=:id"
+                ),
+                {"id": job_id},
+            )
+            .mappings()
+            .one()
+        )
+        retry = repository.retry_failed_job(
+            session,
+            knowledge_object_id="synthetic-knowledge",
+            expected_job_id=job_id,
+            expected_etag=job_etag(row),
+            operation_key="retry-clears-failure",
+        )
+        payload = json.loads(
+            session.execute(
+                text("SELECT payload_json FROM jobs WHERE id=:id"),
+                {"id": retry.job_id},
+            ).scalar_one()
+        )
+
+    assert retry.status == "pending"
+    assert payload == {
+        "fixture": "synthetic",
+        "knowledge_object_id": "synthetic-knowledge",
+    }
 
 
 def test_failed_knowledge_job_retry_rejects_processing_and_stale_etag(tmp_path: Path) -> None:
