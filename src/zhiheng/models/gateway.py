@@ -40,7 +40,7 @@ from zhiheng.privacy.gateway import (
 )
 from zhiheng.secrets import EnvironmentSecretStore, SecretResolver
 
-_ALLOWED_PROVIDER_KINDS = {"ollama", "openai", "deepseek", "openai-compatible"}
+_ALLOWED_PROVIDER_KINDS = {"ollama", "openai", "deepseek", "openai-compatible", "siliconflow"}
 _MAX_OUTBOUND_IMAGE_BYTES = 20 * 1024 * 1024
 _ALLOWED_IMAGE_MEDIA_TYPES = {"image/gif", "image/jpeg", "image/png", "image/webp"}
 
@@ -168,6 +168,7 @@ class ModelGateway:
             "deepseek:responses": DeepSeekResponsesTransport(self._secret_store),
             "deepseek:chat_completions": OpenAICompatibleChatTransport(self._secret_store),
             "openai-compatible:chat_completions": OpenAICompatibleChatTransport(self._secret_store),
+            "siliconflow:chat_completions": OpenAICompatibleChatTransport(self._secret_store),
         }
         self._before_claim_hook = before_claim_hook
 
@@ -217,7 +218,7 @@ class ModelGateway:
             ),
             external_models_enabled=(
                 self._settings.external_models_enabled
-                if route.provider_kind in {"openai", "deepseek", "openai-compatible"}
+                if route.provider_kind in {"openai", "deepseek", "openai-compatible", "siliconflow"}
                 else True
             ),
         )

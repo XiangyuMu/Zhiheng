@@ -38,7 +38,7 @@ from zhiheng.core.config import Settings, get_settings
 from zhiheng.core.ids import sha256_text
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
 from zhiheng.models.configuration import (
-    ALLOWED_PROVIDER_KINDS,
+    CONFIGURABLE_PROVIDER_KINDS,
     ProviderInput,
     add_provider_model,
     connectivity_test,
@@ -53,6 +53,7 @@ from zhiheng.models.configuration import (
     update_provider,
     update_provider_model,
 )
+from zhiheng.models.registry import list_provider_definitions
 from zhiheng.recovery import startup_recovery_barrier
 from zhiheng.secrets import ProviderSecretStore
 
@@ -67,6 +68,8 @@ def _default_provider_base_url(provider_kind: str) -> str:
         return "https://api.deepseek.com"
     if provider_kind == "ollama":
         return "http://127.0.0.1:11434"
+    if provider_kind == "siliconflow":
+        return "https://api.siliconflow.cn/v1"
     return "https://api.example.com/v1"
 
 
@@ -443,6 +446,16 @@ def create_app(
         )[:32]
         return providers
 
+    @app.get("/v1/model-config/registry", tags=["models"])
+    def model_provider_registry(
+        session: SessionDep,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+    ) -> list[dict[str, object]]:
+        _require_session(session, session_service, session_token)
+        response.headers["Cache-Control"] = "no-store"
+        return list_provider_definitions()
+
     @app.get("/v1/model-config/providers", tags=["models"])
     def model_providers(
         session: SessionDep,
@@ -484,8 +497,10 @@ def create_app(
             response.headers["ETag"] = str(cached.get("etag", ""))
             response.headers["Cache-Control"] = "no-store"
             return dict(cached)
-        if payload.provider_kind not in ALLOWED_PROVIDER_KINDS:
-            raise HTTPException(status_code=422, detail="provider kind is not allowlisted")
+        if payload.provider_kind not in CONFIGURABLE_PROVIDER_KINDS:
+            raise HTTPException(
+                status_code=422, detail="provider kind is not in the provider registry"
+            )
         try:
             result = create_provider(
                 session,

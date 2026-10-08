@@ -35,11 +35,12 @@ def discover_provider_models(
         resolver = secret_store or EnvironmentSecretStore()
         secret = resolver.resolve(secret_ref, provider_id=provider_id).get_secret_value()
         headers["Authorization"] = f"Bearer {secret}"
-    url = (
-        f"{endpoint_url.rstrip('/')}/api/tags"
-        if provider_kind == "ollama"
-        else f"{endpoint_url.rstrip('/')}/models"
-    )
+    if provider_kind == "ollama":
+        url = f"{endpoint_url.rstrip('/')}/api/tags"
+    elif provider_kind == "siliconflow":
+        url = f"{endpoint_url.rstrip('/')}/models?sub_type=embedding"
+    else:
+        url = f"{endpoint_url.rstrip('/')}/models"
     try:
         response = httpx.get(url, headers=headers, timeout=timeout)
     except httpx.TimeoutException as exc:

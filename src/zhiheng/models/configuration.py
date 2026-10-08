@@ -18,9 +18,13 @@ from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import new_id
 from zhiheng.models.embeddings import discover_provider_models
+from zhiheng.models.registry import PROVIDER_DEFINITIONS, provider_definition
 from zhiheng.secrets import ProviderSecretStore, SecretStatus
 
-ALLOWED_PROVIDER_KINDS = frozenset({"ollama", "openai", "deepseek", "openai-compatible"})
+ALLOWED_PROVIDER_KINDS = frozenset(
+    {"ollama", "openai", "deepseek", "openai-compatible", "siliconflow"}
+)
+CONFIGURABLE_PROVIDER_KINDS = frozenset(item.provider_id for item in PROVIDER_DEFINITIONS)
 
 
 def _supported_protocols(provider_kind: str) -> set[str]:
@@ -28,6 +32,7 @@ def _supported_protocols(provider_kind: str) -> set[str]:
         "openai": {"responses", "chat_completions", "embeddings"},
         "deepseek": {"responses", "chat_completions"},
         "openai-compatible": {"chat_completions", "embeddings"},
+        "siliconflow": {"chat_completions", "embeddings"},
         "ollama": {"chat_completions"},
     }.get(provider_kind, set())
 
@@ -337,8 +342,11 @@ def update_provider(
     enabled = bool(changes.get("enabled", row["enabled"]))
     if not display_name:
         raise ValueError("display_name must not be empty")
-    if provider_kind not in ALLOWED_PROVIDER_KINDS:
-        raise ValueError("provider kind is not allowlisted")
+    if provider_kind not in CONFIGURABLE_PROVIDER_KINDS:
+        raise ValueError("provider kind is not in the provider registry")
+    definition = provider_definition(provider_kind)
+    if definition is not None and definition.implementation_status == "unsupported" and enabled:
+        raise ValueError("provider kind is registered but not supported by this build")
     if archived:
         enabled = False
     _validate_endpoint(endpoint_url, provider_kind)
@@ -920,9 +928,12 @@ def _provider_response(
     text_models = _models_from_records(records, "text")
     multimodal_models = _models_from_records(records, "multimodal")
     secret_status = _secret_status(row, secret_store=secret_store, session=session)
+    definition = provider_definition(str(row["provider_kind"]))
     return {
         "provider_id": str(row["id"]),
         "provider_kind": str(row["provider_kind"]),
+        "registry_id": str(row["provider_kind"]),
+        "implementation_status": definition.implementation_status if definition else "unsupported",
         "display_name": str(row["display_name"]),
         "base_url": str(row["endpoint_url"] or ""),
         "endpoint_url": str(row["endpoint_url"] or ""),
@@ -1006,6 +1017,9 @@ def refresh_provider_models(
     row = _provider_row(session, provider_id)
     if row is None:
         raise LookupError("provider not found")
+    definition = provider_definition(str(row["provider_kind"]))
+    if definition is not None and definition.implementation_status == "unsupported":
+        raise ValueError("catalog_unsupported:该 Provider 的协议当前版本尚未支持")
     try:
         discovered, _status, _message = discover_provider_models(
             endpoint_url=str(row["endpoint_url"]),
@@ -1025,6 +1039,11 @@ def refresh_provider_models(
         )
         raise ValueError(f"{code}:{message}") from exc
     protocol = "responses" if row["provider_kind"] == "openai" else "chat_completions"
+    if row["provider_kind"] == "siliconflow":
+        protocol = "embeddings"
+    suggested_capabilities = (
+        '["embedding"]' if row["provider_kind"] == "siliconflow" else '["text"]'
+    )
     existing = {
         str(item["model_id"]): item
         for item in _model_records(session, provider_id)
@@ -1040,7 +1059,7 @@ def refresh_provider_models(
                     "suggested_capabilities_json, confirmed_capabilities_json, "
                     "enabled, stale, last_seen_at) "
                     "VALUES (:id, :provider_id, :model_id, :display_name, 'discovered', :protocol, "
-                    "'[\"text\"]', '[]', 1, 0, CURRENT_TIMESTAMP)"
+                    ":suggested_capabilities, '[]', 1, 0, CURRENT_TIMESTAMP)"
                 ),
                 {
                     "id": new_id(),
@@ -1048,6 +1067,7 @@ def refresh_provider_models(
                     "model_id": item.model_id,
                     "display_name": item.display_name,
                     "protocol": protocol,
+                    "suggested_capabilities": suggested_capabilities,
                 },
             )
         else:
@@ -1179,8 +1199,15 @@ def update_provider_model(
 
 
 def _validate_provider_input(provider: ProviderInput) -> None:
-    if provider.provider_kind not in ALLOWED_PROVIDER_KINDS:
-        raise ValueError("provider kind is not allowlisted")
+    if provider.provider_kind not in CONFIGURABLE_PROVIDER_KINDS:
+        raise ValueError("provider kind is not in the provider registry")
+    definition = provider_definition(provider.provider_kind)
+    if (
+        definition is not None
+        and definition.implementation_status == "unsupported"
+        and provider.enabled
+    ):
+        raise ValueError("provider kind is registered but not supported by this build")
     if not provider.display_name.strip():
         raise ValueError("display_name must not be empty")
     _validate_endpoint(provider.endpoint_url, provider.provider_kind)
@@ -1200,10 +1227,15 @@ def _validate_endpoint(endpoint_url: str, provider_kind: str) -> None:
         or parsed.fragment
     ):
         raise ValueError("provider endpoint URL is not allowed")
-    if provider_kind in {"openai", "deepseek", "openai-compatible"} and parsed.scheme != "https":
+    if (
+        provider_kind in {"openai", "deepseek", "openai-compatible", "siliconflow"}
+        and parsed.scheme != "https"
+    ):
         raise ValueError("external provider requires an https endpoint")
     if provider_kind == "openai" and _endpoint_origin(endpoint_url) != "https://api.openai.com":
         raise ValueError("openai provider requires official api.openai.com endpoint")
+    if provider_kind == "siliconflow" and endpoint_url.rstrip("/") != "https://api.siliconflow.cn/v1":
+        raise ValueError("siliconflow provider requires official api.siliconflow.cn endpoint")
 
 
 def _validate_secret_ref(secret_ref: str | None) -> None:

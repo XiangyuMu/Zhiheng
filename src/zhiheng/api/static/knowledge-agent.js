@@ -8,7 +8,7 @@ const state = {
   batchRequest: 0, batchEventSource: null, batchPoller: null, versions: [], selectedKnowledge: new Set(),
   usingSearchApi: false, similar: [], mergeTarget: null,
   conversationId: localStorage.getItem("zhiheng.conversation_id") || null,
-  modelProviders: [], modelDefaults: { text: null, multimodal: null, etag: "defaults:0" },
+  modelProviders: [], providerRegistry: [], modelDefaults: { text: null, multimodal: null, etag: "defaults:0" },
   modelEtag: null, providerEditing: null, secretTimers: new Map(),
   modelAuditFilters: { provider_id: "", model_id: "", status: "", since: "", until: "" },
   contextPrompts: [],
@@ -1161,10 +1161,11 @@ const modelDiagnosticNames = {
 async function loadModelConfig() {
   $("model-status").textContent = "正在读取配置…";
   try {
-    const [providers, status] = await Promise.all([
-      fetchJson("/v1/model-config/providers"), fetchJson("/v1/model-config/status"),
+    const [providers, status, registry] = await Promise.all([
+      fetchJson("/v1/model-config/providers"), fetchJson("/v1/model-config/status"), fetchJson("/v1/model-config/registry"),
     ]);
-    state.modelProviders = providers; state.modelDefaults = status.defaults || state.modelDefaults;
+    state.modelProviders = providers; state.providerRegistry = registry; state.modelDefaults = status.defaults || state.modelDefaults;
+    renderProviderRegistry(registry);
     renderModelProviders(providers); renderModelDefaults(providers, state.modelDefaults); renderModelAuditFilters(providers);
     await loadModelAudits();
     const recentFailure = status.recent_failures?.[0];
@@ -1178,6 +1179,21 @@ async function loadModelConfig() {
       ? `已配置 ${providers.length} 个模型服务${failureHint}${externalHint}`
       : "尚未配置模型服务。系统可检索资料，生成能力取决于服务器配置。";
   } catch (error) { $("model-status").textContent = readableError(error); }
+}
+
+function renderProviderRegistry(definitions) {
+  const select = $("provider-kind");
+  if (!select || !Array.isArray(definitions)) return;
+  const current = select.value;
+  select.replaceChildren(...definitions.map((definition) => {
+    const option = node("option", `${definition.display_name}${definition.implementation_status === "unsupported" ? " · 暂不支持" : ""}`);
+    option.value = definition.provider_id;
+    option.disabled = false;
+    option.dataset.defaultBaseUrl = definition.default_base_url;
+    option.dataset.editableBaseUrl = String(definition.editable_base_url);
+    return option;
+  }));
+  if (definitions.some((item) => item.provider_id === current)) select.value = current;
 }
 
 function auditFilterValue(id) {
@@ -1259,7 +1275,7 @@ function renderModelProviders(providers) {
     const modelInput = document.createElement("input"); modelInput.placeholder = "手动添加模型 ID";
     modelInput.setAttribute("aria-label", `为 ${provider.display_name} 添加模型`);
     const protocol = document.createElement("select"); protocol.setAttribute("aria-label", "模型协议");
-    const supportedProtocols = { openai: ["responses", "chat_completions", "embeddings"], deepseek: ["responses", "chat_completions"], "openai-compatible": ["chat_completions"], ollama: ["chat_completions"] }[provider.provider_kind] || ["chat_completions"];
+    const supportedProtocols = { openai: ["responses", "chat_completions", "embeddings"], deepseek: ["responses", "chat_completions"], "openai-compatible": ["chat_completions", "embeddings"], ollama: ["chat_completions"], siliconflow: ["chat_completions", "embeddings"] }[provider.provider_kind] || ["chat_completions"];
     supportedProtocols.forEach((value) => { const option = node("option", value); option.value = value; protocol.append(option); });
     const addButton = action("添加模型", async () => {
       const model_id = modelInput.value.trim(); if (!model_id) { showToast("请输入模型 ID"); return; }
@@ -1351,10 +1367,28 @@ function modelMutation(url, method, payload, etag) {
 }
 function openProviderEditor(provider) {
   state.providerEditing = provider || null; $("model-provider-editor").hidden = false;
+  const definition = state.providerRegistry.find((item) => item.provider_id === (provider?.provider_kind || "openai-compatible"));
   $("provider-id").value = provider?.provider_id || ""; $("provider-kind").value = provider?.provider_kind || "openai-compatible";
-  $("provider-name").value = provider?.display_name || ""; $("provider-base-url").value = provider?.base_url || "";
+  $("provider-name").value = provider?.display_name || definition?.display_name || "";
+  $("provider-base-url").value = provider?.base_url || definition?.default_base_url || "";
   $("provider-api-key").value = ""; $("provider-secret-ref").value = ""; $("provider-text-models").value = (provider?.text_models || provider?.models || []).join("\n"); $("provider-multimodal-models").value = (provider?.multimodal_models || []).join("\n"); $("provider-enabled").checked = Boolean(provider?.enabled);
+  const status = $("provider-wizard-status");
+  if (status) {
+    const models = provider?.model_records || [];
+    const confirmed = models.filter((item) => (item.confirmed_capabilities || []).length).length;
+    const tested = provider?.health_status === "succeeded";
+    status.textContent = provider
+      ? `步骤 ${tested ? "4/4" : confirmed ? "3/4" : models.length ? "2/4" : "1/4"}：${tested ? "已通过具体模型连接测试" : confirmed ? "请测试具体模型后启用" : models.length ? "请确认模型能力" : "请探测或手动添加模型"}。`
+      : "步骤 1/4：选择预设并保存连接配置。保存后可探测模型、确认能力并测试具体模型。";
+  }
 }
+$("provider-kind").addEventListener("change", () => {
+  const definition = state.providerRegistry.find((item) => item.provider_id === $("provider-kind").value);
+  if (!definition || state.providerEditing) return;
+  $("provider-name").value = definition.display_name;
+  $("provider-base-url").value = definition.default_base_url;
+  showToast(definition.implementation_status === "unsupported" ? "该 Provider 已登记但当前协议暂不支持" : `已载入 ${definition.display_name} 预设`);
+});
 function closeProviderEditor() { $("provider-api-key").value = ""; state.providerEditing = null; $("model-provider-editor").hidden = true; $("provider-secret-ref").value = ""; $("model-provider-form")?.reset?.(); }
 async function saveProvider(event) {
   event.preventDefault();
