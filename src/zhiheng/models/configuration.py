@@ -654,7 +654,7 @@ def connectivity_test(
         if cast(list[object], record["confirmed_capabilities"])
     }
     if selected_model not in allowed:
-        raise ValueError("model is not allowlisted for provider")
+        raise ValueError("请先保存模型能力，再测试连接")
     secret_status = _secret_status(row, secret_store=secret_store, session=session)
 
     from zhiheng.models.gateway import probe_model_provider_connectivity

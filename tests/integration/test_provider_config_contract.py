@@ -298,6 +298,39 @@ def test_connectivity_rejects_stale_normalized_model(tmp_path: Path) -> None:
     assert response.status_code == 422
 
 
+def test_connectivity_explains_that_capability_must_be_saved(tmp_path: Path) -> None:
+    client = _empty_client(tmp_path)
+    csrf = _login(client)
+    created = client.post(
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "unsaved-capability-provider"},
+        json={
+            "provider_kind": "openai-compatible",
+            "display_name": "Unsaved capability",
+            "base_url": "https://models.example.test/v1",
+            "text_models": ["chat-model"],
+            "enabled": True,
+        },
+    )
+    assert created.status_code == 200
+    app = cast(FastAPI, client.app)
+    with app.state.session_factory() as session:
+        session.execute(
+            text(
+                "UPDATE model_provider_models SET confirmed_capabilities_json='[]' "
+                "WHERE provider_id=:provider_id"
+            ),
+            {"provider_id": created.json()["provider_id"]},
+        )
+        session.commit()
+    response = client.post(
+        f"/v1/model-config/providers/{created.json()['provider_id']}/connectivity-test",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "unsaved-capability-test"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "请先保存模型能力，再测试连接"
+
+
 def test_model_catalog_refresh_preserves_confirmations_and_marks_missing_stale(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
