@@ -91,6 +91,8 @@ fs.mkdirSync(output, { recursive: true });
     await page.getByText("Provider 配置已保存").waitFor();
 
     const card = page.locator("li.provider-card").filter({ hasText: "Issue 47 Browser Provider" });
+    await card.getByText("尚未配置模型").waitFor();
+    await card.getByRole("button", { name: "探测 Issue 47 Browser Provider 的可用模型", exact: true }).waitFor();
     await card.getByRole("button", { name: "刷新目录", exact: true }).click();
     await page.getByText("模型目录已刷新").waitFor();
     const discovered = card.locator(".model-record").filter({ hasText: "issue47-discovered" });

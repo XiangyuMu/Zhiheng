@@ -1250,7 +1250,8 @@ function renderModelProviders(providers) {
     const li = node("li", undefined, "provider-card");
     const title = node("strong", `${provider.display_name || provider.provider_id} · ${provider.provider_kind}`);
     const catalog = node("div", undefined, "model-catalog");
-    (provider.model_records || []).forEach((record) => catalog.append(modelCapabilityEditor(provider, record)));
+    const modelRecords = provider.model_records || [];
+    modelRecords.forEach((record) => catalog.append(modelCapabilityEditor(provider, record)));
     const add = node("div", undefined, "model-add-row");
     const modelInput = document.createElement("input"); modelInput.placeholder = "手动添加模型 ID";
     modelInput.setAttribute("aria-label", `为 ${provider.display_name} 添加模型`);
@@ -1271,6 +1272,17 @@ function renderModelProviders(providers) {
       catch (error) { await loadModelConfig(); showToast(`目录刷新失败：${readableError(error)}`); }
       finally { refresh.disabled = false; }
     }, "quiet small");
+    if (!modelRecords.length) {
+      const empty = node("div", undefined, "model-catalog-empty");
+      empty.append(
+        node("strong", "尚未配置模型"),
+        node("p", "点击“探测可用模型”从 Provider 目录读取模型；不支持目录的服务可手动添加模型 ID。"),
+      );
+      const discover = action("探测可用模型", () => refresh.click(), "secondary small");
+      discover.setAttribute("aria-label", `探测 ${provider.display_name || provider.provider_id} 的可用模型`);
+      empty.append(discover);
+      catalog.append(empty);
+    }
     add.append(modelInput, protocol, addButton, refresh);
     const catalogStatus = provider.catalog_status === "failed"
       ? `失败：${provider.catalog_error || "目录请求失败"}`
