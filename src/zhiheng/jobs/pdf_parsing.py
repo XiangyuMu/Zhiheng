@@ -316,6 +316,7 @@ def _request_from_job(job: ClaimedKnowledgeJob) -> ParserParseRequest:
     if not isinstance(lease_generation, int) or lease_generation < 0:
         raise ValueError("job payload lease_generation must be a non-negative integer")
     schema_version = _string_or(payload, "schema_version") or "pdf-parser.manifest.v1"
+    evidence_object_id = _string_or(payload, "evidence_object_id")
     return ParserParseRequest(
         task_id=task_id,
         attempt_id=attempt_id,
@@ -327,6 +328,7 @@ def _request_from_job(job: ClaimedKnowledgeJob) -> ParserParseRequest:
         options_hash=options_hash,
         options=options,
         schema_version=schema_version,
+        evidence_object_id=evidence_object_id,
     )
 
 

@@ -25,6 +25,7 @@ def _job(job_type: str = "knowledge.parse_pdf") -> ClaimedKnowledgeJob:
         idempotency_key="outbox-1",
         payload={
             "task_id": "task-1",
+            "evidence_object_id": "evidence-1",
             "attempt_id": "attempt-1",
             "lease_generation": 3,
             "backend": "deepdoc",

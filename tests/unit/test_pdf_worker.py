@@ -30,6 +30,7 @@ def _request() -> ParserParseRequest:
         output_prefix="artifact://attempts/attempt-1",
         options_hash="b" * 64,
         options={"ocr": "regional"},
+        evidence_object_id="evidence-1",
     )
 
 
@@ -71,6 +72,7 @@ def test_submit_sends_scoped_source_and_authenticated_contract() -> None:
             "source": {
                 "uri": "artifact://evidence/source.pdf",
                 "sha256": "a" * 64,
+                "evidence_object_id": "evidence-1",
             },
             "output_prefix": "artifact://attempts/attempt-1",
             "options_hash": "b" * 64,

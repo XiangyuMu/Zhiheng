@@ -59,6 +59,7 @@ class ParserParseRequest:
     options_hash: str
     options: Mapping[str, Any]
     schema_version: str = "pdf-parser.manifest.v1"
+    evidence_object_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +134,11 @@ class ParserWorkerClient:
                 "source": {
                     "uri": request.source_uri,
                     "sha256": request.source_sha256,
+                    **(
+                        {"evidence_object_id": request.evidence_object_id}
+                        if request.evidence_object_id
+                        else {}
+                    ),
                 },
                 "output_prefix": request.output_prefix,
                 "options_hash": request.options_hash,

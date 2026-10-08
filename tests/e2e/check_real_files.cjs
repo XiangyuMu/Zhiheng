@@ -33,20 +33,19 @@ const report = { started: new Date().toISOString(), imports: [], answers: [], er
       await page.locator('#import-submit').click();
       const response = await responsePromise;
       item.http_status = response.status();
-      if (!response.ok()) continue;
+      if (!response.ok()) throw new Error(`import ${path.basename(file)} failed with HTTP ${response.status()}`);
       await page.waitForFunction(() => !document.querySelector('#import-dialog').open);
-      if (!pdf) {
-        for (let n=0;n<120;n++) {
-          const state = await page.evaluate(async title => {const r=await fetch('/v1/knowledge/search?q='+encodeURIComponent(title)+'&limit=5'); const b=await r.json(); const x=b.items?.find(i=>i.title===title); if(!x?.knowledge_object_id)return {http:r.status,body:{public_status:'queued'}}; const p=await fetch('/v1/knowledge/'+x.knowledge_object_id+'/processing'); return {http:p.status,body:await p.json()};},title);
-          item.states.push({at:new Date().toISOString(),...state});
-          const s=state.body.public_status || state.body.state || state.body.status;
-          if (['succeeded','parsed','dead','failed','unsupported','partial'].includes(s)) break;
-          await page.waitForTimeout(1000);
-        }
-      } else {
-        await page.waitForTimeout(5000);
-        item.processing_text=await page.locator('#processing-section').innerText();
-      }
+      await page.locator('#processing-section').waitFor({state:'visible',timeout:30000});
+      await page.waitForFunction(({title, pdf}) => {
+        const text = document.querySelector('#processing-section')?.innerText || '';
+        if (!text.includes(title)) return false;
+        return pdf ? /(succeeded|parsed|unsupported|failed|partial|dead|不支持|失败)/i.test(text)
+                   : /(已可检索|处理失败|unsupported|failed|部分)/i.test(text);
+      }, {title, pdf}, {timeout: pdf ? 180000 : 120000}).catch(() => {});
+      item.processing_text = await page.locator('#processing-section').innerText();
+      item.searchable = !pdf && item.processing_text.includes('已可检索');
+      item.terminal = /(已可检索|unsupported|failed|partial|dead|不支持|失败)/i.test(item.processing_text);
+      if (!item.terminal) { report.errors.push(`${path.basename(file)} did not reach a terminal UI state`); process.exitCode = 1; }
       await page.screenshot({path:path.join(output,pdf?'pdf-import.png':'text-import.png'),fullPage:true});
     }
     await page.goto(base+'/knowledge-agent#research');
