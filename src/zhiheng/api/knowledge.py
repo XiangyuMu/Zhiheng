@@ -42,6 +42,7 @@ from zhiheng.knowledge import (
 )
 from zhiheng.knowledge.import_adapters import fetch_web, parse_markdown, parse_ocr
 from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
+from zhiheng.retrieval.qualification import formal_searchable_sql
 
 SESSION_COOKIE = "zhiheng_session"
 
@@ -141,6 +142,7 @@ class KnowledgeDetailResponse(BaseModel):
     source_metadata: dict[str, Any]
     text: str
     citations: list[dict[str, Any]]
+    retrieval_generation: dict[str, Any] | None = None
 
 
 class KnowledgeProcessingResponse(BaseModel):
@@ -738,23 +740,7 @@ def search_knowledge(
     conditions = [
         "(ko.owner_user_id = :user_id OR ko.owner_user_id IS NULL)",
         "ko.lifecycle_status <> 'privacy_erased'",
-        """
-        EXISTS (
-          SELECT 1
-          FROM serving_chunks eligible_chunk
-          WHERE eligible_chunk.source_id = ko.id
-            AND EXISTS (
-              SELECT 1
-              FROM jobs completed_index
-              WHERE completed_index.job_type = 'knowledge.index'
-                AND completed_index.status = 'completed'
-                AND (
-                  json_extract(completed_index.payload_json, '$.knowledge_object_id') = ko.id
-                  OR json_extract(completed_index.payload_json, '$.aggregate_id') = ko.id
-                )
-            )
-        )
-        """,
+        formal_searchable_sql("ko"),
     ]
     params: dict[str, Any] = {
         "user_id": user_id,
@@ -1248,7 +1234,7 @@ def knowledge_processing_status(
     with session_scope(session_factory) as session:
         row = (
             session.execute(
-                text("""
+                text(f"""
                 SELECT
                   j.id,
                   j.status,
@@ -1259,9 +1245,8 @@ def knowledge_processing_status(
                   ja.error_class,
                   ja.error_message,
                   ko.lifecycle_status,
-                  CASE WHEN j.status = 'completed' AND EXISTS (
-                    SELECT 1 FROM serving_chunks s
-                    WHERE s.source_id = :knowledge_object_id
+                  CASE WHEN j.status = 'completed' AND (
+                    {formal_searchable_sql("ko")}
                   ) THEN 1 ELSE 0 END AS searchable
                 FROM jobs j
                 LEFT JOIN job_attempts ja ON ja.job_id = j.id

@@ -13,22 +13,27 @@ const [base, output, file] = process.argv.slice(2);
 assert(base && output && file, 'Expected URL, output directory and PDF');
 assert(['localhost', '127.0.0.1'].includes(new URL(base).hostname), 'Local service only');
 assert(process.env.ZHIHENG_TEST_USERNAME && process.env.ZHIHENG_TEST_PASSWORD, 'Missing credentials');
-fs.mkdirSync(output, { recursive: true, mode: 0o700 });
+assert(!fs.existsSync(output), `output directory already exists: ${output}`);
+fs.mkdirSync(output, { mode: 0o700 });
+
 const sourceSha = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const report = {
   started: new Date().toISOString(),
   scope: 'issue53-real-pdf-index-search-citation',
-  sha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
-  dirty: Boolean(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim()),
   input: { name: path.basename(file), sha256: sourceSha },
+  rerank: 'disabled',
   states: [], search: [], status: 'running',
 };
-const save = () => fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2), { mode: 0o600 });
+const reportPath = path.join(output, 'report.json');
+const save = () => fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), { mode: 0o600 });
 
 (async () => {
   let browser;
   let page;
   try {
+    report.sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    report.dirty = Boolean(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim());
+    assert.equal(report.dirty, false, 'final browser evidence requires a clean worktree');
     browser = await chromium.launch({ headless: true });
     report.browser = browser.version();
     page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -54,6 +59,7 @@ const save = () => fs.writeFileSync(path.join(output, 'report.json'), JSON.strin
     report.login = true;
 
     const title = `Issue 53 PDF ${crypto.randomUUID()}`;
+    const receiptAt = Date.now();
     await page.locator('[data-open-import]:visible').first().click();
     await page.locator('#import-file').setInputFiles(file);
     await page.locator('#import-title').fill(title);
@@ -65,8 +71,8 @@ const save = () => fs.writeFileSync(path.join(output, 'report.json'), JSON.strin
     report.receipt = receipt;
     const taskId = receipt.body.task_id;
     assert(taskId, 'receipt must identify task');
-
-    const deadline = Date.now() + 300_000;
+    report.timings = { receipt_ms: 0 };
+    const deadline = receiptAt + 300_000;
     let task;
     while (Date.now() < deadline) {
       const response = await page.evaluate(async (id) => {
@@ -77,43 +83,68 @@ const save = () => fs.writeFileSync(path.join(output, 'report.json'), JSON.strin
       report.states.push({ at: new Date().toISOString(), ...response });
       save();
       assert.equal(response.http, 200);
+      if (task.state === 'parsed' && !report.timings.parsed_ms) report.timings.parsed_ms = Date.now() - receiptAt;
       if (['failed', 'partial', 'unsupported', 'dead'].includes(task.state)) break;
       if (task.state === 'parsed') {
-        const result = await page.evaluate(async (query) => {
-          const r = await fetch(`/v1/knowledge/search?q=${encodeURIComponent(query)}&limit=20`);
+        const query = 'MannequinVideos';
+        report.query = query;
+        // Exercise the actual library search control, then open the result in the reader dialog.
+        await page.goto(`${base}/knowledge-agent#library`);
+        await page.locator('#library-search').fill(query);
+        await page.waitForFunction((expected) => {
+          return [...document.querySelectorAll('#knowledge-items li')].some((item) => item.textContent.includes(expected));
+        }, title, { timeout: 30_000 });
+        const resultItem = page.locator('#knowledge-items li').filter({ hasText: title }).first();
+        await resultItem.getByRole('button', { name: /阅读/ }).click();
+        await page.locator('#knowledge-detail').waitFor({ state: 'visible', timeout: 30_000 });
+        report.ui = { library_search: true, opened_reader: true };
+
+        const result = await page.evaluate(async (q) => {
+          const r = await fetch(`/v1/knowledge/search?q=${encodeURIComponent(q)}&limit=20`);
           return { http: r.status, body: await r.json() };
-        }, 'MannequinVideos');
+        }, query);
         report.search.push({ at: new Date().toISOString(), ...result });
         const hit = result.body.items?.find((item) => item.source_sha256 === sourceSha);
-        if (hit) {
-          report.hit = hit;
-          const detail = await page.evaluate(async (id) => {
-            const r = await fetch(`/v1/knowledge/${encodeURIComponent(id)}`);
-            return { http: r.status, body: await r.json() };
-          }, hit.knowledge_object_id);
-          report.detail = detail;
-          assert.equal(detail.http, 200);
-          assert.equal(detail.body.knowledge_object_id, hit.knowledge_object_id);
-          assert.equal(detail.body.searchable, true);
-          assert.equal(detail.body.media_type, 'application/pdf');
-          assert.equal(detail.body.citations.length > 0, true);
-          assert.equal(detail.body.citations.some((citation) => Number(citation.page_no) > 0), true);
-          report.status = 'passed';
-          break;
-        }
+        assert(hit, 'search must return this import source, not a same-named historical item');
+        report.hit = hit;
+        const detail = await page.evaluate(async (id) => {
+          const r = await fetch(`/v1/knowledge/${encodeURIComponent(id)}`);
+          return { http: r.status, body: await r.json() };
+        }, hit.knowledge_object_id);
+        report.detail = detail;
+        assert.equal(detail.http, 200);
+        assert.equal(detail.body.knowledge_object_id, hit.knowledge_object_id);
+        assert.equal(detail.body.searchable, true);
+        assert.equal(detail.body.media_type, 'application/pdf');
+        assert(detail.body.retrieval_generation, 'active embedding generation evidence is required');
+        assert.equal(detail.body.retrieval_generation.purpose, 'retrieval');
+        assert(detail.body.retrieval_generation.model_id && detail.body.retrieval_generation.model_revision);
+        assert(Number(detail.body.retrieval_generation.dimension) > 0);
+        assert(detail.body.retrieval_generation.physical_index_ref);
+        assert.equal(detail.body.citations.length > 0, true);
+        assert.equal(detail.body.citations.some((citation) => Number(citation.page_no) > 0), true);
+        report.timings.search_ms = Date.now() - receiptAt;
+        report.timings.total_ms = Date.now() - receiptAt;
+        report.status = 'passed';
+        break;
       }
       await page.waitForTimeout(1000);
     }
     assert.equal(report.status, 'passed', 'PDF must become searchable with a source-linked citation');
-    report.finished = new Date().toISOString();
   } catch (error) {
     report.status = 'failed';
     report.failure = String(error.stack || error);
     process.exitCode = 1;
   } finally {
-    report.finished = report.finished || new Date().toISOString();
+    report.finished = new Date().toISOString();
     if (page) {
-      try { await page.screenshot({ path: path.join(output, 'final.png'), fullPage: true }); } catch {}
+      try {
+        await page.screenshot({ path: path.join(output, 'final.png'), fullPage: true });
+      } catch (error) {
+        report.status = 'failed';
+        report.screenshot_failure = String(error.stack || error);
+        process.exitCode = 1;
+      }
     }
     save();
     if (browser) await browser.close();

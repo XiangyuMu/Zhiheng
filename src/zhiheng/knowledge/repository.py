@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import json_text, new_id, sha256_text
 from zhiheng.knowledge.object_store import StoredTextArtifacts
+from zhiheng.retrieval.qualification import formal_searchable_sql
 from zhiheng.retrieval.tokenizer import segment_for_fts
 
 __all__ = [
@@ -123,6 +124,7 @@ class KnowledgeDetail:
     source_metadata: dict[str, Any]
     text: str
     citations: list[dict[str, Any]]
+    retrieval_generation: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -1090,13 +1092,12 @@ class KnowledgeRepository:
         row = (
             session.execute(
                 text(
-                    """
+                    f"""
                 SELECT ko.id, ko.current_version_id, ko.title, ko.primary_domain_id,
                        ko.object_kind, ko.lifecycle_status, kv.summary, eo.media_type,
                        eo.source_metadata_json, c.raw_text,
-                       EXISTS (
-                         SELECT 1 FROM chunks serving
-                         WHERE serving.source_id = ko.id AND serving.status = 'ready'
+                       (
+                         {formal_searchable_sql("ko")}
                        ) AS searchable
                 FROM knowledge_objects ko
                 JOIN knowledge_versions kv
@@ -1120,6 +1121,53 @@ class KnowledgeRepository:
         )
         if row is None:
             return None
+        retrieval_generation = None
+        if bool(row["searchable"]):
+            generation = (
+                session.execute(
+                    text(
+                        """
+                    SELECT id, model_id, model_revision, dimension, purpose,
+                           index_status, physical_index_ref
+                    FROM embedding_generations eg
+                    WHERE eg.index_status = 'active'
+                      AND eg.purpose = 'retrieval'
+                      AND eg.model_id <> ''
+                      AND eg.model_revision <> ''
+                      AND eg.dimension > 0
+                      AND eg.physical_index_ref IS NOT NULL
+                      AND eg.physical_index_ref <> ''
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM serving_chunks missing_chunk
+                        WHERE missing_chunk.source_id = :knowledge_object_id
+                          AND NOT EXISTS (
+                            SELECT 1
+                            FROM chunk_embeddings matching_embedding
+                            WHERE matching_embedding.chunk_id = missing_chunk.id
+                              AND matching_embedding.generation_id = eg.id
+                              AND matching_embedding.source_version_id = (
+                                missing_chunk.source_version_id
+                              )
+                              AND matching_embedding.visibility_scope = (
+                                missing_chunk.visibility_scope
+                              )
+                              AND matching_embedding.confirmation_generation = (
+                                missing_chunk.confirmation_generation
+                              )
+                          )
+                      )
+                    LIMIT 1
+                    """
+                    ),
+                    {"knowledge_object_id": knowledge_object_id},
+                )
+                .mappings()
+                .first()
+            )
+            if generation is not None:
+                retrieval_generation = dict(generation)
+
         citations = [
             dict(item)
             for item in session.execute(
@@ -1152,6 +1200,7 @@ class KnowledgeRepository:
             source_metadata=self._json_object(row["source_metadata_json"]),
             text=str(row["raw_text"] or ""),
             citations=citations,
+            retrieval_generation=retrieval_generation,
         )
 
     def rebuild_fts_index(self, session: Session) -> int:
