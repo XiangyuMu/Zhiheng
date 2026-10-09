@@ -257,6 +257,47 @@ def test_gateway_manifest_failure_is_persisted_as_terminal_status(tmp_path: Path
     assert again.json() == failed.json()
 
 
+def test_gateway_rejects_result_for_an_unrelated_source(tmp_path: Path) -> None:
+    module = _gateway_module()
+    source = tmp_path / "objects" / "source.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(_source_pdf())
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/tasks":
+            return httpx.Response(202, json={"task_id": "upstream-1", "status": "pending"})
+        if request.url.path == "/tasks/upstream-1":
+            return httpx.Response(200, json={"status": "completed"})
+        return httpx.Response(
+            200,
+            json={"results": {"different-file": {"content_list": "[]"}}},
+        )
+
+    async def scenario() -> httpx.Response:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="http://mineru"
+        ) as upstream:
+            app = module.create_app(
+                module.GatewayConfig(tmp_path / "objects", "http://mineru", "token"),
+                http_client=upstream,
+            )
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+            ) as api:
+                headers = {"Authorization": "Bearer token"}
+                assert (
+                    await api.post("/v1/parse", json=_payload(source), headers=headers)
+                ).status_code == 200
+                return await api.get("/v1/parse/attempt-1", headers=headers)
+
+    response = _run(scenario())
+    assert response.json() == {
+        "attempt_id": "attempt-1",
+        "state": "failed",
+        "failure_code": "mineru_result_invalid",
+    }
+
+
 def test_gateway_rejects_hash_mismatch_without_upstream_call(tmp_path: Path) -> None:
     gateway_module = _gateway_module()
     source = tmp_path / "objects" / "source.pdf"

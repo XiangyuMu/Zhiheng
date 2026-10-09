@@ -75,16 +75,16 @@ def test_formal_blocks_persist_and_enqueue_index_event() -> None:
     assert params["payload"].find("formal_block_count") >= 0
 
 
-def test_partial_pages_publish_when_a_formal_block_survives() -> None:
+def test_partial_pages_are_preserved_but_not_indexed() -> None:
     session = _Session()
     repository = Mock()
     repository.persist_manifest.return_value = "attempt-1"
 
     result = publish_parse_result(session, repository, _manifest(formal=True, failed_page=True))
 
-    assert result.indexed is True
+    assert result.indexed is False
     assert result.formal_block_count == 1
-    session.execute.assert_called_once()
+    session.execute.assert_not_called()
 
 
 def test_full_failure_persists_without_index_event() -> None:

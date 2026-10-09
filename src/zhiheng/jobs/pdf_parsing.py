@@ -198,11 +198,14 @@ def _failure_code(exc: Exception) -> str:
 def configured_pdf_parse_executor(settings: Settings) -> PdfParseJobExecutor | None:
     """Build the production parser executor from scoped environment settings."""
 
-    parser_backend = _setting_or_env(
-        settings,
-        "pdf_parser_backend",
-        "ZHIHENG_PDF_PARSER_BACKEND",
-    ) or "deepdoc"
+    parser_backend = (
+        _setting_or_env(
+            settings,
+            "pdf_parser_backend",
+            "ZHIHENG_PDF_PARSER_BACKEND",
+        )
+        or "deepdoc"
+    )
     if parser_backend not in {"deepdoc", "mineru"}:
         raise ValueError("PDF parser backend must be deepdoc or mineru")
 
@@ -346,6 +349,9 @@ def _request_from_job(job: ClaimedKnowledgeJob) -> ParserParseRequest:
     source_sha256 = _required_string(payload, "source_sha256")
     options_hash = _required_string(payload, "options_hash")
     output_prefix = _required_string(payload, "output_prefix")
+    # Each parser attempt owns an immutable output namespace. Retries must
+    # leave prior manifests readable and independently attributable.
+    output_prefix = f"{output_prefix.rstrip('/')}/{attempt_id}"
     options = payload.get("options", {})
     if not isinstance(options, Mapping):
         raise ValueError("job payload options must be an object")

@@ -122,7 +122,8 @@ def publish_parse_result(
         formal_block_count = sum(
             1 for block in manifest.get("blocks", ()) if block.get("status") == "formal"
         )
-        indexed = formal_block_count > 0
+        partial = any(page.get("status") == "failed" for page in manifest.get("pages", ()))
+        indexed = formal_block_count > 0 and not partial
         if indexed:
             _enqueue_index_event(session, manifest, attempt_id, formal_block_count)
 

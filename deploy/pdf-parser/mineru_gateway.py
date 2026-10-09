@@ -490,9 +490,13 @@ class MinerUGateway:
         results = result.get("results")
         if not isinstance(results, dict) or not results:
             raise GatewayError("mineru_result_invalid", "MinerU result has no parsed files")
-        item = results.get(Path(task.source_name).stem)
+        source_stem = Path(task.source_name).stem
+        item = results.get(task.source_name) or results.get(source_stem)
         if item is None:
-            item = next(iter(results.values()))
+            raise GatewayError(
+                "mineru_result_invalid",
+                "MinerU result does not identify the submitted source file",
+            )
         if not isinstance(item, dict):
             raise GatewayError(
                 "mineru_result_invalid", "MinerU parsed file result is not an object"
