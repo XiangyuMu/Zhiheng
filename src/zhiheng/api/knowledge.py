@@ -874,6 +874,7 @@ def search_knowledge(
                ko.object_kind, ko.lifecycle_status, ko.created_at, ko.updated_at,
                ko.is_favorite, ko.is_pinned, ko.pinned_at,
                kv.id AS knowledge_version_id, kv.version_no, kv.summary,
+               eo.id AS evidence_object_id, eo.sha256 AS source_sha256,
                eo.media_type, eo.source_kind, eo.source_metadata_json,
                cv.content_sha256,
                {snippet_select}
@@ -883,7 +884,7 @@ def search_knowledge(
         JOIN evidence_objects eo ON eo.id = cv.evidence_object_id
         {fts_join}
         WHERE {where}
-        GROUP BY ko.id, kv.id, eo.id, cv.id
+        GROUP BY ko.id, kv.id, eo.id, eo.sha256, cv.id
         ORDER BY {order_by}
         LIMIT :limit OFFSET :offset
     """
@@ -914,6 +915,8 @@ def search_knowledge(
                     "lifecycle_status": str(row["lifecycle_status"]),
                     "media_type": str(row["media_type"]),
                     "source_type": str(row["source_kind"]),
+                    "evidence_object_id": str(row["evidence_object_id"]),
+                    "source_sha256": str(row["source_sha256"]),
                     "source_url": metadata.get("source_url") or metadata.get("url"),
                     "content_sha256": str(row["content_sha256"]),
                     "summary": str(row["summary"]) if row["summary"] is not None else None,
