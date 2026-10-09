@@ -16,6 +16,7 @@ from zhiheng.core.ids import new_id, sha256_text
 from zhiheng.db.session import session_scope
 from zhiheng.jobs.knowledge_contract import job_etag, retry_idempotency_key
 from zhiheng.knowledge import KnowledgeRepository
+from zhiheng.knowledge.pdf_worker import ParserTerminalFailure
 from zhiheng.models.configuration import embedding_route
 from zhiheng.models.embeddings import OpenAIEmbeddingsTransport, TransportRoute
 from zhiheng.retrieval.embeddings import BgeM3QueryEmbedder, QueryEmbeddingUnavailableError
@@ -929,6 +930,8 @@ def _json_object(value: Any) -> dict[str, Any]:
 
 
 def _failure_code_for_job_exception(exc: Exception) -> str:
+    if isinstance(exc, ParserTerminalFailure):
+        return exc.failure_code
     name = exc.__class__.__name__
     return {
         "ParserUnavailableError": "parser_unavailable",

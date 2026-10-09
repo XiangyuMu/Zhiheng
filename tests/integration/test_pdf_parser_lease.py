@@ -22,9 +22,9 @@ from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
 from zhiheng.knowledge.pdf_repository import PdfRepository
 from zhiheng.knowledge.pdf_worker import (
     ParserManifestReference,
-    ParserProtocolError,
     ParserReceipt,
     ParserStatus,
+    ParserTerminalFailure,
     ParserWorkerClient,
 )
 
@@ -304,12 +304,15 @@ def test_pdf_parser_failure_is_recorded_and_can_retry(tmp_path: Path) -> None:
 
     with session_scope(factory) as session:
         job = KnowledgeJobRepository().claim_available(session, worker_id="pdf-worker")[0]
-    with pytest.raises(ParserProtocolError, match="parser task failed"):
+    with pytest.raises(ParserTerminalFailure, match="parser task failed") as error:
         _executor(failed_parser).execute(factory, job)
+    assert error.value.failure_code == "whole_task_parse_failed"
     with session_scope(factory) as session:
         assert (
             KnowledgeJobRepository().fail(
-                session, job, exc=ParserProtocolError("parser task failed")
+                session,
+                job,
+                exc=ParserTerminalFailure("whole_task_parse_failed", "parser task failed"),
             )
             is True
         )

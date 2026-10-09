@@ -11,9 +11,9 @@ from zhiheng.jobs.pdf_parsing import PdfParseJobExecutor
 from zhiheng.knowledge.pdf_worker import (
     ParserManifestReference,
     ParserParseRequest,
-    ParserProtocolError,
     ParserReceipt,
     ParserStatus,
+    ParserTerminalFailure,
     ParserUnavailableError,
 )
 
@@ -129,24 +129,81 @@ def test_parse_job_falls_back_to_mineru_after_deepdoc_whole_task_failure() -> No
     # The public execution path makes the same fallback decision after the
     # terminal DeepDoc status; exercise the fallback request contract directly
     # without requiring a database publication.
-    with pytest.raises(ParserProtocolError, match="MinerU fallback failed"):
+    with pytest.raises(ParserTerminalFailure, match="MinerU fallback failed"):
         executor._run_fallback(_request_from_job_for_test(), "whole_task_parse_failed")
     submitted = mineru.submit.call_args.args[0]
     assert submitted.backend == "mineru"
     assert submitted.attempt_id == "attempt-1:mineru"
 
 
-def test_explicit_deepdoc_backend_remains_selectable_with_mineru_primary() -> None:
+def test_explicit_deepdoc_failure_falls_back_to_mineru_when_mineru_is_primary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     mineru = Mock()
+    mineru.submit.return_value = ParserReceipt("attempt-1:mineru", "accepted")
+    mineru.status.return_value = ParserStatus(
+        "attempt-1:mineru",
+        "succeeded",
+        ParserManifestReference("file:///objects/mineru-manifest.json", "d" * 64),
+        None,
+    )
+    mineru.load_manifest.return_value = {
+        "schema_version": "pdf-parser.manifest.v1",
+        "task_id": "task-1",
+        "source": {"evidence_object_id": "evidence-1"},
+        "parser": {"backend": "mineru", "attempt_id": "attempt-1:mineru"},
+        "pages": [{"page_no": 1, "status": "parsed"}],
+        "blocks": [{"key": "body-1", "status": "formal"}],
+        "manifest_uri": "file:///objects/mineru-manifest.json",
+        "manifest_sha256": "d" * 64,
+    }
     deepdoc = Mock()
+    deepdoc.submit.return_value = ParserReceipt("attempt-1", "accepted")
+    deepdoc.status.return_value = ParserStatus(
+        "attempt-1", "failed", None, "whole_task_parse_failed"
+    )
+    repository = Mock()
+    repository.persist_manifest.return_value = "attempt-1:mineru"
+    session = Mock()
+    savepoint = Mock()
+    savepoint.__enter__ = Mock(return_value=savepoint)
+    savepoint.__exit__ = Mock(return_value=False)
+    session.begin_nested.return_value = savepoint
+    monkeypatch.setattr(pdf_parsing, "_assert_current_lease", lambda *_: None)
+    monkeypatch.setattr(pdf_parsing, "session_scope", lambda _factory: nullcontext(session))
     executor = PdfParseJobExecutor(
         mineru,
         parser_backend="mineru",
         fallback_parser_client=deepdoc,
+        repository=repository,
         object_store=Mock(),
+        poll_interval_seconds=0,
+        sleep=lambda _: None,
     )
-    request = _request_from_job_for_test()
-    assert executor._client_for_request(request) is deepdoc
+
+    result = executor.execute(Mock(return_value=session), _job())
+
+    assert result.parser_state == "succeeded"
+    deepdoc.submit.assert_called_once()
+    mineru.submit.assert_called_once()
+    submitted = mineru.submit.call_args.args[0]
+    assert submitted.backend == "mineru"
+    assert submitted.attempt_id == "attempt-1:mineru"
+    mineru.load_manifest.assert_called_once()
+
+
+def test_parse_job_terminal_failure_preserves_parser_failure_code() -> None:
+    parser = Mock()
+    parser.submit.return_value = ParserReceipt("attempt-1", "accepted")
+    parser.status.return_value = ParserStatus(
+        "attempt-1", "failed", None, "mineru_content_invalid"
+    )
+    executor = PdfParseJobExecutor(parser, object_store=Mock(), poll_interval_seconds=0)
+
+    with pytest.raises(ParserTerminalFailure) as raised:
+        executor.execute(Mock(), _job())
+
+    assert raised.value.failure_code == "mineru_content_invalid"
 
 
 def test_parse_job_attempts_mineru_at_most_once(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -170,7 +227,7 @@ def test_parse_job_attempts_mineru_at_most_once(monkeypatch: pytest.MonkeyPatch)
         poll_interval_seconds=0,
         sleep=lambda _: None,
     )
-    with pytest.raises(ParserProtocolError, match="MinerU fallback failed"):
+    with pytest.raises(ParserTerminalFailure, match="MinerU fallback failed"):
         executor.execute(Mock(), _job())
     mineru.submit.assert_called_once()
 

@@ -25,6 +25,7 @@ from zhiheng.knowledge.pdf_worker import (
     ParserParseRequest,
     ParserProtocolError,
     ParserStatus,
+    ParserTerminalFailure,
     ParserUnavailableError,
     ParserWorkerClient,
 )
@@ -66,6 +67,10 @@ class PdfParseJobExecutor:
         self._parser_client = parser_client
         self._parser_backend = parser_backend
         self._fallback_parser_client = fallback_parser_client
+        secondary_backend = "mineru" if parser_backend == "deepdoc" else "deepdoc"
+        self._clients_by_backend = {parser_backend: parser_client}
+        if fallback_parser_client is not None:
+            self._clients_by_backend[secondary_backend] = fallback_parser_client
         self._repository = repository
         self._object_store = object_store
         self._poll_interval_seconds = poll_interval_seconds
@@ -86,9 +91,9 @@ class PdfParseJobExecutor:
         try:
             parser_status = self._run_attempt(parser_client, request)
         except (ParserUnavailableError, TimeoutError) as exc:
-            if request.backend != "deepdoc" or self._fallback_parser_client is None:
+            if request.backend != "deepdoc" or self._client_for_backend("mineru") is None:
                 raise
-            parser_client = self._fallback_parser_client
+            parser_client = self._required_client_for_backend("mineru")
             fallback_attempted = True
             parser_status = self._run_fallback(request, _failure_code(exc))
         if parser_status.state == "failed":
@@ -98,13 +103,13 @@ class PdfParseJobExecutor:
                 request.backend == "deepdoc"
                 and not fallback_attempted
                 and decision.allowed
-                and self._fallback_parser_client is not None
+                and self._client_for_backend("mineru") is not None
             ):
-                parser_client = self._fallback_parser_client
+                parser_client = self._required_client_for_backend("mineru")
                 fallback_attempted = True
                 parser_status = self._run_fallback(request, decision.code)
             else:
-                raise ParserProtocolError(f"parser task failed: {code}")
+                raise ParserTerminalFailure(code, f"parser task failed: {code}")
         if parser_status.manifest is None:
             raise ParserProtocolError("terminal parser status did not include manifest")
 
@@ -119,14 +124,19 @@ class PdfParseJobExecutor:
         return PdfParseJobResult(publication=publication, parser_state=parser_status.state)
 
     def _client_for_request(self, request: ParserParseRequest) -> ParserWorkerClient:
-        if request.backend == self._parser_backend:
-            return self._parser_client
-        if request.backend in {"deepdoc", "mineru"} and self._fallback_parser_client is not None:
-            # The secondary client remains independently selectable. Fallback
-            # policy is handled by _run_fallback; this branch is for explicit
-            # task backend selection.
-            return self._fallback_parser_client
+        client = self._client_for_backend(request.backend)
+        if client is not None:
+            return client
         raise ParserProtocolError(f"parser backend is not configured: {request.backend}")
+
+    def _client_for_backend(self, backend: str) -> ParserWorkerClient | None:
+        return self._clients_by_backend.get(backend)
+
+    def _required_client_for_backend(self, backend: str) -> ParserWorkerClient:
+        client = self._client_for_backend(backend)
+        if client is None:
+            raise ParserProtocolError(f"parser backend is not configured: {backend}")
+        return client
 
     def _run_attempt(
         self,
@@ -143,10 +153,8 @@ class PdfParseJobExecutor:
     ) -> ParserStatus:
         decision = fallback_decision(failure_code)
         if request.backend != "deepdoc" or not decision.allowed:
-            raise ParserProtocolError(f"parser task failed: {failure_code}")
-        parser_client = self._fallback_parser_client
-        if parser_client is None:
-            raise ParserProtocolError(f"parser task failed: {failure_code}")
+            raise ParserTerminalFailure(failure_code, f"parser task failed: {failure_code}")
+        parser_client = self._required_client_for_backend("mineru")
         fallback_request = ParserParseRequest(
             task_id=request.task_id,
             attempt_id=f"{request.attempt_id}:mineru",
@@ -164,7 +172,7 @@ class PdfParseJobExecutor:
             status = self._run_attempt(parser_client, fallback_request)
             if status.state == "failed":
                 code = status.failure_code or "whole_task_parse_failed"
-                raise ParserProtocolError(f"MinerU fallback failed: {code}")
+                raise ParserTerminalFailure(code, f"MinerU fallback failed: {code}")
             return status
         except (ParserUnavailableError, TimeoutError) as exc:
             raise ParserProtocolError(f"MinerU fallback failed: {_failure_code(exc)}") from exc

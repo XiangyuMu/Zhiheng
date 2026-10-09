@@ -9,7 +9,9 @@ ARG MINERU_COMMIT=fbb1257a555a3fde78ae5aaaa931e3b3f8fb2883
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 ENV MINERU_MODEL_SOURCE=modelscope \
-    MINERU_MODEL_DIR=/opt/mineru-models
+    MINERU_MODEL_DIR=/opt/mineru-models \
+    HOME=/opt/mineru-models \
+    MINERU_TOOLS_CONFIG_JSON=/opt/mineru-models/mineru.json
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git curl libxcb1 libgl1 libglib2.0-0 \
@@ -28,6 +30,9 @@ RUN pip install --no-cache-dir torch torchvision --index-url https://download.py
     && pip install --no-cache-dir 'transformers==4.57.1' shapely six pyclipper ftfy
 RUN mkdir -p "${MINERU_MODEL_DIR}" \
     && HOME="${MINERU_MODEL_DIR}" mineru-models-download --source "${MINERU_MODEL_SOURCE}" --model_type pipeline
+ENV MINERU_MODEL_SOURCE=local \
+    MINERU_API_OUTPUT_ROOT=/var/lib/mineru/output
+RUN mkdir -p /var/lib/mineru/output
 EXPOSE 9391
 HEALTHCHECK --interval=10s --timeout=2s --retries=3 --start-period=180s \
     CMD curl -fsS http://127.0.0.1:9391/health || exit 1

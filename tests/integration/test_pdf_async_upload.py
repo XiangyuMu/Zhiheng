@@ -24,7 +24,7 @@ from zhiheng.jobs.knowledge_indexing import (
 from zhiheng.jobs.outbox import OutboxRepository
 from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
 from zhiheng.knowledge.pdf_repository import PdfRepository
-from zhiheng.knowledge.pdf_worker import ParserUnavailableError
+from zhiheng.knowledge.pdf_worker import ParserTerminalFailure, ParserUnavailableError
 
 
 def _pdf_bytes() -> bytes:
@@ -246,6 +246,49 @@ def test_pdf_parser_failure_is_projected_to_retryable_task_status(tmp_path: Path
     body = client.get(task["status_url"]).json()
     assert body["state"] == "failed"
     assert body["error_code"] == "parser_unavailable"
+    assert body["retryable"] is True
+
+
+def test_pdf_terminal_parser_failure_preserves_code_after_attempts_are_exhausted(
+    tmp_path: Path,
+) -> None:
+    client, session_factory = _client(tmp_path)
+    csrf = _login(client)
+    response = client.post(
+        "/v1/knowledge/pdf-imports",
+        params={"title": "损坏 manifest PDF", "primary_domain_id": "technology.ai"},
+        content=_pdf_bytes(),
+        headers={**_headers(csrf, "pdf-terminal-failure"), "Content-Type": "application/pdf"},
+    )
+    assert response.status_code == 202
+    task = response.json()
+    with session_scope(session_factory) as session:
+        events = OutboxRepository().claim_pending(session, limit=10)
+        assert OutboxRepository().enqueue_jobs_for_events(session, events) == 1
+        session.execute(
+            text(
+                "UPDATE jobs SET available_at=CURRENT_TIMESTAMP, max_attempts=1 "
+                "WHERE job_type='knowledge.parse_pdf'"
+            )
+        )
+
+    class TerminalFailingParser:
+        def execute(self, *_: object) -> None:
+            raise ParserTerminalFailure("mineru_content_invalid")
+
+    assert (
+        process_knowledge_jobs_once(
+            session_factory,
+            KnowledgeIndexJobExecutor(Settings(environment="test")),
+            worker_id="pdf-terminal-failure-worker",
+            pdf_executor=TerminalFailingParser(),
+        )
+        == 0
+    )
+    body = client.get(task["status_url"]).json()
+    assert body["state"] == "failed"
+    assert body["error_code"] == "mineru_content_invalid"
+    assert body["redacted_summary"] == "mineru_content_invalid"
     assert body["retryable"] is True
 
 

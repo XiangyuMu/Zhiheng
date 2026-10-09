@@ -1,5 +1,7 @@
 import hashlib
 
+import pytest
+
 from zhiheng.knowledge.mineru_adapter import content_list_to_manifest
 from zhiheng.knowledge.pdf_manifest import validate_manifest
 
@@ -89,3 +91,48 @@ def test_mineru_manifest_preserves_page_geometry_and_empty_pages() -> None:
             "status": "empty",
         },
     ]
+
+
+def test_mineru_bbox_uses_the_geometry_of_its_page() -> None:
+    manifest = content_list_to_manifest(
+        [
+            {"type": "text", "text": "A", "bbox": [0, 0, 1000, 1000], "page_idx": 0},
+            {"type": "text", "text": "B", "bbox": [0, 0, 1000, 1000], "page_idx": 1},
+        ],
+        task_id="task",
+        evidence_object_id="doc",
+        source_uri="artifact://doc.pdf",
+        source_sha256=hashlib.sha256(b"doc").hexdigest(),
+        attempt_id="attempt",
+        page_count=2,
+        page_dimensions={0: (595.0, 842.0), 1: (612.0, 792.0)},
+    )
+
+    assert manifest["blocks"][0]["bbox"] == [0.0, 0.0, 595.0, 842.0]
+    assert manifest["blocks"][1]["bbox"] == [0.0, 0.0, 612.0, 792.0]
+    validate_manifest(manifest)
+
+
+def test_mineru_rejects_content_outside_authoritative_page_count() -> None:
+    with pytest.raises(ValueError, match="page_idx 2 outside page_count 2"):
+        content_list_to_manifest(
+            [{"type": "text", "text": "out of range", "page_idx": 2}],
+            task_id="task",
+            evidence_object_id="doc",
+            source_uri="artifact://doc.pdf",
+            source_sha256=hashlib.sha256(b"doc").hexdigest(),
+            attempt_id="attempt",
+            page_count=2,
+        )
+
+
+def test_mineru_rejects_unknown_content_type_instead_of_downgrading_it() -> None:
+    with pytest.raises(ValueError, match="unsupported content type: audio"):
+        content_list_to_manifest(
+            [{"type": "audio", "content": "should not disappear", "page_idx": 0}],
+            task_id="task",
+            evidence_object_id="doc",
+            source_uri="artifact://doc.pdf",
+            source_sha256=hashlib.sha256(b"doc").hexdigest(),
+            attempt_id="attempt",
+        )

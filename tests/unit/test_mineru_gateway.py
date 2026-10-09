@@ -195,9 +195,9 @@ def test_gateway_ready_requires_upstream_model_signal(tmp_path: Path) -> None:
         "model": "unknown",
         "upstream_version": None,
     }
-    assert second.status_code == 200
-    assert second.json()["status"] == "ready"
-    assert second.json()["model"] == "ready"
+    assert second.status_code == 503
+    assert second.json()["status"] == "not_ready"
+    assert second.json()["model"] == "unknown"
     assert second.json()["upstream_version"] == "3.4.4"
 
 
@@ -227,12 +227,8 @@ def test_gateway_manifest_failure_is_persisted_as_terminal_status(tmp_path: Path
             submitted = await api.post(
                 "/v1/parse", json=payload, headers={"Authorization": "Bearer token"}
             )
-            failed = await api.get(
-                "/v1/parse/attempt-1", headers={"Authorization": "Bearer token"}
-            )
-            again = await api.get(
-                "/v1/parse/attempt-1", headers={"Authorization": "Bearer token"}
-            )
+            failed = await api.get("/v1/parse/attempt-1", headers={"Authorization": "Bearer token"})
+            again = await api.get("/v1/parse/attempt-1", headers={"Authorization": "Bearer token"})
         await client.aclose()
         return submitted, failed, again
 
@@ -322,9 +318,7 @@ def test_gateway_rejects_non_mineru_backend(tmp_path: Path) -> None:
     config = gateway_module.GatewayConfig(tmp_path, "http://mineru", "token")
     app = gateway_module.create_app(
         config,
-        http_client=httpx.AsyncClient(
-            transport=httpx.MockTransport(lambda _: httpx.Response(500))
-        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(500))),
     )
 
     async def scenario() -> httpx.Response:
@@ -439,9 +433,7 @@ def test_gateway_recovers_task_mapping_after_restart(tmp_path: Path) -> None:
             "token",
             state_path=tmp_path / "gateway.sqlite",
         )
-        client = httpx.AsyncClient(
-            transport=httpx.MockTransport(handler), base_url="http://mineru"
-        )
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://mineru")
         app = gateway_module.create_app(config, http_client=client)
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://gateway"
@@ -455,9 +447,7 @@ def test_gateway_recovers_task_mapping_after_restart(tmp_path: Path) -> None:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=restarted), base_url="http://gateway"
         ) as api:
-            second = await api.get(
-                "/v1/parse/attempt-1", headers={"Authorization": "Bearer token"}
-            )
+            second = await api.get("/v1/parse/attempt-1", headers={"Authorization": "Bearer token"})
         await restarted.state.gateway.close()
         await client.aclose()
         return first, second
@@ -467,3 +457,99 @@ def test_gateway_recovers_task_mapping_after_restart(tmp_path: Path) -> None:
     assert second.status_code == 200
     assert second.json() == {"attempt_id": "attempt-1", "state": "running"}
     assert calls == ["/tasks", "/tasks/upstream-1"]
+
+
+def test_gateway_warmup_requires_successful_real_parser_result(tmp_path: Path) -> None:
+    module = _gateway_module()
+    calls = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"version": "3.4.4"})
+        if request.url.path == "/tasks":
+            assert b"%PDF-" in await request.aread()
+            return httpx.Response(202, json={"task_id": "probe", "status": "pending"})
+        if request.url.path == "/tasks/probe":
+            return httpx.Response(200, json={"status": "completed"})
+        if request.url.path == "/tasks/probe/result":
+            return httpx.Response(
+                200,
+                json={
+                    "version": "3.4.4",
+                    "results": {
+                        "probe": {
+                            "content_list": [
+                                {
+                                    "type": "text",
+                                    "text": "MinerU readiness probe",
+                                    "bbox": [0, 0, 100, 100],
+                                    "page_idx": 0,
+                                }
+                            ],
+                        }
+                    },
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    async def scenario() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="http://mineru"
+        ) as upstream:
+            app = module.create_app(
+                module.GatewayConfig(tmp_path, "http://mineru", "token"), http_client=upstream
+            )
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+            ) as api:
+                assert (await api.get("/ready")).status_code == 503
+                assert (await api.post("/warmup")).status_code == 401
+                warmed = await api.post("/warmup", headers={"Authorization": "Bearer token"})
+                assert warmed.status_code == 200
+                ready = await api.get("/ready")
+                assert ready.status_code == 200
+                assert ready.json()["model"] == "ready"
+                assert ready.json()["probe"]["manifest"]["sha256"]
+                await api.post("/warmup", headers={"Authorization": "Bearer token"})
+                assert calls.count("/tasks") == 1
+
+    _run(scenario())
+
+
+def test_gateway_uncertain_submission_is_not_repeated_after_restart(tmp_path: Path) -> None:
+    module = _gateway_module()
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"pdf")
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadTimeout("response lost", request=request)
+
+    async def scenario() -> None:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url="http://mineru"
+        ) as upstream:
+            config = module.GatewayConfig(tmp_path, "http://mineru", "token")
+            for _ in range(2):
+                app = module.create_app(config, http_client=upstream)
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+                ) as api:
+                    receipt = await api.post(
+                        "/v1/parse",
+                        json=_payload(source),
+                        headers={"Authorization": "Bearer token"},
+                    )
+                    assert receipt.status_code == 200
+                    assert receipt.json()["state"] == "accepted"
+                    status = await api.get(
+                        "/v1/parse/attempt-1", headers={"Authorization": "Bearer token"}
+                    )
+                    assert status.json()["state"] == "failed"
+                    assert status.json()["failure_code"] == "mineru_submission_unknown"
+            assert calls == 1
+
+    _run(scenario())

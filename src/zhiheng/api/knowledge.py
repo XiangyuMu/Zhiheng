@@ -397,6 +397,14 @@ def get_pdf_task(
                     LIMIT 1
                   ) AS job_failure_code,
                   (
+                    SELECT json_extract(j.payload_json, '$.retryable')
+                    FROM jobs j
+                    WHERE j.job_type = 'knowledge.parse_pdf'
+                      AND json_extract(j.payload_json, '$.task_id') = t.id
+                    ORDER BY j.updated_at DESC, j.id DESC
+                    LIMIT 1
+                  ) AS job_retryable,
+                  (
                     SELECT j.status
                     FROM jobs j
                     WHERE j.job_type = 'knowledge.parse_pdf'
@@ -457,7 +465,9 @@ def get_pdf_task(
             else {
                 "failure_code": failure_code,
                 "failure_stage": "parse",
-                "retryable": str(row["parse_job_status"] or "") != "dead",
+                "retryable": bool(row["job_retryable"])
+                if row["job_retryable"] is not None
+                else str(row["parse_job_status"] or "") != "dead",
             }
             if failure_code
             else None

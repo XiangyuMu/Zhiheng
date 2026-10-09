@@ -24,6 +24,7 @@ import re
 import sqlite3
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -33,6 +34,8 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
+from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from zhiheng.knowledge.mineru_adapter import content_list_to_manifest
 from zhiheng.knowledge.pdf_manifest import validate_manifest
@@ -113,6 +116,7 @@ class _Task:
     state: str = "accepted"
     failure_code: str | None = None
     manifest: dict[str, str] | None = None
+    request_sha256: str = ""
 
 
 class _TaskStore:
@@ -147,6 +151,15 @@ class _TaskStore:
             return None
         return _task_from_json(json.loads(str(row[0])))
 
+    def reserve(self, task: _Task) -> bool:
+        body = json.dumps(_task_to_json(task), sort_keys=True, separators=(",", ":"))
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "INSERT OR IGNORE INTO parser_tasks (attempt_id, task_json) VALUES (?, ?)",
+                (task.attempt_id, body),
+            )
+            return cursor.rowcount == 1
+
     def put(self, task: _Task) -> None:
         body = json.dumps(_task_to_json(task), sort_keys=True, separators=(",", ":"))
         with self._connect() as connection:
@@ -180,7 +193,51 @@ class MinerUGateway:
         self._store = _TaskStore(
             config.state_path or config.artifact_root / ".mineru-gateway.sqlite3"
         )
-        self._tasks: dict[str, _Task] = {}
+        self._submitting: set[str] = set()
+        self._warmup_id: str | None = None
+
+    async def warmup(self) -> dict[str, str]:
+        """Exercise the actual parser with a small synthetic document."""
+        if self._warmup_id is not None:
+            return {"attempt_id": self._warmup_id, "state": "accepted"}
+        probe_id = f"warmup-{uuid4()}"
+        root = self.config.artifact_root / ".mineru-warmup" / probe_id
+        root.mkdir(parents=True, exist_ok=True)
+        source = root / "probe.pdf"
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=595, height=842)
+        font = DictionaryObject(
+            {
+                NameObject("/Type"): NameObject("/Font"),
+                NameObject("/Subtype"): NameObject("/Type1"),
+                NameObject("/BaseFont"): NameObject("/Helvetica"),
+            }
+        )
+        page[NameObject("/Resources")] = DictionaryObject(
+            {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})}
+        )
+        stream = DecodedStreamObject()
+        stream.set_data(b"BT /F1 18 Tf 60 700 Td (MinerU readiness probe) Tj ET")
+        page[NameObject("/Contents")] = stream
+        output = BytesIO()
+        writer.write(output)
+        source.write_bytes(output.getvalue())
+        receipt = await self.submit(
+            {
+                "task_id": probe_id,
+                "attempt_id": probe_id,
+                "backend": "mineru",
+                "source": {
+                    "uri": source.as_uri(),
+                    "sha256": hashlib.sha256(output.getvalue()).hexdigest(),
+                    "evidence_object_id": probe_id,
+                },
+                "output_prefix": (root / "result").as_uri(),
+                "options": {"lang_list": ["en"]},
+            }
+        )
+        self._warmup_id = probe_id
+        return receipt
 
     async def close(self) -> None:
         if self._owns_client:
@@ -266,90 +323,21 @@ class MinerUGateway:
             options = {}
         if not isinstance(options, dict):
             raise GatewayError("request_invalid", "options must be an object")
-        existing = self._tasks.get(attempt_id)
-        if existing is None:
-            existing = self._store.get(attempt_id)
-            if existing is not None:
-                self._tasks[attempt_id] = existing
-        if existing is not None:
-            if existing.source_sha256 != source_sha256 or existing.task_id != task_id:
-                raise GatewayError("attempt_reused", "attempt_id is bound to another request")
-            return {"attempt_id": attempt_id, "state": existing.state}
-
-        source_name = source_path.name
-        form = _mineru_form(options)
-        files = {"files": (source_name, body, "application/pdf")}
-        try:
-            response = await self._client.post(
-                "/tasks",
-                data=form,
-                files=files,
-                headers={
-                    "Authorization": f"Bearer {self.config.token}",
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "task_id": task_id,
+                    "evidence_id": evidence_id,
+                    "source_uri": source_uri,
+                    "source_sha256": source_sha256,
+                    "output_prefix": output_prefix,
+                    "options": options,
                 },
-            )
-        except httpx.HTTPError as exc:
-            self._persist_submission_failure(
-                task_id=task_id,
-                attempt_id=attempt_id,
-                evidence_id=evidence_id,
-                source_uri=source_uri,
-                source_sha256=source_sha256,
-                output_prefix=output_prefix,
-                source_name=source_name,
-                failure_code="mineru_submission_unknown",
-            )
-            raise GatewayError("mineru_unavailable", "MinerU submission failed") from exc
-        if response.status_code >= 500:
-            self._persist_submission_failure(
-                task_id=task_id,
-                attempt_id=attempt_id,
-                evidence_id=evidence_id,
-                source_uri=source_uri,
-                source_sha256=source_sha256,
-                output_prefix=output_prefix,
-                source_name=source_name,
-                failure_code="mineru_submission_unknown",
-            )
-            raise GatewayError("mineru_unavailable", "MinerU submission returned a server error")
-        if response.status_code >= 400:
-            raise GatewayError(
-                "mineru_rejected", f"MinerU submission returned HTTP {response.status_code}"
-            )
-        result = _json_object(response, "MinerU submission")
-        upstream_task_id = _required_string(result, "task_id")
-        upstream_state = _required_string(result, "status")
-        if upstream_state not in _ACTIVE | _TERMINAL:
-            raise GatewayError("mineru_protocol", "MinerU returned an unknown task status")
-        task = _Task(
-            attempt_id=attempt_id,
-            task_id=task_id,
-            evidence_object_id=evidence_id,
-            source_uri=source_uri,
-            source_sha256=source_sha256,
-            output_prefix=output_prefix,
-            upstream_task_id=upstream_task_id,
-            source_name=source_name,
-            state=_map_state(upstream_state),
-        )
-        self._tasks[attempt_id] = task
-        if task.state == "failed":
-            task.failure_code = "mineru_failed"
-        self._store.put(task)
-        return {"attempt_id": attempt_id, "state": task.state}
-
-    def _persist_submission_failure(
-        self,
-        *,
-        task_id: str,
-        attempt_id: str,
-        evidence_id: str,
-        source_uri: str,
-        source_sha256: str,
-        output_prefix: str,
-        source_name: str,
-        failure_code: str,
-    ) -> None:
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        form = _mineru_form(options)
         task = _Task(
             attempt_id=attempt_id,
             task_id=task_id,
@@ -358,21 +346,67 @@ class MinerUGateway:
             source_sha256=source_sha256,
             output_prefix=output_prefix,
             upstream_task_id="",
-            source_name=source_name,
-            state="failed",
-            failure_code=failure_code,
+            source_name=source_path.name,
+            state="submitting",
+            request_sha256=fingerprint,
         )
-        self._tasks[attempt_id] = task
-        self._store.put(task)
+        if not self._store.reserve(task):
+            existing = self._store.get(attempt_id)
+            if (
+                existing is None
+                or existing.task_id != task_id
+                or (
+                    existing.source_sha256 != source_sha256
+                    or existing.evidence_object_id != evidence_id
+                    or (existing.request_sha256 and existing.request_sha256 != fingerprint)
+                )
+            ):
+                raise GatewayError("attempt_reused", "attempt_id is bound to another request")
+            # A receipt acknowledges the durable attempt, including a terminal one.
+            # Clients obtain terminal results through status rather than resubmitting.
+            return {"attempt_id": attempt_id, "state": "accepted"}
+        self._submitting.add(attempt_id)
+        try:
+            response = await self._client.post(
+                "/tasks",
+                data=form,
+                files={"files": (source_path.name, body, "application/pdf")},
+                headers={"Authorization": f"Bearer {self.config.token}"},
+            )
+            if response.status_code >= 500:
+                raise GatewayError("mineru_submission_unknown", "submission result uncertain")
+            if response.status_code >= 400:
+                raise GatewayError("mineru_rejected", "MinerU rejected submission")
+            result = _json_object(response, "MinerU submission")
+            task.upstream_task_id = _required_string(result, "task_id")
+            upstream_state = _required_string(result, "status")
+            if upstream_state not in _ACTIVE | _TERMINAL:
+                raise GatewayError("mineru_submission_unknown", "unknown submission status")
+            task.state = _map_state(upstream_state)
+            if task.state == "failed":
+                task.failure_code = "mineru_failed"
+        except (httpx.HTTPError, GatewayError) as exc:
+            task.state = "failed"
+            task.failure_code = (
+                "mineru_rejected"
+                if isinstance(exc, GatewayError) and exc.code == "mineru_rejected"
+                else "mineru_submission_unknown"
+            )
+        finally:
+            self._store.put(task)
+            self._submitting.discard(attempt_id)
+        return {"attempt_id": attempt_id, "state": "accepted"}
 
     async def status(self, attempt_id: str) -> dict[str, Any]:
-        task = self._tasks.get(attempt_id)
-        if task is None:
-            task = self._store.get(attempt_id)
-            if task is not None:
-                self._tasks[attempt_id] = task
+        task = self._store.get(attempt_id)
         if task is None:
             raise GatewayError("attempt_not_found", "parser attempt does not exist")
+        if task.state == "submitting":
+            if attempt_id in self._submitting:
+                return {"attempt_id": attempt_id, "state": "running"}
+            task.state = "failed"
+            task.failure_code = "mineru_submission_unknown"
+            self._store.put(task)
         if task.manifest is not None:
             return {"attempt_id": attempt_id, "state": "succeeded", "manifest": task.manifest}
         if task.state == "failed":
@@ -557,6 +591,7 @@ def _task_to_json(task: _Task) -> dict[str, Any]:
         "state": task.state,
         "failure_code": task.failure_code,
         "manifest": task.manifest,
+        "request_sha256": task.request_sha256,
     }
 
 
@@ -594,6 +629,7 @@ def _task_from_json(value: Any) -> _Task:
         state=value["state"],
         failure_code=failure_code,
         manifest=manifest,
+        request_sha256=str(value.get("request_sha256", "")),
     )
 
 
@@ -617,6 +653,14 @@ def create_app(
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "healthy"}
+
+    @app.post("/warmup")
+    async def warmup(authorization: str | None = Header(default=None)) -> dict[str, str]:
+        _authorize(authorization, gateway.config.token)
+        try:
+            return await gateway.warmup()
+        except GatewayError as exc:
+            raise _http_error(exc) from exc
 
     @app.get("/ready")
     async def ready() -> JSONResponse:
@@ -645,9 +689,19 @@ def create_app(
             upstream = response.json()
         except ValueError:
             upstream = {}
-        model_ready = isinstance(upstream, dict) and bool(
-            upstream.get("model_ready") or upstream.get("version")
-        )
+        model_ready = isinstance(upstream, dict) and bool(upstream.get("model_ready") is True)
+        probe: dict[str, Any] | None = None
+        if gateway._warmup_id is not None:
+            try:
+                probe = await gateway.status(gateway._warmup_id)
+                model_ready = probe["state"] == "succeeded"
+                if model_ready:
+                    manifest = json.loads(
+                        gateway._path_for_uri(probe["manifest"]["uri"]).read_bytes()
+                    )
+                    model_ready = bool(manifest.get("blocks"))
+            except (GatewayError, OSError, ValueError):
+                model_ready = False
         body = {
             "status": "ready" if model_ready else "not_ready",
             "gateway": "healthy",
@@ -655,6 +709,8 @@ def create_app(
             "model": "ready" if model_ready else "unknown",
             "upstream_version": upstream.get("version") if isinstance(upstream, dict) else None,
         }
+        if probe is not None:
+            body["probe"] = probe
         return JSONResponse(status_code=200 if model_ready else 503, content=body)
 
     @app.post("/v1/parse")

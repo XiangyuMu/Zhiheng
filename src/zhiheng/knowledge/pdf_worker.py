@@ -43,6 +43,17 @@ class ParserProtocolError(ParserWorkerError):
     """The worker returned a response outside the versioned contract."""
 
 
+class ParserTerminalFailure(ParserProtocolError):
+    """The parser reached a controlled terminal failure with a stable code."""
+
+    def __init__(self, failure_code: str, message: str | None = None) -> None:
+        normalized = failure_code.strip()
+        if not normalized:
+            raise ValueError("failure_code must be non-empty")
+        self.failure_code = normalized
+        super().__init__(message or normalized)
+
+
 class ParserManifestError(ParserWorkerError):
     """The manifest artifact failed hash, JSON, or schema validation."""
 
@@ -328,6 +339,7 @@ __all__ = [
     "ParserProtocolError",
     "ParserReceipt",
     "ParserStatus",
+    "ParserTerminalFailure",
     "ParserUnavailableError",
     "ParserWorkerClient",
 ]

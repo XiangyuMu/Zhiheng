@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import math
 import re
 from collections.abc import Mapping
 from pathlib import PurePosixPath
@@ -24,6 +25,19 @@ def _tag_text(table_html: str) -> list[str]:
         html.unescape(re.sub(r"<[^>]+>", "", x)).strip()
         for x in re.findall(r"<td[^>]*>(.*?)</td>", table_html, re.S)
     ]
+
+
+_TEXT_CONTENT_TYPES = {
+    "text": "paragraph",
+    "title": "title",
+    "heading": "heading",
+    "paragraph": "paragraph",
+    "list": "list",
+    "caption": "caption",
+    "equation": "equation",
+}
+_IMAGE_CONTENT_TYPES = {"image", "chart"}
+_SUPPORTED_CONTENT_TYPES = set(_TEXT_CONTENT_TYPES) | {"table"}
 
 
 def content_list_to_manifest(
@@ -50,21 +64,49 @@ def content_list_to_manifest(
     """
 
     # MinerU content-list coordinates are normalized to a 1000-point canvas.
-    # Convert once at the boundary to the contract's PDF-point geometry.
-    def normalize(raw: Any) -> list[float]:
-        values = [float(v) for v in raw]
+    # Convert once at the boundary to the contract's PDF-point geometry.  The
+    # canvas size is page-specific: a document may contain mixed page sizes.
+    def normalize(raw: Any, width: float, height: float) -> list[float]:
+        if not isinstance(raw, (list, tuple)) or len(raw) != 4:
+            raise ValueError("bbox must contain exactly four coordinates")
+        try:
+            values = [float(v) for v in raw]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("bbox coordinates must be numeric") from exc
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("bbox coordinates must be finite")
         return [
-            values[0] * page_width / 1000,
-            values[1] * page_height / 1000,
-            values[2] * page_width / 1000,
-            values[3] * page_height / 1000,
+            values[0] * width / 1000,
+            values[1] * height / 1000,
+            values[2] * width / 1000,
+            values[3] * height / 1000,
         ]
 
-    observed_pages = {int(x.get("page_idx", 0)) for x in content}
+    def _page_index(item: Mapping[str, Any]) -> int:
+        value = item.get("page_idx", 0)
+        if isinstance(value, bool):
+            raise ValueError("page_idx must be a non-negative integer")
+        try:
+            index = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("page_idx must be a non-negative integer") from exc
+        if index < 0:
+            raise ValueError("page_idx must be a non-negative integer")
+        return index
+
+    indexes: list[int] = []
+    for item in content:
+        if not isinstance(item, Mapping):
+            raise ValueError("content item must be an object")
+        indexes.append(_page_index(item))
+    observed_pages = set(indexes)
     if page_count is None:
         page_count = max(observed_pages, default=-1) + 1
     if page_count < 0:
         raise ValueError("page_count must be non-negative")
+    if any(index >= page_count for index in observed_pages):
+        index = min(index for index in observed_pages if index >= page_count)
+        raise ValueError(f"page_idx {index} outside page_count {page_count}")
     page_dimensions = page_dimensions or {}
     pages = []
     for page_index in range(page_count):
@@ -86,9 +128,17 @@ def content_list_to_manifest(
     images: list[dict[str, Any]] = []
     order = 0
     for idx, item in enumerate(content):
-        page_no = int(item.get("page_idx", 0)) + 1
-        bbox = normalize(item.get("bbox", [0, 0, 1000, 1000]))
-        typ = str(item.get("type", "text"))
+        assert isinstance(item, Mapping)
+        page_idx = indexes[idx]
+        page_no = page_idx + 1
+        width, height = page_dimensions.get(page_idx, (page_width, page_height))
+        bbox = normalize(item.get("bbox", [0, 0, 1000, 1000]), width, height)
+        raw_type = item.get("type")
+        if not isinstance(raw_type, str) or not raw_type.strip():
+            raise ValueError("content item type must be a non-empty string")
+        typ = raw_type.strip().lower()
+        if typ not in _SUPPORTED_CONTENT_TYPES | _IMAGE_CONTENT_TYPES:
+            raise ValueError(f"unsupported content type: {typ}")
         text = str(item.get("text") or item.get("content") or "").strip()
         if typ in {"image", "chart"}:
             key = f"mineru-image-{idx}"
@@ -136,8 +186,16 @@ def content_list_to_manifest(
             continue
         if typ == "table":
             text = " | ".join(_tag_text(str(item.get("table_body") or "")))
+        if typ not in _IMAGE_CONTENT_TYPES and not text:
+            raise ValueError(f"empty content for type: {typ}")
         level = int(item.get("text_level") or 0)
-        region = "heading" if level else ("table" if typ == "table" else "paragraph")
+        region = (
+            "heading"
+            if typ == "text" and level
+            else "table"
+            if typ == "table"
+            else _TEXT_CONTENT_TYPES[typ]
+        )
         key = f"mineru-block-{idx}"
         blocks.append(
             {
