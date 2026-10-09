@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
@@ -7,7 +8,7 @@ from typing import Any, Protocol
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from zhiheng.core.ids import json_text, new_id
+from zhiheng.core.ids import json_text, new_id, sha256_text
 
 
 class PdfFailureCode(StrEnum):
@@ -99,6 +100,208 @@ def should_fallback_to_mineru(
     ).allowed
 
 
+def _materialize_pdf_knowledge(
+    session: Session,
+    manifest: dict[str, Any],
+    *,
+    attempt_id: str,
+) -> tuple[str, str] | None:
+    """Create formal knowledge rows from a complete PDF parse.
+
+    The PDF evidence object remains the source of truth; extracted text is a
+    content version and every chunk/span retains page and quote lineage.
+    """
+    if any(page.get("status") == "failed" for page in manifest.get("pages", ())):
+        return None
+    raw_blocks = list(manifest.get("blocks", ()))
+    if not raw_blocks or any("reading_order" not in block for block in raw_blocks):
+        return None
+    blocks = [
+        block
+        for block in sorted(raw_blocks, key=lambda item: item["reading_order"])
+        if block.get("status") == "formal" and str(block.get("text") or "")
+    ]
+    if not blocks:
+        return None
+    task_id = str(manifest.get("task_id") or "")
+    source = manifest.get("source") or {}
+    evidence_id = str(source.get("evidence_object_id") or "")
+    task = (
+        session.execute(
+            text(
+                """
+            SELECT t.state, eo.source_metadata_json, eo.sha256
+            FROM pdf_tasks t JOIN evidence_objects eo ON eo.id=t.evidence_object_id
+            WHERE t.id=:task_id AND t.evidence_object_id=:evidence_id
+            """
+            ),
+            {"task_id": task_id, "evidence_id": evidence_id},
+        )
+        .mappings()
+        .first()
+    )
+    if task is None:
+        raise ValueError("PDF task source not found for materialization")
+    if str(task["state"]) != "parsed":
+        return None
+    existing = (
+        session.execute(
+            text(
+                """
+            SELECT ko.id AS knowledge_object_id, kv.id AS knowledge_version_id
+            FROM knowledge_objects ko
+            JOIN knowledge_versions kv ON kv.id=ko.current_version_id
+            WHERE kv.content_version_id IN (
+              SELECT id FROM content_versions WHERE evidence_object_id=:evidence_id
+            )
+            ORDER BY kv.version_no DESC LIMIT 1
+            """
+            ),
+            {"evidence_id": evidence_id},
+        )
+        .mappings()
+        .first()
+    )
+    if existing is not None:
+        return str(existing["knowledge_object_id"]), str(existing["knowledge_version_id"])
+
+    metadata = json.loads(str(task["source_metadata_json"] or "{}"))
+    title = str(metadata.get("title") or "PDF document")
+    domain = str(metadata.get("primary_domain_id") or "general")
+    owner_user_id = metadata.get("owner_user_id")
+    body_parts: list[str] = []
+    offsets: list[tuple[int, int]] = []
+    cursor = 0
+    for block in blocks:
+        value = str(block["text"])
+        start = cursor
+        body_parts.append(value)
+        cursor += len(value)
+        offsets.append((start, cursor))
+        body_parts.append("\n\n")
+        cursor += 2
+    body = "".join(body_parts).rstrip("\n")
+    body_hash = sha256_text(body)
+    content_id = new_id()
+    object_id = new_id()
+    version_id = new_id()
+    session.execute(
+        text(
+            """
+            INSERT INTO content_versions
+              (id,evidence_object_id,version_no,processor_name,processor_version,
+               text_artifact_uri,content_sha256,status)
+            VALUES (:id,:evidence_id,:version_no,'pdf-parser',:processor_version,
+                    :artifact_uri,:content_sha256,'active')
+            """
+        ),
+        {
+            "id": content_id,
+            "evidence_id": evidence_id,
+            "version_no": int(
+                session.execute(
+                    text(
+                        "SELECT COALESCE(max(version_no), 0) + 1 "
+                        "FROM content_versions WHERE evidence_object_id=:id"
+                    ),
+                    {"id": evidence_id},
+                ).scalar_one()
+            ),
+            "processor_version": str(
+                (manifest.get("parser") or {}).get("schema_version") or "manifest-v1"
+            ),
+            "artifact_uri": str(manifest.get("manifest_uri") or ""),
+            "content_sha256": body_hash,
+        },
+    )
+    for block, (start, end) in zip(blocks, offsets, strict=True):
+        span_id = new_id()
+        session.execute(
+            text(
+                """
+                INSERT INTO content_spans
+                  (id,content_version_id,span_kind,start_offset,end_offset,page_no,section_path,quote_hash)
+                VALUES (:id,:content_id,'pdf_block',:start,:end,:page_no,:section_path,:quote_hash)
+                """
+            ),
+            {
+                "id": span_id,
+                "content_id": content_id,
+                "start": start,
+                "end": end,
+                "page_no": int(block["page_no"]),
+                "section_path": str(block.get("region_type") or "正文"),
+                "quote_hash": str(block["quote_hash"]),
+            },
+        )
+        session.execute(
+            text(
+                "UPDATE evidence_blocks SET content_version_id=:content_id "
+                "WHERE attempt_id=:attempt_id AND block_key=:key"
+            ),
+            {"content_id": content_id, "attempt_id": attempt_id, "key": block["key"]},
+        )
+    session.execute(
+        text(
+            """
+            INSERT INTO knowledge_objects
+              (id,primary_domain_id,title,object_kind,record_type,lifecycle_status,
+               visibility_scope,current_version_id,confirmation_generation,owner_user_id,sensitivity_level)
+            VALUES (:id,:domain,:title,'document','knowledge','formal_current',
+                    'formal',NULL,1,:owner,'private')
+            """
+        ),
+        {"id": object_id, "domain": domain, "title": title, "owner": owner_user_id},
+    )
+    session.execute(
+        text(
+            """
+            INSERT INTO knowledge_versions
+              (id,knowledge_object_id,version_no,content_version_id,markdown_uri,summary,source_quality)
+            VALUES (:id,:object_id,1,:content_id,NULL,:summary,'parser')
+            """
+        ),
+        {"id": version_id, "object_id": object_id, "content_id": content_id, "summary": title},
+    )
+    session.execute(
+        text("UPDATE knowledge_objects SET current_version_id=:version_id WHERE id=:object_id"),
+        {"version_id": version_id, "object_id": object_id},
+    )
+    for number, (block, (start, end)) in enumerate(zip(blocks, offsets, strict=True)):
+        span_id = session.execute(
+            text(
+                "SELECT id FROM content_spans "
+                "WHERE content_version_id=:content_id AND start_offset=:start"
+            ),
+            {"content_id": content_id, "start": start},
+        ).scalar_one()
+        session.execute(
+            text(
+                """
+                INSERT INTO chunks
+                  (id,source_type,source_id,source_version_id,chunk_no,title,text,raw_text,segmented_text,
+                   span_start,span_end,content_version_id,content_span_id,visibility_scope,confirmation_generation,status)
+                VALUES (:id,'knowledge_object',:object_id,:version_id,:number,:title,
+                        :text,:text,:text,
+                        :start,:end,:content_id,:span_id,'formal',1,'ready')
+                """
+            ),
+            {
+                "id": new_id(),
+                "object_id": object_id,
+                "version_id": version_id,
+                "number": number,
+                "title": title,
+                "text": str(block["text"]),
+                "start": start,
+                "end": end,
+                "content_id": content_id,
+                "span_id": span_id,
+            },
+        )
+    return object_id, version_id
+
+
 def publish_parse_result(
     session: Session,
     repository: PdfManifestRepository,
@@ -124,8 +327,19 @@ def publish_parse_result(
         )
         partial = any(page.get("status") == "failed" for page in manifest.get("pages", ()))
         indexed = formal_block_count > 0 and not partial
+        materialized = (
+            _materialize_pdf_knowledge(session, manifest, attempt_id=attempt_id)
+            if indexed
+            else None
+        )
         if indexed:
-            _enqueue_index_event(session, manifest, attempt_id, formal_block_count)
+            _enqueue_index_event(
+                session,
+                manifest,
+                attempt_id,
+                formal_block_count,
+                materialized=materialized,
+            )
 
     return PdfPublicationResult(
         attempt_id=str(attempt_id),
@@ -139,6 +353,7 @@ def _enqueue_index_event(
     manifest: dict[str, Any],
     attempt_id: str,
     formal_block_count: int,
+    materialized: tuple[str, str] | None = None,
 ) -> None:
     source = manifest.get("source") or {}
     parser = manifest.get("parser") or {}
@@ -151,6 +366,13 @@ def _enqueue_index_event(
         "formal_block_count": formal_block_count,
         "schema_version": str(manifest.get("schema_version") or ""),
     }
+    if materialized is not None:
+        payload.update(
+            {
+                "knowledge_object_id": materialized[0],
+                "knowledge_version_id": materialized[1],
+            }
+        )
     session.execute(
         text(
             """

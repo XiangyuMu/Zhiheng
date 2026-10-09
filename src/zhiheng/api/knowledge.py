@@ -359,6 +359,7 @@ async def upload_pdf(
             backend=selected_backend,
             options_hash=options_hash,
             idempotency_key=operation_key,
+            owner_user_id=user_id,
         )
         result = {
             "task_id": created.task_id,
@@ -903,6 +904,7 @@ def search_knowledge(
                     "source_type": str(row["source_kind"]),
                     "evidence_object_id": str(row["evidence_object_id"]),
                     "source_sha256": str(row["source_sha256"]),
+                    "searchable": True,
                     "source_url": metadata.get("source_url") or metadata.get("url"),
                     "content_sha256": str(row["content_sha256"]),
                     "summary": str(row["summary"]) if row["summary"] is not None else None,

@@ -276,16 +276,30 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
         index_event = session.execute(
             text(
                 """
-                SELECT event_type, aggregate_type, aggregate_id
+                SELECT event_type, aggregate_type, aggregate_id, payload_json
                 FROM outbox_events
                 WHERE event_type = 'knowledge.index' AND aggregate_id = 'attempt-1'
                 """
             )
         ).one()
+        materialized = session.execute(
+            text("""
+                SELECT ko.id, kv.id, c.id, c.raw_text, cs.page_no
+                FROM knowledge_objects ko
+                JOIN knowledge_versions kv ON kv.id=ko.current_version_id
+                JOIN chunks c ON c.source_id=ko.id AND c.source_version_id=kv.id
+                JOIN content_spans cs ON cs.id=c.content_span_id
+                JOIN content_versions cv ON cv.id=kv.content_version_id
+                WHERE cv.evidence_object_id=:evidence_id
+                """),
+            {"evidence_id": evidence_id},
+        ).one()
 
     assert completed == 1
     assert state == ("completed", "succeeded", 1)
-    assert index_event == ("knowledge.index", "pdf_parse_attempt", "attempt-1")
+    assert index_event[0:3] == ("knowledge.index", "pdf_parse_attempt", "attempt-1")
+    assert materialized[3:] == ("hello", 1)
+    assert materialized[0] in str(index_event[3])
 
 
 def test_missing_pdf_executor_persists_unsupported_terminal_state(
@@ -372,3 +386,32 @@ def test_missing_pdf_executor_persists_unsupported_terminal_state(
         "unsupported_pdf_parser",
         "unsupported",
     )
+
+
+def test_pdf_publication_event_reaches_durable_index_job(tmp_path: Path) -> None:
+    session_factory = _session_factory(tmp_path)
+    with session_scope(session_factory) as session:
+        event_id = new_id()
+        session.execute(
+            text("""
+                INSERT INTO outbox_events
+                  (id, event_type, aggregate_type, aggregate_id, payload_json, status)
+                VALUES (:id, 'knowledge.index', 'pdf_parse_attempt', :attempt, :payload, 'pending')
+            """),
+            {
+                "id": event_id,
+                "attempt": "synthetic-pdf-attempt",
+                "payload": json_text({"attempt_id": "synthetic-pdf-attempt"}),
+            },
+        )
+        outbox = OutboxRepository()
+        events = outbox.claim_pending(session)
+        assert outbox.enqueue_jobs_for_events(session, events) == 1
+        row = session.execute(
+            text("SELECT job_type, status, payload_json FROM jobs WHERE idempotency_key=:id"),
+            {"id": event_id},
+        ).one()
+        assert row.job_type == "knowledge.index"
+        assert row.status == "pending"
+        assert "synthetic-pdf-attempt" in str(row.payload_json)
+        assert outbox.enqueue_jobs_for_events(session, events) == 0

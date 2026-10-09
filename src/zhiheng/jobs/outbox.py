@@ -156,7 +156,10 @@ class OutboxRepository:
 def _job_type_for_event(event: ClaimedOutboxEvent) -> str | None:
     if event.event_type == KNOWLEDGE_PARSE_PDF_EVENT:
         return KNOWLEDGE_PARSE_PDF_JOB_TYPE
-    if event.event_type in KNOWLEDGE_INDEX_EVENTS:
+    if event.event_type in KNOWLEDGE_INDEX_EVENTS or (
+        event.event_type == KNOWLEDGE_INDEX_JOB_TYPE
+        and event.aggregate_type == "pdf_parse_attempt"
+    ):
         return KNOWLEDGE_INDEX_JOB_TYPE
     if event.event_type == PROPOSAL_VALIDATION_REQUESTED_EVENT:
         return EvolutionJobType.PROPOSAL_EVALUATION.value

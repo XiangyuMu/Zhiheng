@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import json_text, new_id, sha256_text
 from zhiheng.knowledge.object_store import StoredTextArtifacts
-from zhiheng.retrieval.qualification import formal_searchable_sql
+from zhiheng.retrieval.qualification import active_retrieval_generation_sql, formal_searchable_sql
 from zhiheng.retrieval.tokenizer import segment_for_fts
 
 __all__ = [
@@ -1126,37 +1126,12 @@ class KnowledgeRepository:
             generation = (
                 session.execute(
                     text(
-                        """
+                        f"""
                     SELECT id, model_id, model_revision, dimension, purpose,
-                           index_status, physical_index_ref
+                           index_status, physical_index_ref, built_count,
+                           source_manifest_hash
                     FROM embedding_generations eg
-                    WHERE eg.index_status = 'active'
-                      AND eg.purpose = 'retrieval'
-                      AND eg.model_id <> ''
-                      AND eg.model_revision <> ''
-                      AND eg.dimension > 0
-                      AND eg.physical_index_ref IS NOT NULL
-                      AND eg.physical_index_ref <> ''
-                      AND NOT EXISTS (
-                        SELECT 1
-                        FROM serving_chunks missing_chunk
-                        WHERE missing_chunk.source_id = :knowledge_object_id
-                          AND NOT EXISTS (
-                            SELECT 1
-                            FROM chunk_embeddings matching_embedding
-                            WHERE matching_embedding.chunk_id = missing_chunk.id
-                              AND matching_embedding.generation_id = eg.id
-                              AND matching_embedding.source_version_id = (
-                                missing_chunk.source_version_id
-                              )
-                              AND matching_embedding.visibility_scope = (
-                                missing_chunk.visibility_scope
-                              )
-                              AND matching_embedding.confirmation_generation = (
-                                missing_chunk.confirmation_generation
-                              )
-                          )
-                      )
+                    WHERE {active_retrieval_generation_sql(":knowledge_object_id", "eg")}
                     LIMIT 1
                     """
                     ),

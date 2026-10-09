@@ -23,6 +23,7 @@ from zhiheng.knowledge.object_store import (
     StoredBinaryArtifact,
     knowledge_object_store_for_settings,
 )
+from zhiheng.retrieval.qualification import formal_searchable_sql
 
 router = APIRouter(tags=["knowledge-workspace"])
 
@@ -71,7 +72,9 @@ def _version_row(
                    cv.text_artifact_uri,
                    cv.content_sha256, eo.object_uri, eo.sha256 AS evidence_sha256,
                    eo.media_type, eo.byte_size, eo.source_kind,
-                   eo.source_metadata_json
+                   eo.source_metadata_json,
+                   (kv.id = ko.current_version_id AND ({formal_searchable_sql("ko")}))
+                     AS searchable
             FROM knowledge_objects ko
             JOIN knowledge_versions kv ON kv.knowledge_object_id = ko.id
             LEFT JOIN content_versions cv ON cv.id = kv.content_version_id
@@ -161,6 +164,10 @@ def _reader_payload(session: Any, row: Any, store: Any) -> dict[str, Any]:
         "media_type": str(row["media_type"]) if row["media_type"] else None,
         "object_kind": str(row["object_kind"]),
         "lifecycle_status": str(row["lifecycle_status"]),
+        "primary_domain_id": str(row["primary_domain_id"]),
+        "searchable": bool(row["searchable"]),
+        "source_metadata": _json(row["source_metadata_json"], {}),
+        "citations": spans,
         "source": {
             "kind": str(row["source_kind"]) if row["source_kind"] else None,
             "metadata": _json(row["source_metadata_json"], {}),
@@ -380,6 +387,7 @@ def export_knowledge(
     session_factory: SessionFactoryDep,
     user_id: AuthDep,
     format: Literal["markdown", "original"] = Query(default="markdown"),
+    disposition: Literal["attachment", "inline"] = "attachment",
     version_id: str | None = None,
 ) -> Response:
     with session_scope(session_factory) as session:
@@ -389,6 +397,10 @@ def export_knowledge(
             version_id=version_id,
             user_id=user_id,
         )
+        if disposition == "inline" and (
+            format != "original" or row["media_type"] != "application/pdf"
+        ):
+            raise HTTPException(status_code=400, detail="inline preview requires an original PDF")
         store = knowledge_object_store_for_settings(request.app.state.knowledge_settings)
         if format == "original":
             try:
@@ -412,7 +424,7 @@ def export_knowledge(
             content=body,
             media_type=media_type,
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Disposition": f'{disposition}; filename="{filename}"',
                 "X-Content-SHA256": sha256_text(body.decode("utf-8"))
                 if format == "markdown"
                 else str(row["evidence_sha256"]),

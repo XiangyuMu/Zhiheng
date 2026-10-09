@@ -34,9 +34,11 @@ class PdfRepository:
         backend: str,
         options_hash: str,
         idempotency_key: str,
+        owner_user_id: str | None = None,
     ) -> PdfTaskCreated:
         task_id = new_id()
         metadata = {
+            "owner_user_id": owner_user_id,
             "format": "pdf",
             "title": title,
             "primary_domain_id": primary_domain_id,

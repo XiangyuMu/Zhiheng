@@ -292,6 +292,112 @@ function renderMemoryImpact(response) {
 function citationContext(citation) {
   return fetchJson("/v1/citations/context", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(citation) });
 }
+function citationOffset(citation, start = true) {
+  const names = start
+    ? ["start_offset", "span_start", "offset_start"]
+    : ["end_offset", "span_end", "offset_end"];
+  for (const name of names) {
+    if (citation?.[name] != null && Number.isFinite(Number(citation[name]))) return Number(citation[name]);
+  }
+  return null;
+}
+function citationPage(citation, source = {}) {
+  const page = citation?.page_no ?? source?.page_no;
+  return page != null && Number.isFinite(Number(page)) ? Number(page) : null;
+}
+function citationPageUrl(citation, source = {}) {
+  const page = citationPage(citation, source);
+  const mediaType = citation?.media_type || source?.media_type;
+  const sourceId = citation?.source_id || source?.source_id;
+  const versionId = citation?.source_version_id || source?.source_version_id;
+  if (page != null && sourceId && versionId && (mediaType === "application/pdf" || citation?.source_type === "pdf")) {
+    return `/v1/knowledge/${encodeURIComponent(sourceId)}/export?format=original&disposition=inline&version_id=${encodeURIComponent(versionId)}#page=${page}`;
+  }
+  const pageUrl = source?.page_url || source?.render_url || source?.page_uri;
+  return pageUrl && (/^https?:|^\//.test(pageUrl) ? pageUrl : null);
+}
+function codePointSlice(text, start, end) {
+  const characters = Array.from(String(text || ""));
+  return characters.slice(Math.max(0, start), Math.max(0, end)).join("");
+}
+function citationQuote(citation, source = {}, chunks = []) {
+  const start = citationOffset(citation, true);
+  const end = citationOffset(citation, false);
+  if (citation?.quote) return { quote: String(citation.quote), start, end };
+  if (start == null || end == null) return { quote: "", start, end };
+  const chunk = chunks.find((item) => {
+    const chunkStart = Number(item.span_start);
+    const chunkEnd = Number(item.span_end);
+    return Number.isFinite(chunkStart) && Number.isFinite(chunkEnd) && start >= chunkStart && end <= chunkEnd;
+  });
+  if (chunk) return { quote: codePointSlice(chunk.raw_text || chunk.text, start - Number(chunk.span_start), end - Number(chunk.span_start)), start, end };
+  const text = source.text || source.context || "";
+  const direct = codePointSlice(text, start, end);
+  if (direct) return { quote: direct, start, end };
+  return { quote: "", start, end };
+}
+function citationContextFromReader(citation, reader) {
+  const quote = citationQuote(citation, reader, reader.chunks || []);
+  const start = quote.start == null ? 0 : quote.start;
+  const end = quote.end == null ? start : quote.end;
+  const chunk = (reader.chunks || []).find((item) => {
+    const chunkStart = Number(item.span_start);
+    const chunkEnd = Number(item.span_end);
+    return Number.isFinite(chunkStart) && Number.isFinite(chunkEnd) && start >= chunkStart && end <= chunkEnd;
+  });
+  const text = chunk ? String(chunk.raw_text || chunk.text || "") : String(reader.text || "");
+  const localStart = chunk ? start - Number(chunk.span_start) : start;
+  const localEnd = chunk ? end - Number(chunk.span_start) : end;
+  const contextStart = Math.max(0, localStart - 160);
+  const contextEnd = Math.min(Array.from(text).length, localEnd + 160);
+  const context = codePointSlice(text, contextStart, contextEnd);
+  return {
+    ...citation,
+    title: reader.title,
+    source_id: reader.knowledge_object_id,
+    source_version_id: reader.knowledge_version_id,
+    media_type: reader.media_type,
+    source_type: citation.source_type || reader.source?.kind,
+    page_no: citation.page_no,
+    context,
+    quote: quote.quote || codePointSlice(context, localStart - contextStart, localEnd - contextStart),
+    quote_start: localStart - contextStart,
+    quote_end: localEnd - contextStart,
+  };
+}
+function renderCitationSource(source, citation = source) {
+  $("citation-title").textContent = source.title || "未命名资料";
+  $("citation-meta").textContent = ["个人资料", citationPage(citation, source) != null ? `第 ${citationPage(citation, source)} 页` : null, source.section_path || citation.section_path].filter(Boolean).join(" · ");
+  $("citation-location").replaceChildren();
+  const bbox = source.bbox || source.bounding_box || citation.bbox || citation.bounding_box;
+  const page = citationPage(citation, source);
+  const pageUrl = citationPageUrl(citation, source);
+  if (page != null || Array.isArray(bbox)) {
+    const location = [`第 ${page ?? "?"} 页`, Array.isArray(bbox) ? `区域 ${bbox.join(", ")}` : null].filter(Boolean).join(" · ");
+    $("citation-location").append(node("span", location));
+    if (pageUrl) {
+      const link = node("a", "打开 PDF 原页", "text-link");
+      link.id = "citation-page-link";
+      link.href = pageUrl; link.target = "_blank"; link.rel = "noopener";
+      $("citation-location").append(document.createTextNode(" · "), link);
+    }
+    $("citation-location").hidden = false;
+  } else $("citation-location").hidden = true;
+  const context = source.context || "";
+  const quoteStart = Number(source.quote_start);
+  const quoteEnd = Number(source.quote_end);
+  if (context && Number.isFinite(quoteStart) && Number.isFinite(quoteEnd)) {
+    const mark = node("mark", codePointSlice(context, quoteStart, quoteEnd));
+    mark.dataset.readerQuote = "true";
+    $("citation-context-text").replaceChildren(
+      document.createTextNode(codePointSlice(context, 0, quoteStart)),
+      mark,
+      document.createTextNode(codePointSlice(context, quoteEnd, Infinity)),
+    );
+  } else {
+    $("citation-context-text").textContent = source.quote || context || "暂无可显示的原文上下文。";
+  }
+}
 function renderCitations(citations, container) {
   container.replaceChildren();
   if (!citations.length) { container.append(node("li", "暂无可核对的来源。", "muted")); return; }
@@ -319,27 +425,7 @@ async function openCitation(citation) {
   try {
     const source = await citationContext(citation);
     if (request !== state.readerRequest || !$("citation-context").open) return;
-    $("citation-title").textContent = source.title || "未命名资料";
-    $("citation-meta").textContent = ["个人资料", source.page_no != null ? `第 ${source.page_no} 页` : null, source.section_path].filter(Boolean).join(" · ");
-    const bbox = source.bbox || source.bounding_box;
-    const pageUrl = source.page_url || source.render_url || source.page_uri;
-    if (source.page_no != null || Array.isArray(bbox)) {
-      const location = [`第 ${source.page_no ?? "?"} 页`, Array.isArray(bbox) ? `区域 ${bbox.join(", ")}` : null].filter(Boolean).join(" · ");
-      $("citation-location").append(node("span", location));
-      if (pageUrl && /^https?:|^\//.test(pageUrl)) {
-        const link = node("a", "打开 PDF 原页", "text-link");
-        link.href = pageUrl; link.target = "_blank"; link.rel = "noopener";
-        $("citation-location").append(document.createTextNode(" · "), link);
-      }
-      $("citation-location").hidden = false;
-    }
-    // Backend offsets count Unicode code points; JS string.slice counts UTF-16 units.
-    const characters = Array.from(source.context);
-    $("citation-context-text").replaceChildren(
-      document.createTextNode(characters.slice(0, source.quote_start).join("")),
-      node("mark", characters.slice(source.quote_start, source.quote_end).join("")),
-      document.createTextNode(characters.slice(source.quote_end).join("")),
-    );
+    renderCitationSource(source, citation);
   } catch (error) {
     if (request === state.readerRequest) { $("citation-title").textContent = "暂时无法核对原文"; $("citation-context-text").textContent = readableError(error); }
   }
@@ -955,13 +1041,20 @@ async function loadKnowledgeDetail(id) {
     $("detail-pin").setAttribute("aria-pressed", String(pinned));
     $("detail-similar").disabled = false;
     $("detail-export").disabled = false;
-    $("detail-citations").replaceChildren(...detail.citations.map((citation) => {
-      const bbox = citation.bbox || citation.bounding_box;
-      const location = [citation.page_no != null ? `第 ${citation.page_no} 页` : null,
-        Array.isArray(bbox) ? `区域 ${bbox.join(", ")}` : null,
+    const readerCitations = detail.spans || detail.citations || [];
+    $("detail-citations").replaceChildren(...readerCitations.map((citation, index) => {
+      const page = citationPage(citation);
+      const start = citationOffset(citation, true);
+      const end = citationOffset(citation, false);
+      const { quote } = citationQuote(citation, detail, detail.chunks || []);
+      const location = [page != null ? `第 ${page} 页` : null,
         citation.section_path || "正文",
-        `字符 ${citation.start_offset}–${citation.end_offset}`].filter(Boolean).join(" · ");
-      return node("li", location);
+        start != null && end != null ? `字符 ${start}–${end}` : null].filter(Boolean).join(" · ");
+      const button = action("", () => openReaderCitation(citation, detail), "source-card");
+      button.dataset.readerCitation = "true";
+      button.dataset.citationIndex = String(index);
+      button.append(node("strong", location || `原文片段 ${index + 1}`), node("small", quote || "点击查看原文片段", "source-excerpt"));
+      const li = node("li"); li.append(button); return li;
     }));
     ["detail-ask", "detail-reindex", "detail-delete", "detail-restore"].forEach((key) => { $(key).disabled = false; });
     $("detail-ask").disabled = deleted || !detail.searchable;
@@ -969,6 +1062,17 @@ async function loadKnowledgeDetail(id) {
     $("detail-delete").hidden = deleted; $("detail-restore").hidden = !deleted;
     loadVersionTimeline(id);
   } catch (error) { if (request === state.detailRequest) { $("detail-title").textContent = "无法读取资料"; message("detail-error", readableError(error)); } }
+}
+function openReaderCitation(citation, reader) {
+  const request = ++state.readerRequest;
+  $("citation-title").textContent = "正在读取原文…";
+  $("citation-meta").textContent = "";
+  $("citation-location").replaceChildren();
+  $("citation-location").hidden = true;
+  $("citation-context-text").textContent = "正在准备原文片段…";
+  openDialog("citation-context");
+  if (request !== state.readerRequest || !$("citation-context").open) return;
+  renderCitationSource(citationContextFromReader(citation, reader), citation);
 }
 async function toggleKnowledgeFlag(item, flag) {
   const id = item.knowledge_object_id;

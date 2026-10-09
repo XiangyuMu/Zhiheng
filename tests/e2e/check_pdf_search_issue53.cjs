@@ -21,7 +21,7 @@ const report = {
   started: new Date().toISOString(),
   scope: 'issue53-real-pdf-index-search-citation',
   input: { name: path.basename(file), sha256: sourceSha },
-  rerank: 'disabled',
+  retrieval: { route: 'library-fts', rerank: 'not-used-by-library-search' },
   states: [], search: [], status: 'running',
 };
 const reportPath = path.join(output, 'report.json');
@@ -46,7 +46,7 @@ const save = () => fs.writeFileSync(reportPath, JSON.stringify(report, null, 2),
         const url = new URL(request instanceof Request ? request.url : String(request), location.href);
         const method = args[1]?.method || (request instanceof Request ? request.method : 'GET');
         if (url.pathname === '/v1/knowledge/pdf-imports' && method.toUpperCase() === 'POST') {
-          try { window.__pdfReceipt = { http: response.status, body: await response.clone().json() }; } catch {}
+          try { window.__pdfReceipt = { http: response.status, body: await response.clone().json() }; } catch { window.__pdfReceipt = { http: response.status, error: 'invalid import JSON' }; }
         }
         return response;
       };
@@ -59,10 +59,10 @@ const save = () => fs.writeFileSync(reportPath, JSON.stringify(report, null, 2),
     report.login = true;
 
     const title = `Issue 53 PDF ${crypto.randomUUID()}`;
-    const receiptAt = Date.now();
     await page.locator('[data-open-import]:visible').first().click();
     await page.locator('#import-file').setInputFiles(file);
     await page.locator('#import-title').fill(title);
+    const receiptAt = Date.now();
     await page.locator('#import-submit').click();
     await page.waitForFunction(() => !document.querySelector('#import-dialog')?.open, { timeout: 60_000 });
     const receipt = await page.evaluate(() => window.__pdfReceipt);
@@ -71,14 +71,15 @@ const save = () => fs.writeFileSync(reportPath, JSON.stringify(report, null, 2),
     report.receipt = receipt;
     const taskId = receipt.body.task_id;
     assert(taskId, 'receipt must identify task');
-    report.timings = { receipt_ms: 0 };
+    report.timings = { receipt_ms: Date.now() - receiptAt };
     const deadline = receiptAt + 300_000;
     let task;
     while (Date.now() < deadline) {
       const response = await page.evaluate(async (id) => {
-        const r = await fetch(`/v1/knowledge/pdf-imports/${encodeURIComponent(id)}`);
+        const r = await fetch(`/v1/knowledge/pdf-imports/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(10_000) });
         return { http: r.status, body: await r.json() };
       }, taskId);
+      assert(Date.now() < deadline, 'combined parse/index budget exceeded');
       task = response.body;
       report.states.push({ at: new Date().toISOString(), ...response });
       save();
@@ -88,6 +89,17 @@ const save = () => fs.writeFileSync(reportPath, JSON.stringify(report, null, 2),
       if (task.state === 'parsed') {
         const query = 'MannequinVideos';
         report.query = query;
+        const result = await page.evaluate(async (q) => {
+          const r = await fetch(`/v1/knowledge/search?q=${encodeURIComponent(q)}&limit=100`, { signal: AbortSignal.timeout(10_000) });
+          return { http: r.status, body: await r.json() };
+        }, query);
+        report.search.push({ at: new Date().toISOString(), ...result });
+        assert.equal(result.http, 200);
+        const hit = result.body.items?.find((item) => item.evidence_object_id === task.evidence_object_id);
+        if (!hit) { await page.waitForTimeout(1000); continue; }
+        assert.equal(hit.source_sha256, sourceSha);
+        report.timings.indexed_ms = Date.now() - receiptAt;
+        assert(report.timings.indexed_ms <= 300_000, 'combined parse/index budget exceeded');
         // Exercise the actual library search control, then open the result in the reader dialog.
         await page.goto(`${base}/knowledge-agent#library`);
         await page.locator('#library-search').fill(query);
@@ -99,16 +111,10 @@ const save = () => fs.writeFileSync(reportPath, JSON.stringify(report, null, 2),
         await page.locator('#knowledge-detail').waitFor({ state: 'visible', timeout: 30_000 });
         report.ui = { library_search: true, opened_reader: true };
 
-        const result = await page.evaluate(async (q) => {
-          const r = await fetch(`/v1/knowledge/search?q=${encodeURIComponent(q)}&limit=20`);
-          return { http: r.status, body: await r.json() };
-        }, query);
-        report.search.push({ at: new Date().toISOString(), ...result });
-        const hit = result.body.items?.find((item) => item.source_sha256 === sourceSha);
-        assert(hit, 'search must return this import source, not a same-named historical item');
+
         report.hit = hit;
         const detail = await page.evaluate(async (id) => {
-          const r = await fetch(`/v1/knowledge/${encodeURIComponent(id)}`);
+          const r = await fetch(`/v1/knowledge/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(10_000) });
           return { http: r.status, body: await r.json() };
         }, hit.knowledge_object_id);
         report.detail = detail;
@@ -123,6 +129,9 @@ const save = () => fs.writeFileSync(reportPath, JSON.stringify(report, null, 2),
         assert(detail.body.retrieval_generation.physical_index_ref);
         assert.equal(detail.body.citations.length > 0, true);
         assert.equal(detail.body.citations.some((citation) => Number(citation.page_no) > 0), true);
+        await page.waitForFunction((expected) => document.querySelector('#detail-title')?.textContent === expected, title);
+        assert.equal(await page.locator('#detail-error').innerText(), '');
+        assert.equal(await page.locator('#detail-ask').isEnabled(), true);
         report.timings.search_ms = Date.now() - receiptAt;
         report.timings.total_ms = Date.now() - receiptAt;
         report.status = 'passed';
