@@ -40,11 +40,29 @@ def active_retrieval_generation_sql(
 def pdf_source_qualified_sql(
     content_alias: str = "current_cv",
     evidence_alias: str = "current_eo",
+    source_object_sql: str | None = None,
 ) -> str:
     """Return SQL predicate for parser-backed PDF evidence readiness."""
     for alias in (content_alias, evidence_alias):
         if not alias.replace("_", "").isalnum():
             raise ValueError("invalid SQL alias")
+    stale_chunk_predicate = ""
+    if source_object_sql is not None:
+        stale_chunk_predicate = f"""
+          AND NOT EXISTS (
+            SELECT 1 FROM serving_chunks stale_pdf_chunk
+            WHERE stale_pdf_chunk.source_id = {source_object_sql}
+              AND (
+                stale_pdf_chunk.source_version_id IS NULL
+                OR stale_pdf_chunk.source_version_id <> (
+                  SELECT current_kv.id FROM knowledge_versions current_kv
+                  WHERE current_kv.content_version_id = {content_alias}.id
+                )
+                OR stale_pdf_chunk.content_version_id IS NULL
+                OR stale_pdf_chunk.content_version_id <> {content_alias}.id
+              )
+          )
+        """
     return f"""
     (
       {evidence_alias}.media_type <> 'application/pdf'
@@ -65,7 +83,30 @@ def pdf_source_qualified_sql(
           AND NOT EXISTS (
             SELECT 1 FROM pdf_pages incomplete_pdf_page
             WHERE incomplete_pdf_page.attempt_id = succeeded_pdf_attempt.id
-              AND incomplete_pdf_page.status = 'failed'
+              AND incomplete_pdf_page.status NOT IN ('parsed', 'empty')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM pdf_tables incomplete_pdf_table
+            WHERE incomplete_pdf_table.attempt_id = succeeded_pdf_attempt.id
+              AND incomplete_pdf_table.status <> 'formal'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM pdf_images incomplete_pdf_image
+            WHERE incomplete_pdf_image.attempt_id = succeeded_pdf_attempt.id
+              AND (
+                incomplete_pdf_image.description_status NOT IN ('formal', 'not_requested')
+                OR incomplete_pdf_image.artifact_uri = ''
+                OR incomplete_pdf_image.sha256 = ''
+              )
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM evidence_blocks stale_pdf_block
+            WHERE stale_pdf_block.attempt_id = succeeded_pdf_attempt.id
+              AND (
+                stale_pdf_block.status <> 'formal'
+                OR stale_pdf_block.content_version_id IS NULL
+                OR stale_pdf_block.content_version_id <> {content_alias}.id
+              )
           )
           AND EXISTS (
             SELECT 1
@@ -96,6 +137,7 @@ def pdf_source_qualified_sql(
                   AND pdf_span.end_offset = pdf_chunk.span_end
               )
           )
+          {stale_chunk_predicate}
       )
     )
     """
@@ -135,7 +177,7 @@ def formal_searchable_sql(knowledge_alias: str = "ko") -> str:
        AND current_eo.status = 'active'
       WHERE current_kv.knowledge_object_id = {object_id}
         AND current_kv.id = {current_version}
-        AND {pdf_source_qualified_sql("current_cv", "current_eo")}
+        AND {pdf_source_qualified_sql("current_cv", "current_eo", object_id)}
     )
     AND EXISTS (
       SELECT 1

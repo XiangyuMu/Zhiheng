@@ -922,6 +922,9 @@ function renderMaterials() {
   }
   items.forEach((item) => {
     const li = node("li", undefined, "material-row");
+    li.dataset.knowledgeObjectId = item.knowledge_object_id;
+    if (item.evidence_object_id) li.dataset.evidenceObjectId = item.evidence_object_id;
+    if (item.source_sha256) li.dataset.sourceSha256 = item.source_sha256;
     const select = document.createElement("input");
     select.type = "checkbox"; select.className = "knowledge-select"; select.checked = state.selectedKnowledge.has(item.knowledge_object_id);
     select.setAttribute("aria-label", `选择 ${item.title}`);

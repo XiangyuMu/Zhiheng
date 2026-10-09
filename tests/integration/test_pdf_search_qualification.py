@@ -462,6 +462,83 @@ def test_unlinked_pdf_blocks_cannot_qualify_current_content(tmp_path: Path) -> N
     _assert_not_searchable(client, knowledge_id)
 
 
+@pytest.mark.parametrize("page_status", ["candidate", "awaiting_confirmation", "failed"])
+def test_pdf_search_rejects_incomplete_page_states(tmp_path: Path, page_status: str) -> None:
+    client, factory = _client(tmp_path)
+    _login(client)
+    knowledge_id = _pdf_knowledge(factory, tmp_path)
+    _complete_retrieval_generation(factory, knowledge_id)
+    with session_scope(factory) as session:
+        session.execute(
+            text(
+                "UPDATE pdf_pages SET status=:status WHERE attempt_id IN "
+                "(SELECT id FROM pdf_parse_attempts WHERE evidence_object_id="
+                "(SELECT evidence_object_id FROM knowledge_objects ko "
+                "JOIN knowledge_versions kv ON kv.id=ko.current_version_id "
+                "JOIN content_versions cv ON cv.id=kv.content_version_id WHERE ko.id=:id))"
+            ),
+            {"status": page_status, "id": knowledge_id},
+        )
+    _assert_not_searchable(client, knowledge_id)
+
+
+def test_pdf_search_rejects_nonformal_table_and_image_resources(tmp_path: Path) -> None:
+    client, factory = _client(tmp_path)
+    _login(client)
+    knowledge_id = _pdf_knowledge(factory, tmp_path)
+    generation_id = _complete_retrieval_generation(factory, knowledge_id)
+    del generation_id
+    with session_scope(factory) as session:
+        attempt_id = str(
+            session.execute(
+                text(
+                    "SELECT a.id FROM pdf_parse_attempts a "
+                    "JOIN evidence_objects eo ON eo.id=a.evidence_object_id "
+                    "JOIN knowledge_versions kv ON kv.content_version_id=("
+                    "SELECT id FROM content_versions WHERE evidence_object_id=eo.id) "
+                    "JOIN knowledge_objects ko ON ko.current_version_id=kv.id WHERE ko.id=:id"
+                ),
+                {"id": knowledge_id},
+            ).scalar_one()
+        )
+        page_id = str(
+            session.execute(
+                text("SELECT id FROM pdf_pages WHERE attempt_id=:attempt_id"),
+                {"attempt_id": attempt_id},
+            ).scalar_one()
+        )
+        block_id = str(
+            session.execute(
+                text("SELECT id FROM evidence_blocks WHERE attempt_id=:attempt_id"),
+                {"attempt_id": attempt_id},
+            ).scalar_one()
+        )
+        session.execute(
+            text(
+                "INSERT INTO pdf_tables (id,attempt_id,block_id,page_id,row_count,column_count,"
+                "linear_text,structure_sha256,status) VALUES (:id,:attempt_id,:block_id,:page_id,"
+                "1,1,'incomplete','x','candidate')"
+            ),
+            {"id": new_id(), "attempt_id": attempt_id, "block_id": block_id, "page_id": page_id},
+        )
+    _assert_not_searchable(client, knowledge_id)
+
+
+def test_database_fences_stale_pdf_serving_chunk_lineage(tmp_path: Path) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    client, factory = _client(tmp_path)
+    _login(client)
+    knowledge_id = _pdf_knowledge(factory, tmp_path)
+    _complete_retrieval_generation(factory, knowledge_id)
+    with session_scope(factory) as session, pytest.raises(IntegrityError), session.begin_nested():
+        session.execute(
+            text("UPDATE chunks SET source_version_id='stale-version' WHERE source_id=:id"),
+            {"id": knowledge_id},
+        )
+    assert client.get(f"/v1/knowledge/{knowledge_id}").json()["searchable"] is True
+
+
 @pytest.mark.parametrize(
     "corruption",
     [
