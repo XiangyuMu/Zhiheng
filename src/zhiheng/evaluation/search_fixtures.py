@@ -7,7 +7,9 @@ from zhiheng.core.ids import json_text, new_id
 from zhiheng.knowledge import KnowledgeRepository
 
 
-def mark_formal_knowledge_indexed(session: Session, knowledge_object_id: str) -> None:
+def mark_formal_knowledge_indexed(
+    session: Session, knowledge_object_id: str, *, with_vectors: bool = True
+) -> None:
     """Publish the durable indexing completion required by formal retrieval gates.
 
     Evaluation data is inserted directly to keep setup deterministic. Recording the
@@ -43,6 +45,8 @@ def mark_formal_knowledge_indexed(session: Session, knowledge_object_id: str) ->
     indexed = KnowledgeRepository().rebuild_fts_index(session)
     if not repository.complete(session, jobs[0], result={"fts_indexed": indexed}):
         raise ValueError("evaluation index completion lost its claim")
+    if not with_vectors:
+        return
     vector = VectorIndexRepository()
     generation_id = vector.create_generation(
         session,
@@ -50,10 +54,13 @@ def mark_formal_knowledge_indexed(session: Session, knowledge_object_id: str) ->
         model_revision="deterministic-v1",
         dimension=2,
     )
-    chunk_ids = session.execute(
-        text("SELECT id FROM serving_chunks WHERE source_id=:source_id"),
-        {"source_id": knowledge_object_id},
-    ).scalars().all()
+    chunk_ids = (
+        session.execute(
+            text("SELECT id FROM serving_chunks"),
+        )
+        .scalars()
+        .all()
+    )
     if not chunk_ids:
         raise ValueError("evaluation fixture must contain serving chunks")
     vector.rebuild_generation(

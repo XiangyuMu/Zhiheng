@@ -385,7 +385,7 @@ def get_pdf_task(
         row = (
             session.execute(
                 text(
-                    """
+                    f"""
                 SELECT
                   t.id AS task_id, t.evidence_object_id, t.state, t.backend,
                   eo.sha256 AS source_sha256,
@@ -415,6 +415,51 @@ def get_pdf_task(
                     ORDER BY j.updated_at DESC, j.id DESC
                     LIMIT 1
                   ) AS parse_job_status,
+                  (
+                    SELECT json_extract(j.payload_json, '$.knowledge_object_id')
+                    FROM jobs j
+                    WHERE j.job_type = 'knowledge.index'
+                      AND json_extract(j.payload_json, '$.task_id') = t.id
+                    ORDER BY j.updated_at DESC, j.id DESC
+                    LIMIT 1
+                  ) AS index_knowledge_object_id,
+                  (
+                    SELECT json_extract(j.payload_json, '$.failure_code')
+                    FROM jobs j
+                    WHERE j.job_type = 'knowledge.index'
+                      AND json_extract(j.payload_json, '$.task_id') = t.id
+                    ORDER BY j.updated_at DESC, j.id DESC
+                    LIMIT 1
+                  ) AS index_failure_code,
+                  (
+                    SELECT json_extract(j.payload_json, '$.retryable')
+                    FROM jobs j
+                    WHERE j.job_type = 'knowledge.index'
+                      AND json_extract(j.payload_json, '$.task_id') = t.id
+                    ORDER BY j.updated_at DESC, j.id DESC
+                    LIMIT 1
+                  ) AS index_retryable,
+                  (
+                    SELECT j.status
+                    FROM jobs j
+                    WHERE j.job_type = 'knowledge.index'
+                      AND json_extract(j.payload_json, '$.task_id') = t.id
+                    ORDER BY j.updated_at DESC, j.id DESC
+                    LIMIT 1
+                  ) AS index_job_status,
+                  EXISTS (
+                    SELECT 1
+                    FROM knowledge_objects index_ko
+                    WHERE index_ko.id = (
+                      SELECT json_extract(j.payload_json, '$.knowledge_object_id')
+                      FROM jobs j
+                      WHERE j.job_type = 'knowledge.index'
+                        AND json_extract(j.payload_json, '$.task_id') = t.id
+                      ORDER BY j.updated_at DESC, j.id DESC
+                      LIMIT 1
+                    )
+                    AND {formal_searchable_sql("index_ko")}
+                  ) AS index_searchable,
                   count(DISTINCT p.id) AS page_count,
                   count(DISTINCT CASE WHEN p.status = 'parsed' THEN p.id END)
                     AS parsed_page_count,
@@ -452,11 +497,22 @@ def get_pdf_task(
             "block_count": int(row["block_count"]),
         }
     )
+    raw_state = str(row["state"])
+    index_status = str(row["index_job_status"] or "")
+    indexed_searchable = bool(row["index_searchable"])
+    state = raw_state
+    if raw_state == "parsed":
+        if index_status in {"failed", "dead", "unsupported"}:
+            state = "dead" if index_status == "dead" else "failed"
+        elif not indexed_searchable:
+            state = "processing"
     failure_code = (
         row["failure_code"]
         or row["job_failure_code"]
+        or row["index_failure_code"]
         or ("unsupported_pdf_parser" if str(row["state"]) == "unsupported" else None)
     )
+    failure_stage = "index" if row["index_failure_code"] else "parse"
     failure = failure_from_row(
         error_class=str(failure_code) if failure_code else None,
         error_message=(
@@ -466,23 +522,25 @@ def get_pdf_task(
         ),
         payload=(
             {"failure_code": failure_code, "failure_stage": "parse", "retryable": False}
-            if failure_code and str(row["state"]) == "unsupported"
+            if failure_code and raw_state == "unsupported"
             else {
                 "failure_code": failure_code,
-                "failure_stage": "parse",
-                "retryable": bool(row["job_retryable"])
+                "failure_stage": failure_stage,
+                "retryable": bool(row["index_retryable"])
+                if row["index_failure_code"] and row["index_retryable"] is not None
+                else bool(row["job_retryable"])
                 if row["job_retryable"] is not None
-                else str(row["parse_job_status"] or "") != "dead",
+                else index_status != "dead" and str(row["parse_job_status"] or "") != "dead",
             }
             if failure_code
             else None
         ),
-        job_status=str(row["state"]),
+        job_status=state,
     )
     return PdfTaskStatusResponse(
         task_id=str(row["task_id"]),
         evidence_object_id=str(row["evidence_object_id"]),
-        state=str(row["state"]),
+        state=state,
         backend=str(row["backend"]),
         attempt_id=str(row["attempt_id"]) if row["attempt_id"] else None,
         page_count=int(row["page_count"]),
@@ -494,7 +552,7 @@ def get_pdf_task(
         etag=etag,
         error_code=failure.code if failure else None,
         redacted_summary=failure.redacted_summary if failure else None,
-        retryable=bool(failure.retryable if failure else str(row["state"]) in {"failed", "dead"}),
+        retryable=bool(failure.retryable if failure else state in {"failed", "dead"}),
     )
 
 

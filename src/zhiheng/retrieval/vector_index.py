@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import new_id, sha256_json
 from zhiheng.retrieval.contracts import RetrievalCandidate, RetrievalSource
+from zhiheng.retrieval.qualification import formal_searchable_sql
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,13 @@ class SqliteVecAdapter:
     _index_ref_prefix = "sqlite_vec:"
 
     def load(self, session: Session) -> None:
+        # Extensions are connection-local. Reloading sqlite-vec while this
+        # connection has live virtual tables can fail during initialization.
+        loaded = session.connection().exec_driver_sql(
+            "SELECT 1 FROM pragma_function_list WHERE name='vec_version' LIMIT 1"
+        ).scalar()
+        if loaded is not None:
+            return
         sqlite_vec = self._sqlite_vec_module()
 
         dbapi_connection = self._dbapi_connection(session)
@@ -413,7 +421,7 @@ class VectorIndexRepository:
         scores_by_rowid = {rowid: 1.0 / (1.0 + distance) for rowid, distance in vector_rows}
         metadata_rows = session.execute(
             text(
-                """
+                f"""
                 SELECT
                   c.rowid,
                   c.source_type,
@@ -432,30 +440,10 @@ class VectorIndexRepository:
                   AND (
                     c.source_type <> 'knowledge_object'
                     OR EXISTS (
-                    SELECT 1
-                    FROM jobs completed_index
-                    WHERE completed_index.job_type = 'knowledge.index'
-                      AND completed_index.status = 'completed'
-                      AND (
-                        json_extract(completed_index.payload_json, '$.knowledge_object_id')
-                          = c.source_id
-                        OR json_extract(completed_index.payload_json, '$.aggregate_id')
-                          = c.source_id
-                      )
-                    )
-                  )
-                  AND (
-                    c.source_type <> 'knowledge_object'
-                    OR EXISTS (
-                      SELECT 1
-                      FROM knowledge_objects ko
-                      JOIN knowledge_versions kv ON kv.id = ko.current_version_id
-                      JOIN content_versions cv ON cv.id = kv.content_version_id
-                      JOIN evidence_objects eo ON eo.id = cv.evidence_object_id
+                      SELECT 1 FROM knowledge_objects ko
                       WHERE ko.id = c.source_id
                         AND ko.current_version_id = c.source_version_id
-                        AND cv.status = 'active'
-                        AND eo.status = 'active'
+                        AND {formal_searchable_sql("ko")}
                     )
                   )
                 """

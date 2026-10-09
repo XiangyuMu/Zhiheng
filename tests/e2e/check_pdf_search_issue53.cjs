@@ -3,15 +3,20 @@
  * The API and worker are real; this script does not call internal functions.
  */
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
+const crypto = require("node:crypto");
 const { execFileSync } = require('node:child_process');
 const { chromium } = require('playwright');
+const {
+  initializeEvidence,
+  loadExpectation,
+  sanitizedExpectation,
+  sha256File,
+  validateExpectationAgainstPdf,
+  verifyClickedCitation,
+} = require("./pdf_evidence_helpers.cjs");
 
-const [base, output, file] = process.argv.slice(2);
-const outputExists = Boolean(output && fs.existsSync(output));
-if (output && !outputExists) fs.mkdirSync(output, { mode: 0o700 });
+const [base, output, file, expectationPath] = process.argv.slice(2);
 const report = {
   started: new Date().toISOString(),
   scope: 'issue53-real-pdf-index-search-citation',
@@ -19,23 +24,22 @@ const report = {
   retrieval: { route: 'library-fts', rerank: 'not-used-by-library-search' },
   states: [], search: [], status: 'running',
 };
-const reportPath = output
-  ? path.join(output, outputExists ? `failure-${Date.now()}.json` : 'report.json')
-  : null;
-const save = () => {
-  if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), { mode: 0o600 });
-};
+const evidence = initializeEvidence("check-pdf-search-issue53", output, report);
 
 (async () => {
   let browser;
   let page;
   try {
+    assert(!evidence.setupError, evidence.setupError);
+    assert(evidence.outputReady, 'output directory must be newly created for this evidence run');
     assert(base && output && file, 'Expected URL, output directory and PDF');
     assert(['localhost', '127.0.0.1'].includes(new URL(base).hostname), 'Local service only');
     assert(process.env.ZHIHENG_TEST_USERNAME && process.env.ZHIHENG_TEST_PASSWORD, 'Missing credentials');
-    assert(!outputExists, `output directory already exists: ${output}`);
-    const sourceSha = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    const sourceSha = sha256File(file);
     report.input.sha256 = sourceSha;
+    const expectation = loadExpectation(expectationPath, sourceSha);
+    const localPdfCheck = validateExpectationAgainstPdf(file, expectation);
+    report.expectation = sanitizedExpectation(expectation, localPdfCheck);
     report.sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     report.dirty = Boolean(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim());
     assert.equal(report.dirty, false, 'final browser evidence requires a clean worktree');
@@ -87,20 +91,26 @@ const save = () => {
       assert(Date.now() < deadline, 'combined parse/index budget exceeded');
       task = response.body;
       report.states.push({ at: new Date().toISOString(), ...response });
-      save();
+      evidence.save();
       assert.equal(response.http, 200);
       if (task.state === 'parsed' && !report.timings.parsed_ms) report.timings.parsed_ms = Date.now() - receiptAt;
       if (['failed', 'partial', 'unsupported', 'dead'].includes(task.state)) break;
       if (task.state === 'parsed') {
-        const query = 'MannequinVideos';
+        const query = expectation?.query || 'MannequinVideos';
         report.query = query;
         const result = await page.evaluate(async (q) => {
           const r = await fetch(`/v1/knowledge/search?q=${encodeURIComponent(q)}&limit=100`, { signal: AbortSignal.timeout(10_000) });
           return { http: r.status, body: await r.json() };
         }, query);
-        report.search.push({ at: new Date().toISOString(), ...result });
         assert.equal(result.http, 200);
         const hit = result.body.items?.find((item) => item.evidence_object_id === task.evidence_object_id);
+        report.search.push({
+          at: new Date().toISOString(),
+          http: result.http,
+          total: result.body.total,
+          item_count: result.body.items?.length || 0,
+          hit_found: Boolean(hit),
+        });
         if (!hit) { await page.waitForTimeout(1000); continue; }
         assert.equal(hit.source_sha256, sourceSha);
         report.timings.indexed_ms = Date.now() - receiptAt;
@@ -116,13 +126,18 @@ const save = () => {
         await page.locator('#knowledge-detail').waitFor({ state: 'visible', timeout: 30_000 });
         report.ui = { library_search: true, opened_reader: true };
 
-
-        report.hit = hit;
+        report.hit = {
+          knowledge_object_id: hit.knowledge_object_id,
+          knowledge_version_id: hit.knowledge_version_id,
+          evidence_object_id: hit.evidence_object_id,
+          source_sha256: hit.source_sha256,
+          media_type: hit.media_type,
+          searchable: hit.searchable,
+        };
         const detail = await page.evaluate(async (id) => {
           const r = await fetch(`/v1/knowledge/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(10_000) });
           return { http: r.status, body: await r.json() };
         }, hit.knowledge_object_id);
-        report.detail = detail;
         assert.equal(detail.http, 200);
         assert.equal(detail.body.knowledge_object_id, hit.knowledge_object_id);
         assert.equal(detail.body.searchable, true);
@@ -137,6 +152,32 @@ const save = () => {
         await page.waitForFunction((expected) => document.querySelector('#detail-title')?.textContent === expected, title);
         assert.equal(await page.locator('#detail-error').innerText(), '');
         assert.equal(await page.locator('#detail-ask').isEnabled(), true);
+        report.detail = {
+          http: detail.http,
+          knowledge_object_id: detail.body.knowledge_object_id,
+          searchable: detail.body.searchable,
+          media_type: detail.body.media_type,
+          citation_count: detail.body.citations.length,
+          retrieval_generation: {
+            id: detail.body.retrieval_generation.id,
+            model_id: detail.body.retrieval_generation.model_id,
+            model_revision: detail.body.retrieval_generation.model_revision,
+            dimension: detail.body.retrieval_generation.dimension,
+            purpose: detail.body.retrieval_generation.purpose,
+            index_status: detail.body.retrieval_generation.index_status,
+            physical_index_ref: detail.body.retrieval_generation.physical_index_ref,
+          },
+        };
+        report.ui.citation = await verifyClickedCitation({
+          page,
+          base,
+          reader: {
+            knowledge_object_id: hit.knowledge_object_id,
+            knowledge_version_id: hit.knowledge_version_id,
+          },
+          expectation,
+          expectedPdfSha: sourceSha,
+        });
         report.timings.search_ms = Date.now() - receiptAt;
         report.timings.total_ms = Date.now() - receiptAt;
         report.status = 'passed';
@@ -151,16 +192,21 @@ const save = () => {
     process.exitCode = 1;
   } finally {
     report.finished = new Date().toISOString();
-    if (page) {
+    if (page && evidence.outputReady) {
       try {
-        await page.screenshot({ path: path.join(output, 'final.png'), fullPage: true });
+        await page.screenshot({ path: path.join(evidence.outputPath, 'final.png'), fullPage: true });
       } catch (error) {
         report.status = 'failed';
         report.screenshot_failure = String(error.stack || error);
         process.exitCode = 1;
       }
     }
-    save();
+    try {
+      evidence.save();
+    } catch (error) {
+      process.exitCode = 1;
+      console.error(`failed to write evidence report: ${error.stack || error}`);
+    }
     if (browser) await browser.close();
   }
 })();

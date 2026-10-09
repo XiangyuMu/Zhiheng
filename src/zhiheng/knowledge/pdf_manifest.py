@@ -107,3 +107,33 @@ def _validate_semantics(manifest: dict[str, Any]) -> None:
             ):
                 raise ManifestValidationError("overlapping table cells")
             occupied.append(rect)
+
+
+def manifest_is_complete(manifest: dict[str, Any]) -> bool:
+    """Return whether every parser output required for publication is formal.
+
+    Candidate, awaiting-confirmation, failed, or missing required output is
+    retained in the manifest but must keep the task out of the formal index.
+    """
+
+    pages = list(manifest.get("pages", ()))
+    blocks = list(manifest.get("blocks", ()))
+    tables = list(manifest.get("tables", ()))
+    images = list(manifest.get("images", ()))
+    if not pages or not blocks:
+        return False
+    if any(page.get("status") not in {"parsed", "empty"} for page in pages):
+        return False
+    if any(
+        block.get("status") != "formal"
+        or (block.get("region_type") != "image" and not str(block.get("text") or "").strip())
+        for block in blocks
+    ):
+        return False
+    if any(
+        not table.get("cells")
+        or any(cell.get("status") != "formal" for cell in table.get("cells", ()))
+        for table in tables
+    ):
+        return False
+    return not any(image.get("status") != "formal" for image in images)

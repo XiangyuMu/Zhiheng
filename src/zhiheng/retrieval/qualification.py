@@ -57,12 +57,44 @@ def pdf_source_qualified_sql(
          AND succeeded_pdf_attempt.status = 'succeeded'
         WHERE parsed_pdf_task.evidence_object_id = {evidence_alias}.id
           AND parsed_pdf_task.state = 'parsed'
+          AND NOT EXISTS (
+            SELECT 1 FROM evidence_blocks incomplete_pdf_block
+            WHERE incomplete_pdf_block.attempt_id = succeeded_pdf_attempt.id
+              AND incomplete_pdf_block.status <> 'formal'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM pdf_pages incomplete_pdf_page
+            WHERE incomplete_pdf_page.attempt_id = succeeded_pdf_attempt.id
+              AND incomplete_pdf_page.status = 'failed'
+          )
           AND EXISTS (
             SELECT 1
             FROM evidence_blocks pdf_block
             WHERE pdf_block.attempt_id = succeeded_pdf_attempt.id
               AND pdf_block.status = 'formal'
               AND pdf_block.content_version_id = {content_alias}.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM serving_chunks pdf_chunk
+            WHERE pdf_chunk.content_version_id = {content_alias}.id
+              AND NOT EXISTS (
+                SELECT 1 FROM content_spans pdf_span
+                JOIN evidence_blocks matching_pdf_block
+                  ON matching_pdf_block.attempt_id = succeeded_pdf_attempt.id
+                 AND matching_pdf_block.content_version_id = {content_alias}.id
+                 AND matching_pdf_block.status = 'formal'
+                 AND matching_pdf_block.text_sha256 = pdf_span.quote_hash
+                 AND matching_pdf_block.text = pdf_chunk.raw_text
+                JOIN pdf_pages matching_pdf_page
+                  ON matching_pdf_page.id = matching_pdf_block.page_id
+                 AND matching_pdf_page.attempt_id = succeeded_pdf_attempt.id
+                 AND matching_pdf_page.page_no = pdf_span.page_no
+                 AND matching_pdf_page.status = 'parsed'
+                WHERE pdf_span.id = pdf_chunk.content_span_id
+                  AND pdf_span.content_version_id = {content_alias}.id
+                  AND pdf_span.start_offset = pdf_chunk.span_start
+                  AND pdf_span.end_offset = pdf_chunk.span_end
+              )
           )
       )
     )
@@ -110,12 +142,6 @@ def formal_searchable_sql(knowledge_alias: str = "ko") -> str:
       FROM serving_chunks qualified_chunk
       WHERE qualified_chunk.source_id = {object_id}
         AND qualified_chunk.source_version_id = {current_version}
-    )
-    AND NOT EXISTS (
-      SELECT 1
-      FROM serving_chunks stale_chunk
-      WHERE stale_chunk.source_id = {object_id}
-        AND stale_chunk.source_version_id <> {current_version}
     )
     AND EXISTS (
       SELECT 1

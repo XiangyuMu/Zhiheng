@@ -32,7 +32,7 @@ def _knowledge(session_factory: sessionmaker[Session], tmp_path: Path) -> str:
             user_authority=KnowledgeUserAuthority(user_id),
             stored_artifacts=stored_text_artifacts(tmp_path, value),
         )
-        mark_formal_knowledge_indexed(session, item.knowledge_object_id)
+        mark_formal_knowledge_indexed(session, item.knowledge_object_id, with_vectors=False)
         return item.knowledge_object_id
 
 
@@ -67,7 +67,7 @@ def _pdf_knowledge(
             attempt_status=attempt_status,
             block_text=value,
         )
-        mark_formal_knowledge_indexed(session, item.knowledge_object_id)
+        mark_formal_knowledge_indexed(session, item.knowledge_object_id, with_vectors=False)
         return item.knowledge_object_id
 
 
@@ -80,6 +80,10 @@ def _insert_pdf_lineage(
     attempt_status: str,
     block_text: str,
 ) -> None:
+    session.execute(
+        text("UPDATE content_spans SET page_no=1 WHERE content_version_id=:id"),
+        {"id": content_version_id},
+    )
     task_id = new_id()
     attempt_id = new_id()
     page_id = new_id()
@@ -212,6 +216,20 @@ def _assert_not_searchable(client: TestClient, knowledge_id: str) -> None:
     processing = client.get(f"/v1/knowledge/{knowledge_id}/processing")
     assert processing.status_code == 200
     assert processing.json()["searchable"] is False
+    listed = client.get("/v1/knowledge/items")
+    assert listed.status_code == 200
+    assert all(
+        not item["searchable"]
+        for item in listed.json()["items"]
+        if item["knowledge_object_id"] == knowledge_id
+    )
+    history = client.get("/v1/knowledge/import-tasks?task_type=knowledge")
+    assert history.status_code == 200
+    assert all(
+        item["status"] != "succeeded"
+        for item in history.json()["items"]
+        if item["source_id"] == knowledge_id
+    )
 
 
 def test_search_and_detail_require_active_generation_and_matching_embeddings(
@@ -242,9 +260,9 @@ def test_search_and_detail_require_active_generation_and_matching_embeddings(
 
     search = client.get("/v1/knowledge/search", params={"q": "向量资格"})
     assert search.status_code == 200
-    assert (
-        [item["knowledge_object_id"] for item in search.json()["items"]] == [knowledge_id]
-    ), search.json()
+    assert [item["knowledge_object_id"] for item in search.json()["items"]] == [knowledge_id], (
+        search.json()
+    )
     detail = client.get(f"/v1/knowledge/{knowledge_id}")
     assert detail.status_code == 200
     detail_payload = detail.json()
@@ -431,3 +449,70 @@ def test_pdf_search_qualification_rejects_wrong_parser_terminal_states(
     )
 
     _assert_not_searchable(client, knowledge_id)
+
+
+def test_unlinked_pdf_blocks_cannot_qualify_current_content(tmp_path: Path) -> None:
+    client, factory = _client(tmp_path)
+    _login(client)
+    knowledge_id = _pdf_knowledge(factory, tmp_path)
+    _complete_retrieval_generation(factory, knowledge_id)
+    assert client.get(f"/v1/knowledge/{knowledge_id}").json()["searchable"] is True
+    with session_scope(factory) as session:
+        session.execute(text("UPDATE evidence_blocks SET content_version_id=NULL"))
+    _assert_not_searchable(client, knowledge_id)
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "UPDATE content_spans SET page_no=2",
+        "UPDATE evidence_blocks SET text='different source text'",
+        "UPDATE evidence_blocks SET status='candidate'",
+    ],
+)
+def test_pdf_retrievers_reject_broken_page_and_block_lineage(
+    tmp_path: Path, corruption: str
+) -> None:
+    from zhiheng.retrieval.repository import LexicalRetriever
+
+    client, factory = _client(tmp_path)
+    _login(client)
+    knowledge_id = _pdf_knowledge(factory, tmp_path)
+    _complete_retrieval_generation(factory, knowledge_id)
+    with session_scope(factory) as session:
+        assert LexicalRetriever().search(session, "PDF")
+        assert VectorIndexRepository().search_active(
+            session,
+            [1.0, 0.0],
+            model_id="test-embedding",
+            model_revision="issue53-complete",
+            dimension=2,
+        )
+        session.execute(text(corruption))
+        assert LexicalRetriever().search(session, "PDF") == []
+        assert KnowledgeRepository().search_formal_fts(session, "PDF") == []
+        assert (
+            VectorIndexRepository().search_active(
+                session,
+                [1.0, 0.0],
+                model_id="test-embedding",
+                model_revision="issue53-complete",
+                dimension=2,
+            )
+            == []
+        )
+    _assert_not_searchable(client, knowledge_id)
+
+
+def test_database_rejects_removing_formal_chunk_lineage(tmp_path: Path) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    client, factory = _client(tmp_path)
+    _login(client)
+    knowledge_id = _pdf_knowledge(factory, tmp_path)
+    _complete_retrieval_generation(factory, knowledge_id)
+    with session_scope(factory) as session, pytest.raises(
+        IntegrityError, match="requires exact content lineage"
+    ), session.begin_nested():
+        session.execute(text("UPDATE chunks SET content_span_id=NULL"))
+    assert client.get(f"/v1/knowledge/{knowledge_id}").json()["searchable"] is True

@@ -49,3 +49,39 @@ def test_semantic_manifest_corruption_rejected(failure: str) -> None:
         block["status"] = "formal"
     with pytest.raises(ManifestValidationError):
         validate_manifest(example)
+
+
+@pytest.mark.parametrize("status", ["candidate", "awaiting_confirmation", "failed"])
+def test_incomplete_manifest_blocks_and_cells_prevent_publication(status: str) -> None:
+    from zhiheng.knowledge.pdf_manifest import manifest_is_complete
+
+    manifest = {
+        "pages": [{"status": "parsed"}],
+        "blocks": [{"status": "formal", "text": "complete"}],
+        "tables": [{"cells": [{"status": "formal"}]}],
+        "images": [],
+    }
+    assert manifest_is_complete(manifest)
+    incomplete = copy.deepcopy(manifest)
+    incomplete["blocks"][0]["status"] = status
+    assert not manifest_is_complete(incomplete)
+    incomplete = copy.deepcopy(manifest)
+    incomplete["tables"][0]["cells"][0]["status"] = status
+    assert not manifest_is_complete(incomplete)
+
+
+def test_explicit_empty_page_and_image_without_caption_are_complete() -> None:
+    from zhiheng.knowledge.pdf_manifest import manifest_is_complete
+
+    manifest = {
+        "pages": [{"status": "parsed"}, {"status": "empty"}],
+        "blocks": [
+            {"status": "formal", "text": "complete"},
+            {"status": "formal", "region_type": "image", "text": ""},
+        ],
+        "images": [{"status": "formal", "description_origin": "not_requested"}],
+        "tables": [],
+    }
+    assert manifest_is_complete(manifest)
+    manifest["images"][0]["status"] = "failed"
+    assert not manifest_is_complete(manifest)

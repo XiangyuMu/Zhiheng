@@ -444,7 +444,7 @@ def list_import_tasks(
               j.id AS job_id,
               json_extract(eo.source_metadata_json, '$.title') AS title,
               t.state AS source_status,
-              j.status AS job_status,
+              COALESCE(ij.status, j.status) AS job_status,
               t.created_at AS created_at,
               t.updated_at AS updated_at,
               j.attempts AS job_attempts,
@@ -474,7 +474,7 @@ def list_import_tasks(
               ) AS progress_total,
               ja.error_class AS error_class,
               ja.error_message AS error_message,
-              j.payload_json AS payload_json,
+              COALESCE(ij.payload_json, j.payload_json) AS payload_json,
               ko.lifecycle_status AS lifecycle_status,
               CASE WHEN ko.id IS NOT NULL AND {formal_searchable_sql("ko")} THEN 1 ELSE 0 END
                 AS searchable
@@ -489,15 +489,27 @@ def list_import_tasks(
                WHERE j2.job_type = 'knowledge.parse_pdf'
                  AND json_extract(j2.payload_json, '$.task_id') = t.id
              )
+            LEFT JOIN jobs ij
+              ON ij.job_type = 'knowledge.index'
+             AND json_extract(ij.payload_json, '$.task_id') = t.id
+             AND ij.created_at = (
+               SELECT max(ij2.created_at)
+               FROM jobs ij2
+               WHERE ij2.job_type = 'knowledge.index'
+                 AND json_extract(ij2.payload_json, '$.task_id') = t.id
+             )
             LEFT JOIN job_attempts ja
-              ON ja.job_id = j.id
+              ON ja.job_id = COALESCE(ij.id, j.id)
              AND ja.started_at = (
                SELECT max(ja2.started_at)
                FROM job_attempts ja2
-               WHERE ja2.job_id = j.id
+               WHERE ja2.job_id = COALESCE(ij.id, j.id)
              )
             LEFT JOIN knowledge_objects ko
-              ON ko.id = json_extract(j.payload_json, '$.knowledge_object_id')
+              ON ko.id = COALESCE(
+                json_extract(ij.payload_json, '$.knowledge_object_id'),
+                json_extract(j.payload_json, '$.knowledge_object_id')
+              )
 
             UNION ALL
 
@@ -563,7 +575,9 @@ def list_import_tasks(
         source_status = str(row["source_status"]) if row["source_status"] else None
         job_status = str(row["job_status"]) if row["job_status"] else source_status
         if str(row["task_type"]) == "pdf":
-            public_status = _pdf_status(source_status, job_status, failure)
+            public_status = _pdf_status(
+                source_status, job_status, bool(row["searchable"]), failure
+            )
         else:
             public_status = project_import_status(
                 job_status=job_status,
@@ -603,6 +617,7 @@ def list_import_tasks(
 def _pdf_status(
     source_status: str | None,
     job_status: str | None,
+    searchable: bool,
     failure: KnowledgeFailure | None,
 ) -> str:
     if job_status == "processing":
@@ -618,7 +633,7 @@ def _pdf_status(
     if source_status == "partial":
         return "partial"
     if source_status == "parsed":
-        return "processing"
+        return "succeeded" if searchable and job_status == "completed" else "processing"
     if source_status == "unsupported":
         return "unsupported"
     if failure is not None:

@@ -253,6 +253,60 @@ def test_pdf_parser_failure_is_projected_to_retryable_task_status(tmp_path: Path
     assert body["retryable"] is True
 
 
+def test_pdf_index_failure_is_projected_after_parse(tmp_path: Path) -> None:
+    client, session_factory = _client(tmp_path)
+    csrf = _login(client)
+    response = client.post(
+        "/v1/knowledge/pdf-imports",
+        params={"title": "索引失败 PDF", "primary_domain_id": "technology.ai"},
+        content=_pdf_bytes(),
+        headers={**_headers(csrf, "pdf-index-failure"), "Content-Type": "application/pdf"},
+    )
+    assert response.status_code == 202
+    task = response.json()
+    with session_scope(session_factory) as session:
+        session.execute(
+            text("UPDATE pdf_tasks SET state='parsed' WHERE id=:id"),
+            {"id": task["task_id"]},
+        )
+        job_id = new_id()
+        session.execute(
+            text(
+                """
+                INSERT INTO jobs (id, job_type, idempotency_key, payload_json, status, attempts)
+                VALUES (:id, 'knowledge.index', :key, :payload, 'failed', 1)
+                """
+            ),
+            {
+                "id": job_id,
+                "key": f"pdf-index-failure:{task['task_id']}",
+                "payload": json.dumps(
+                    {
+                        "task_id": task["task_id"],
+                        "failure_code": "embedding_unavailable",
+                        "failure_stage": "index",
+                        "retryable": True,
+                    }
+                ),
+            },
+        )
+        session.execute(
+            text(
+                "INSERT INTO job_attempts (id, job_id, status, error_class, error_message) "
+                "VALUES (:id, :job_id, 'failed', 'EmbeddingError', 'embedding unavailable')"
+            ),
+            {"id": new_id(), "job_id": job_id},
+        )
+    body = client.get(task["status_url"]).json()
+    assert body["state"] == "failed"
+    assert body["error_code"] == "embedding_unavailable"
+    assert body["retryable"] is True
+    history = client.get("/v1/knowledge/import-tasks?task_type=pdf").json()["items"]
+    item = next(entry for entry in history if entry["task_id"] == task["task_id"])
+    assert item["status"] == "failed"
+    assert item["failure"]["code"] == "embedding_unavailable"
+
+
 def test_pdf_terminal_parser_failure_preserves_code_after_attempts_are_exhausted(
     tmp_path: Path,
 ) -> None:
