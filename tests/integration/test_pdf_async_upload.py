@@ -221,12 +221,16 @@ def test_pdf_parser_failure_is_projected_to_retryable_task_status(tmp_path: Path
     with session_scope(session_factory) as session:
         events = OutboxRepository().claim_pending(session, limit=10)
         assert OutboxRepository().enqueue_jobs_for_events(session, events) == 1
-        pending = session.execute(
-            text(
-                "SELECT job_type, status, available_at, attempts, max_attempts "
-                "FROM jobs ORDER BY created_at DESC LIMIT 1"
+        pending = (
+            session.execute(
+                text(
+                    "SELECT job_type, status, available_at, attempts, max_attempts "
+                    "FROM jobs ORDER BY created_at DESC LIMIT 1"
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         assert pending["job_type"] == "knowledge.parse_pdf"
         session.execute(text("UPDATE jobs SET available_at=CURRENT_TIMESTAMP"))
 

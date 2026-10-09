@@ -697,7 +697,9 @@ class KnowledgeIndexJobExecutor:
             )
         else:
             embedder = (self._embedder_factory or (lambda: BgeM3TextEmbedder()))()
-        embedding_model_id = route["model_id"] if route is not None else self._settings.embedding_model_id
+        embedding_model_id = (
+            route["model_id"] if route is not None else self._settings.embedding_model_id
+        )
         embedding_model_revision = (
             route["revision"] if route is not None else self._settings.embedding_model_revision
         )

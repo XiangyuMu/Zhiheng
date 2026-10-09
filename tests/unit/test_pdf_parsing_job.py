@@ -195,9 +195,7 @@ def test_explicit_deepdoc_failure_falls_back_to_mineru_when_mineru_is_primary(
 def test_parse_job_terminal_failure_preserves_parser_failure_code() -> None:
     parser = Mock()
     parser.submit.return_value = ParserReceipt("attempt-1", "accepted")
-    parser.status.return_value = ParserStatus(
-        "attempt-1", "failed", None, "mineru_content_invalid"
-    )
+    parser.status.return_value = ParserStatus("attempt-1", "failed", None, "mineru_content_invalid")
     executor = PdfParseJobExecutor(parser, object_store=Mock(), poll_interval_seconds=0)
 
     with pytest.raises(ParserTerminalFailure) as raised:

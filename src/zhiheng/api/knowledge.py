@@ -449,8 +449,10 @@ def get_pdf_task(
             "block_count": int(row["block_count"]),
         }
     )
-    failure_code = row["failure_code"] or row["job_failure_code"] or (
-        "unsupported_pdf_parser" if str(row["state"]) == "unsupported" else None
+    failure_code = (
+        row["failure_code"]
+        or row["job_failure_code"]
+        or ("unsupported_pdf_parser" if str(row["state"]) == "unsupported" else None)
     )
     failure = failure_from_row(
         error_class=str(failure_code) if failure_code else None,
