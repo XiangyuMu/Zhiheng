@@ -34,7 +34,8 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
-from pypdf import PdfWriter
+from pypdf import PdfReader, PdfWriter
+from pypdf.errors import PdfReadError
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from zhiheng.knowledge.mineru_adapter import content_list_to_manifest
@@ -513,6 +514,19 @@ class MinerUGateway:
         image_uri_prefix = images_dir.as_uri().rstrip("/") + "/"
         image_artifacts = self._persist_images(item.get("images"), images_dir)
         _require_image_artifacts(content, image_artifacts)
+        # Only geometry is read locally; all content remains MinerU output.
+        source_body, _ = self._read_source(task.source_uri, task.source_sha256)
+        try:
+            reader = PdfReader(BytesIO(source_body), strict=True)
+            dimensions = {}
+            for index, page in enumerate(reader.pages):
+                if page.rotation or float(page.get("/UserUnit", 1)) != 1:
+                    raise GatewayError(
+                        "source_geometry_unsupported", "rotated/scaled pages require normalization"
+                    )
+                dimensions[index] = (float(page.cropbox.width), float(page.cropbox.height))
+        except (PdfReadError, ValueError) as exc:
+            raise GatewayError("source_geometry_invalid", "cannot read PDF page geometry") from exc
         manifest = content_list_to_manifest(
             content,
             task_id=task.task_id,
@@ -523,8 +537,8 @@ class MinerUGateway:
             version=str(result.get("version") or "mineru"),
             image_uri_prefix=image_uri_prefix,
             image_artifacts=image_artifacts,
-            page_count=_page_count(result, item, content),
-            page_dimensions=_page_dimensions(result, item),
+            page_count=len(dimensions),
+            page_dimensions=dimensions,
         )
         validate_manifest(manifest)
         body = json.dumps(
@@ -762,24 +776,6 @@ def _mineru_form(options: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _page_count(
-    result: dict[str, Any], item: dict[str, Any], content: list[dict[str, Any]]
-) -> int | None:
-    for candidate in (
-        item.get("page_count"),
-        result.get("page_count"),
-        result.get("pages"),
-        result.get("page_num"),
-    ):
-        if isinstance(candidate, int) and candidate > 0:
-            return candidate
-        if isinstance(candidate, list) and candidate:
-            return len(candidate)
-    if content:
-        return max(int(entry.get("page_idx", 0)) + 1 for entry in content)
-    return None
-
-
 def _require_image_artifacts(
     content: list[dict[str, Any]], image_artifacts: dict[str, dict[str, Any]]
 ) -> None:
@@ -797,33 +793,6 @@ def _require_image_artifacts(
                 "mineru_resource_invalid",
                 "MinerU image content has no readable image artifact",
             )
-
-
-def _page_dimensions(
-    result: dict[str, Any], item: dict[str, Any]
-) -> dict[int, tuple[float, float]]:
-    values: Any = item.get("pages") or result.get("pages") or result.get("page_info")
-    if not isinstance(values, list):
-        return {}
-    dimensions: dict[int, tuple[float, float]] = {}
-    for index, value in enumerate(values):
-        if not isinstance(value, dict):
-            continue
-        page_index = value.get("page_idx", value.get("page_no", index))
-        if not isinstance(page_index, int):
-            continue
-        if "page_no" in value and "page_idx" not in value:
-            page_index -= 1
-        width = value.get("width", value.get("page_width"))
-        height = value.get("height", value.get("page_height"))
-        if (
-            isinstance(width, (int, float))
-            and isinstance(height, (int, float))
-            and width > 0
-            and height > 0
-        ):
-            dimensions[page_index] = (float(width), float(height))
-    return dimensions
 
 
 def _media_type_for_suffix(suffix: str) -> str:

@@ -5,10 +5,12 @@ import hashlib
 import importlib.util
 import json
 import sys
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import httpx
+from pypdf import PdfWriter
 
 from zhiheng.knowledge.pdf_worker import (
     ParserParseRequest,
@@ -29,6 +31,15 @@ def _gateway_module() -> Any:
 
 def _run(coro: Any) -> Any:
     return asyncio.run(coro)
+
+
+def _source_pdf() -> bytes:
+    writer = PdfWriter()
+    writer.add_blank_page(width=595, height=842)
+    writer.add_blank_page(width=612, height=792)
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
 
 
 def _payload(source: Path, *, evidence_id: str | None = "evidence-1") -> dict[str, Any]:
@@ -55,7 +66,7 @@ def test_gateway_submits_controlled_source_and_publishes_manifest(tmp_path: Path
     gateway_module = _gateway_module()
     source = tmp_path / "objects" / "evidence" / "source.pdf"
     source.parent.mkdir(parents=True)
-    source.write_bytes(b"%PDF-1.7 synthetic")
+    source.write_bytes(_source_pdf())
     seen: dict[str, Any] = {}
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -156,9 +167,12 @@ def test_gateway_submits_controlled_source_and_publishes_manifest(tmp_path: Path
     assert manifest["source"]["evidence_object_id"] == "evidence-1"
     assert manifest["parser"]["backend"] == "mineru"
     assert manifest["pages"][0]["width"] == 595.0
+    assert len(manifest["pages"]) == 2
+    assert manifest["pages"][1]["status"] == "empty"
+    assert manifest["pages"][1]["height"] == 792.0
     assert manifest["images"][0]["artifact"]["bytes"] == 8
     assert b'name="files"' in multipart
-    assert b"%PDF-1.7 synthetic" in multipart
+    assert b"%PDF-" in multipart
     assert seen["auth"] == "Bearer token"
 
 
@@ -205,7 +219,7 @@ def test_gateway_manifest_failure_is_persisted_as_terminal_status(tmp_path: Path
     gateway_module = _gateway_module()
     source = tmp_path / "objects" / "source.pdf"
     source.parent.mkdir(parents=True)
-    source.write_bytes(b"pdf")
+    source.write_bytes(_source_pdf())
 
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/tasks":
@@ -247,7 +261,7 @@ def test_gateway_rejects_hash_mismatch_without_upstream_call(tmp_path: Path) -> 
     gateway_module = _gateway_module()
     source = tmp_path / "objects" / "source.pdf"
     source.parent.mkdir(parents=True)
-    source.write_bytes(b"pdf")
+    source.write_bytes(_source_pdf())
     called = False
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -280,7 +294,7 @@ def test_gateway_requires_evidence_id_before_manifest_publication(tmp_path: Path
     gateway_module = _gateway_module()
     source = tmp_path / "objects" / "source.pdf"
     source.parent.mkdir(parents=True)
-    source.write_bytes(b"pdf")
+    source.write_bytes(_source_pdf())
 
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/tasks":
@@ -314,7 +328,7 @@ def test_gateway_requires_evidence_id_before_manifest_publication(tmp_path: Path
 def test_gateway_rejects_non_mineru_backend(tmp_path: Path) -> None:
     gateway_module = _gateway_module()
     source = tmp_path / "source.pdf"
-    source.write_bytes(b"pdf")
+    source.write_bytes(_source_pdf())
     config = gateway_module.GatewayConfig(tmp_path, "http://mineru", "token")
     app = gateway_module.create_app(
         config,
@@ -344,7 +358,7 @@ def test_gateway_rejects_manifest_with_missing_image_resource(tmp_path: Path) ->
     gateway_module = _gateway_module()
     source = tmp_path / "objects" / "source.pdf"
     source.parent.mkdir(parents=True)
-    source.write_bytes(b"pdf")
+    source.write_bytes(_source_pdf())
 
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/tasks":
@@ -417,7 +431,7 @@ def test_gateway_recovers_task_mapping_after_restart(tmp_path: Path) -> None:
     gateway_module = _gateway_module()
     source = tmp_path / "objects" / "source.pdf"
     source.parent.mkdir(parents=True)
-    source.write_bytes(b"pdf")
+    source.write_bytes(_source_pdf())
     calls: list[str] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -520,7 +534,7 @@ def test_gateway_warmup_requires_successful_real_parser_result(tmp_path: Path) -
 def test_gateway_uncertain_submission_is_not_repeated_after_restart(tmp_path: Path) -> None:
     module = _gateway_module()
     source = tmp_path / "source.pdf"
-    source.write_bytes(b"pdf")
+    source.write_bytes(_source_pdf())
     calls = 0
 
     async def handler(request: httpx.Request) -> httpx.Response:
