@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import json_text, new_id, sha256_text
 from zhiheng.knowledge.pdf_manifest import validate_manifest
+from zhiheng.knowledge.pdf_publication import _manifest_is_complete
 
 
 @dataclass(frozen=True)
@@ -206,11 +207,7 @@ class PdfRepository:
                 {"task_id": task_id},
             ).scalar_one()
         )
-        attempt_status = (
-            "partial"
-            if any(page["status"] == "failed" for page in manifest["pages"])
-            else "succeeded"
-        )
+        attempt_status = "succeeded" if _manifest_is_complete(manifest) else "partial"
         session.execute(
             text(
                 """

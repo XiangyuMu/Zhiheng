@@ -8,20 +8,25 @@ const { chromium } = require("playwright");
 const { execFileSync } = require("node:child_process");
 
 const [base, output, requestedId] = process.argv.slice(2);
-assert(base && output, "Expected URL and output directory");
-assert(["localhost", "127.0.0.1"].includes(new URL(base).hostname), "Local service only");
-assert(process.env.ZHIHENG_TEST_USERNAME && process.env.ZHIHENG_TEST_PASSWORD, "Missing credentials");
-assert(!fs.existsSync(output), `output directory already exists: ${output}`);
-fs.mkdirSync(output, { mode: 0o700 });
+const outputExists = Boolean(output && fs.existsSync(output));
+if (output && !outputExists) fs.mkdirSync(output, { mode: 0o700 });
 
 const report = { scope: "pdf-reader-navigation", status: "running" };
-const reportPath = path.join(output, "report.json");
-const save = () => fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), { mode: 0o600 });
+const reportPath = output
+  ? path.join(output, outputExists ? `failure-${Date.now()}.json` : "report.json")
+  : null;
+const save = () => {
+  if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(report, null, 2), { mode: 0o600 });
+};
 
 (async () => {
   let browser;
   let page;
   try {
+    assert(base && output, "Expected URL and output directory");
+    assert(["localhost", "127.0.0.1"].includes(new URL(base).hostname), "Local service only");
+    assert(process.env.ZHIHENG_TEST_USERNAME && process.env.ZHIHENG_TEST_PASSWORD, "Missing credentials");
+    assert(!outputExists, `output directory already exists: ${output}`);
     report.sha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     report.dirty = Boolean(execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim());
     assert.equal(report.dirty, false, "final browser evidence requires a clean worktree");

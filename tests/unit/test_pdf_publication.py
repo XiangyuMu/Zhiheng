@@ -15,9 +15,15 @@ from zhiheng.knowledge.pdf_publication import (
 
 def _manifest(*, formal: bool = True, failed_page: bool = False) -> dict[str, Any]:
     blocks = (
-        [{"key": "body-1", "status": "formal"}]
+        [
+            {
+                "key": "body-1",
+                "status": "formal",
+                "text": "fixture text",
+            }
+        ]
         if formal
-        else [{"key": "body-1", "status": "candidate"}]
+        else [{"key": "body-1", "status": "candidate", "text": "fixture text"}]
     )
     return {
         "schema_version": "pdf-parser.manifest.v1",
@@ -26,6 +32,8 @@ def _manifest(*, formal: bool = True, failed_page: bool = False) -> dict[str, An
         "parser": {"backend": "deepdoc", "attempt_id": "attempt-1"},
         "pages": [{"page_no": 1, "status": "failed" if failed_page else "parsed"}],
         "blocks": blocks,
+        "tables": [],
+        "images": [],
         "manifest_uri": "file:///manifest.json",
         "manifest_sha256": "a" * 64,
     }
@@ -84,6 +92,22 @@ def test_partial_pages_are_preserved_but_not_indexed() -> None:
 
     assert result.indexed is False
     assert result.formal_block_count == 1
+    session.execute.assert_not_called()
+
+
+def test_nonformal_block_is_preserved_but_not_published() -> None:
+    session = _Session()
+    repository = Mock()
+    repository.persist_manifest.return_value = "attempt-1"
+    manifest = _manifest()
+    manifest["blocks"].append(
+        {"key": "body-2", "status": "candidate", "text": "uncertain text"}
+    )
+
+    result = publish_parse_result(session, repository, manifest)
+
+    assert result.formal_block_count == 1
+    assert result.indexed is False
     session.execute.assert_not_called()
 
 

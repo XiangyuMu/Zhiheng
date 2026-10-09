@@ -619,7 +619,7 @@ def list_user_knowledge(
     with session_scope(session_factory) as session:
         rows = session.execute(
             text(
-                """
+                f"""
                 SELECT
                   cfk.id AS knowledge_object_id,
                   cfk.current_version_id AS knowledge_version_id,
@@ -632,8 +632,10 @@ def list_user_knowledge(
                   cfk.summary,
                   cfk.is_favorite,
                   cfk.is_pinned,
-                  cfk.pinned_at
+                  cfk.pinned_at,
+                  CASE WHEN {formal_searchable_sql("ko")} THEN 1 ELSE 0 END AS searchable
                 FROM current_formal_knowledge cfk
+                JOIN knowledge_objects ko ON ko.id = cfk.id
                 JOIN serving_chunks s
                   ON s.source_id = cfk.id
                  AND s.source_version_id = cfk.current_version_id
@@ -660,7 +662,7 @@ def list_user_knowledge(
                     media_type=str(row["media_type"]),
                     object_kind=str(row["object_kind"]),
                     lifecycle_status=str(row["lifecycle_status"]),
-                    searchable=True,
+                    searchable=bool(row["searchable"]),
                     summary=str(row["summary"]) if row["summary"] is not None else None,
                     is_favorite=bool(row["is_favorite"]),
                     is_pinned=bool(row["is_pinned"]),

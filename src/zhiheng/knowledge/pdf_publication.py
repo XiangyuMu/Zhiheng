@@ -111,16 +111,12 @@ def _materialize_pdf_knowledge(
     The PDF evidence object remains the source of truth; extracted text is a
     content version and every chunk/span retains page and quote lineage.
     """
-    if any(page.get("status") == "failed" for page in manifest.get("pages", ())):
+    if not _manifest_is_complete(manifest):
         return None
     raw_blocks = list(manifest.get("blocks", ()))
     if not raw_blocks or any("reading_order" not in block for block in raw_blocks):
         return None
-    blocks = [
-        block
-        for block in sorted(raw_blocks, key=lambda item: item["reading_order"])
-        if block.get("status") == "formal" and str(block.get("text") or "")
-    ]
+    blocks = sorted(raw_blocks, key=lambda item: item["reading_order"])
     if not blocks:
         return None
     task_id = str(manifest.get("task_id") or "")
@@ -325,8 +321,7 @@ def publish_parse_result(
         formal_block_count = sum(
             1 for block in manifest.get("blocks", ()) if block.get("status") == "formal"
         )
-        partial = any(page.get("status") == "failed" for page in manifest.get("pages", ()))
-        indexed = formal_block_count > 0 and not partial
+        indexed = formal_block_count > 0 and _manifest_is_complete(manifest)
         materialized = (
             _materialize_pdf_knowledge(session, manifest, attempt_id=attempt_id)
             if indexed
@@ -346,6 +341,35 @@ def publish_parse_result(
         formal_block_count=formal_block_count,
         indexed=indexed,
     )
+
+
+def _manifest_is_complete(manifest: dict[str, Any]) -> bool:
+    """Return whether every parser output required for publication is formal.
+
+    Candidate, awaiting-confirmation, failed, empty, or missing text output is
+    retained in the manifest but must keep the task out of the formal index.
+    """
+
+    pages = list(manifest.get("pages", ()))
+    blocks = list(manifest.get("blocks", ()))
+    tables = list(manifest.get("tables", ()))
+    images = list(manifest.get("images", ()))
+    if not pages or not blocks:
+        return False
+    if any(page.get("status") != "parsed" for page in pages):
+        return False
+    if any(
+        block.get("status") != "formal" or not str(block.get("text") or "").strip()
+        for block in blocks
+    ):
+        return False
+    if any(
+        not table.get("cells")
+        or any(cell.get("status") != "formal" for cell in table.get("cells", ()))
+        for table in tables
+    ):
+        return False
+    return not any(image.get("status") not in {"formal", "not_requested"} for image in images)
 
 
 def _enqueue_index_event(

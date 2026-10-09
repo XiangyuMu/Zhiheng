@@ -15,6 +15,7 @@ def mark_formal_knowledge_indexed(session: Session, knowledge_object_id: str) ->
     retrieval still exercises the real serving and authorization predicates.
     """
     from zhiheng.jobs.knowledge_indexing import KnowledgeJobRepository
+    from zhiheng.retrieval.vector_index import VectorIndexRepository
 
     session.execute(
         text(
@@ -42,3 +43,22 @@ def mark_formal_knowledge_indexed(session: Session, knowledge_object_id: str) ->
     indexed = KnowledgeRepository().rebuild_fts_index(session)
     if not repository.complete(session, jobs[0], result={"fts_indexed": indexed}):
         raise ValueError("evaluation index completion lost its claim")
+    vector = VectorIndexRepository()
+    generation_id = vector.create_generation(
+        session,
+        model_id="evaluation-embedding",
+        model_revision="deterministic-v1",
+        dimension=2,
+    )
+    chunk_ids = session.execute(
+        text("SELECT id FROM serving_chunks WHERE source_id=:source_id"),
+        {"source_id": knowledge_object_id},
+    ).scalars().all()
+    if not chunk_ids:
+        raise ValueError("evaluation fixture must contain serving chunks")
+    vector.rebuild_generation(
+        session,
+        generation_id,
+        {str(chunk_id): [1.0, 0.0] for chunk_id in chunk_ids},
+    )
+    vector.activate_generation(session, generation_id)

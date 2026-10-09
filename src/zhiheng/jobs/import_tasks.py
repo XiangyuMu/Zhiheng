@@ -15,6 +15,7 @@ from zhiheng.jobs.knowledge_contract import (
     failure_from_row,
     project_import_status,
 )
+from zhiheng.retrieval.qualification import formal_searchable_sql
 
 
 @dataclass(frozen=True, slots=True)
@@ -435,7 +436,7 @@ def list_import_tasks(
 
     rows = session.execute(
         text(
-            """
+            f"""
             SELECT
               t.id AS task_id,
               'pdf' AS task_type,
@@ -475,11 +476,8 @@ def list_import_tasks(
               ja.error_message AS error_message,
               j.payload_json AS payload_json,
               ko.lifecycle_status AS lifecycle_status,
-              EXISTS (
-                SELECT 1
-                FROM serving_chunks s
-                WHERE s.source_id = json_extract(j.payload_json, '$.knowledge_object_id')
-              ) AS searchable
+              CASE WHEN ko.id IS NOT NULL AND {formal_searchable_sql("ko")} THEN 1 ELSE 0 END
+                AS searchable
             FROM pdf_tasks t
             JOIN evidence_objects eo ON eo.id = t.evidence_object_id
             LEFT JOIN jobs j
@@ -532,14 +530,8 @@ def list_import_tasks(
               ja.error_message AS error_message,
               j.payload_json AS payload_json,
               ko.lifecycle_status AS lifecycle_status,
-              EXISTS (
-                SELECT 1
-                FROM serving_chunks s
-                WHERE s.source_id = COALESCE(
-                  json_extract(j.payload_json, '$.knowledge_object_id'),
-                  json_extract(j.payload_json, '$.aggregate_id')
-                )
-              ) AS searchable
+              CASE WHEN ko.id IS NOT NULL AND {formal_searchable_sql("ko")} THEN 1 ELSE 0 END
+                AS searchable
             FROM jobs j
             LEFT JOIN job_attempts ja
               ON ja.job_id = j.id

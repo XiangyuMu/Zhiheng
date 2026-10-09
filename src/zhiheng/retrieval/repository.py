@@ -15,6 +15,7 @@ from zhiheng.retrieval.contracts import (
     RetrievalFilters,
     RetrievalSource,
 )
+from zhiheng.retrieval.qualification import formal_searchable_sql
 from zhiheng.retrieval.tokenizer import DEFAULT_TOKENIZER, Tokenizer
 from zhiheng.retrieval.vector_index import VectorIndexRepository
 
@@ -162,7 +163,7 @@ class LexicalRetriever:
         segmented_query = self._tokenizer.segment(query)
         rows = session.execute(
             text(
-                """
+                f"""
                 SELECT
                   s.source_type,
                   s.source_id,
@@ -177,30 +178,11 @@ class LexicalRetriever:
                   AND (
                     s.source_type <> 'knowledge_object'
                     OR EXISTS (
-                    SELECT 1
-                    FROM jobs completed_index
-                    WHERE completed_index.job_type = 'knowledge.index'
-                      AND completed_index.status = 'completed'
-                      AND (
-                        json_extract(completed_index.payload_json, '$.knowledge_object_id')
-                          = s.source_id
-                        OR json_extract(completed_index.payload_json, '$.aggregate_id')
-                          = s.source_id
-                      )
-                    )
-                  )
-                  AND (
-                    s.source_type <> 'knowledge_object'
-                    OR EXISTS (
                       SELECT 1
                       FROM knowledge_objects ko
-                      JOIN knowledge_versions kv ON kv.id = ko.current_version_id
-                      JOIN content_versions cv ON cv.id = kv.content_version_id
-                      JOIN evidence_objects eo ON eo.id = cv.evidence_object_id
                       WHERE ko.id = s.source_id
                         AND ko.current_version_id = s.source_version_id
-                        AND cv.status = 'active'
-                        AND eo.status = 'active'
+                        AND {formal_searchable_sql("ko")}
                     )
                   )
                 ORDER BY score

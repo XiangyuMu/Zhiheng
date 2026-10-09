@@ -472,6 +472,14 @@ class KnowledgeJobRepository:
                     "retryable": True,
                 }
             )
+        elif job.job_type == KNOWLEDGE_INDEX_JOB_TYPE:
+            payload.update(
+                {
+                    "failure_code": _failure_code_for_job_exception(exc),
+                    "failure_stage": "index",
+                    "retryable": not terminal,
+                }
+            )
         session.execute(
             text(
                 """
@@ -509,6 +517,16 @@ class KnowledgeJobRepository:
                     text(
                         "UPDATE pdf_tasks SET state='failed', updated_at=CURRENT_TIMESTAMP "
                         "WHERE id=:task_id"
+                    ),
+                    {"task_id": str(task_id)},
+                )
+        elif job.job_type == KNOWLEDGE_INDEX_JOB_TYPE and terminal:
+            task_id = payload.get("task_id")
+            if task_id:
+                session.execute(
+                    text(
+                        "UPDATE pdf_tasks SET state='failed', updated_at=CURRENT_TIMESTAMP "
+                        "WHERE id=:task_id AND state IN ('parsed', 'processing')"
                     ),
                     {"task_id": str(task_id)},
                 )

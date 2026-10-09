@@ -62,10 +62,7 @@ def pdf_source_qualified_sql(
             FROM evidence_blocks pdf_block
             WHERE pdf_block.attempt_id = succeeded_pdf_attempt.id
               AND pdf_block.status = 'formal'
-              AND (
-                pdf_block.content_version_id IS NULL
-                OR pdf_block.content_version_id = {content_alias}.id
-              )
+              AND pdf_block.content_version_id = {content_alias}.id
           )
       )
     )
@@ -112,6 +109,13 @@ def formal_searchable_sql(knowledge_alias: str = "ko") -> str:
       SELECT 1
       FROM serving_chunks qualified_chunk
       WHERE qualified_chunk.source_id = {object_id}
+        AND qualified_chunk.source_version_id = {current_version}
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM serving_chunks stale_chunk
+      WHERE stale_chunk.source_id = {object_id}
+        AND stale_chunk.source_version_id <> {current_version}
     )
     AND EXISTS (
       SELECT 1

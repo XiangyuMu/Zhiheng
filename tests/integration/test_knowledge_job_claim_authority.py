@@ -186,6 +186,56 @@ def test_failed_knowledge_job_retry_clears_stale_failure_projection_fields(
     }
 
 
+def test_terminal_index_failure_projects_to_owning_pdf_task(tmp_path: Path) -> None:
+    _settings, factory = _migrated(tmp_path)
+    repository = KnowledgeJobRepository()
+    task_id = new_id()
+    evidence_id = new_id()
+    with factory.begin() as session:
+        session.execute(
+            text(
+                """
+                INSERT INTO evidence_objects
+                  (id, object_uri, sha256, media_type, byte_size, source_kind,
+                   source_metadata_json, status, erasable)
+                VALUES (
+                  :id, :uri, :sha, 'application/pdf', 1, 'imported_document', '{}', 'active', 1
+                )
+                """
+            ),
+            {"id": evidence_id, "uri": f"artifact://{evidence_id}", "sha": "a" * 64},
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO pdf_tasks
+                  (id, evidence_object_id, backend, options_hash, idempotency_key, state)
+                VALUES (:id, :evidence_id, 'deepdoc', :options, :key, 'parsed')
+                """
+            ),
+            {
+                "id": task_id,
+                "evidence_id": evidence_id,
+                "options": "b" * 64,
+                "key": f"test-index-failure:{task_id}",
+            },
+        )
+        job_id = _enqueue_knowledge_job(
+            session, "knowledge-index-terminal", knowledge_object_id="ko"
+        )
+        session.execute(
+            text("UPDATE jobs SET max_attempts=1, payload_json=:payload WHERE id=:id"),
+            {"id": job_id, "payload": json_text({"task_id": task_id, "knowledge_object_id": "ko"})},
+        )
+        claimed = repository.claim_available(session, worker_id="worker")[0]
+        assert repository.fail(session, claimed, exc=RuntimeError("embedding unavailable")) is True
+        task_state = session.execute(
+            text("SELECT state FROM pdf_tasks WHERE id=:id"), {"id": task_id}
+        ).scalar_one()
+
+    assert task_state == "failed"
+
+
 def test_failed_knowledge_job_retry_rejects_processing_and_stale_etag(tmp_path: Path) -> None:
     _settings, factory = _migrated(tmp_path)
     repository = KnowledgeJobRepository()
