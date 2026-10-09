@@ -136,6 +136,19 @@ def test_parse_job_falls_back_to_mineru_after_deepdoc_whole_task_failure() -> No
     assert submitted.attempt_id == "attempt-1:mineru"
 
 
+def test_explicit_deepdoc_backend_remains_selectable_with_mineru_primary() -> None:
+    mineru = Mock()
+    deepdoc = Mock()
+    executor = PdfParseJobExecutor(
+        mineru,
+        parser_backend="mineru",
+        fallback_parser_client=deepdoc,
+        object_store=Mock(),
+    )
+    request = _request_from_job_for_test()
+    assert executor._client_for_request(request) is deepdoc
+
+
 def test_parse_job_attempts_mineru_at_most_once(monkeypatch: pytest.MonkeyPatch) -> None:
     deepdoc = Mock()
     deepdoc.submit.return_value = ParserReceipt("attempt-1", "accepted")

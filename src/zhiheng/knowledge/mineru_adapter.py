@@ -117,14 +117,7 @@ def content_list_to_manifest(
                 PurePosixPath(path).name
             )
             if artifact is None:
-                artifact = {
-                    "uri": image_uri_prefix + PurePosixPath(path).name,
-                    "sha256": PurePosixPath(path).stem
-                    if len(PurePosixPath(path).stem) == 64
-                    else _hash(path),
-                    "media_type": "image/jpeg",
-                    "bytes": 0,
-                }
+                raise ValueError("MinerU image content has no readable image artifact")
             images.append(
                 {
                     "key": key,

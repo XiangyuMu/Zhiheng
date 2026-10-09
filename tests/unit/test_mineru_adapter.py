@@ -33,6 +33,14 @@ def test_mineru_content_list_is_schema_valid() -> None:
         source_uri="artifact://doc.pdf",
         source_sha256=hashlib.sha256(b"doc").hexdigest(),
         attempt_id="attempt",
+        image_artifacts={
+            "images/" + "a" * 64 + ".jpg": {
+                "uri": "artifact://images/" + "a" * 64 + ".jpg",
+                "sha256": "a" * 64,
+                "media_type": "image/jpeg",
+                "bytes": 4,
+            }
+        },
     )
     validate_manifest(manifest)
     assert len(manifest["tables"]) == 1

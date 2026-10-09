@@ -162,6 +162,91 @@ def test_gateway_submits_controlled_source_and_publishes_manifest(tmp_path: Path
     assert seen["auth"] == "Bearer token"
 
 
+def test_gateway_ready_requires_upstream_model_signal(tmp_path: Path) -> None:
+    gateway_module = _gateway_module()
+    responses = iter(
+        [
+            httpx.Response(200, json={"status": "healthy"}),
+            httpx.Response(200, json={"status": "healthy", "version": "3.4.4"}),
+        ]
+    )
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return next(responses)
+
+    async def scenario() -> tuple[httpx.Response, httpx.Response]:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://mineru")
+        config = gateway_module.GatewayConfig(tmp_path / "objects", "http://mineru", "token")
+        app = gateway_module.create_app(config, http_client=client)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+        ) as api:
+            first = await api.get("/ready")
+            second = await api.get("/ready")
+        await client.aclose()
+        return first, second
+
+    first, second = _run(scenario())
+    assert first.status_code == 503
+    assert first.json() == {
+        "status": "not_ready",
+        "gateway": "healthy",
+        "upstream": "healthy",
+        "model": "unknown",
+        "upstream_version": None,
+    }
+    assert second.status_code == 200
+    assert second.json()["status"] == "ready"
+    assert second.json()["model"] == "ready"
+    assert second.json()["upstream_version"] == "3.4.4"
+
+
+def test_gateway_manifest_failure_is_persisted_as_terminal_status(tmp_path: Path) -> None:
+    gateway_module = _gateway_module()
+    source = tmp_path / "objects" / "source.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"pdf")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/tasks":
+            return httpx.Response(202, json={"task_id": "upstream-1", "status": "pending"})
+        if request.url.path == "/tasks/upstream-1":
+            return httpx.Response(200, json={"task_id": "upstream-1", "status": "completed"})
+        if request.url.path == "/tasks/upstream-1/result":
+            return httpx.Response(200, json={"results": {"source": {"content_list": "not-json"}}})
+        raise AssertionError(request.url.path)
+
+    async def scenario() -> tuple[httpx.Response, httpx.Response, httpx.Response]:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://mineru")
+        config = gateway_module.GatewayConfig(tmp_path / "objects", "http://mineru", "token")
+        app = gateway_module.create_app(config, http_client=client)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+        ) as api:
+            payload = _payload(source)
+            submitted = await api.post(
+                "/v1/parse", json=payload, headers={"Authorization": "Bearer token"}
+            )
+            failed = await api.get(
+                "/v1/parse/attempt-1", headers={"Authorization": "Bearer token"}
+            )
+            again = await api.get(
+                "/v1/parse/attempt-1", headers={"Authorization": "Bearer token"}
+            )
+        await client.aclose()
+        return submitted, failed, again
+
+    submitted, failed, again = _run(scenario())
+    assert submitted.status_code == 200
+    assert failed.status_code == 200
+    assert failed.json() == {
+        "attempt_id": "attempt-1",
+        "state": "failed",
+        "failure_code": "mineru_content_invalid",
+    }
+    assert again.json() == failed.json()
+
+
 def test_gateway_rejects_hash_mismatch_without_upstream_call(tmp_path: Path) -> None:
     gateway_module = _gateway_module()
     source = tmp_path / "objects" / "source.pdf"
@@ -307,8 +392,12 @@ def test_gateway_rejects_manifest_with_missing_image_resource(tmp_path: Path) ->
         return response
 
     response = _run(scenario())
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "mineru_resource_invalid"
+    assert response.status_code == 200
+    assert response.json() == {
+        "attempt_id": "attempt-1",
+        "state": "failed",
+        "failure_code": "mineru_resource_invalid",
+    }
 
 
 def test_gateway_authentication_is_required(tmp_path: Path) -> None:

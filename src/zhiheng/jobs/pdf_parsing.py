@@ -121,7 +121,10 @@ class PdfParseJobExecutor:
     def _client_for_request(self, request: ParserParseRequest) -> ParserWorkerClient:
         if request.backend == self._parser_backend:
             return self._parser_client
-        if request.backend == "mineru" and self._fallback_parser_client is not None:
+        if request.backend in {"deepdoc", "mineru"} and self._fallback_parser_client is not None:
+            # The secondary client remains independently selectable. Fallback
+            # policy is handled by _run_fallback; this branch is for explicit
+            # task backend selection.
             return self._fallback_parser_client
         raise ParserProtocolError(f"parser backend is not configured: {request.backend}")
 

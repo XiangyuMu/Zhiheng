@@ -388,6 +388,22 @@ def get_pdf_task(
                   eo.sha256 AS source_sha256,
                   a.id AS attempt_id,
                   a.failure_code,
+                  (
+                    SELECT json_extract(j.payload_json, '$.failure_code')
+                    FROM jobs j
+                    WHERE j.job_type = 'knowledge.parse_pdf'
+                      AND json_extract(j.payload_json, '$.task_id') = t.id
+                    ORDER BY j.updated_at DESC, j.id DESC
+                    LIMIT 1
+                  ) AS job_failure_code,
+                  (
+                    SELECT j.status
+                    FROM jobs j
+                    WHERE j.job_type = 'knowledge.parse_pdf'
+                      AND json_extract(j.payload_json, '$.task_id') = t.id
+                    ORDER BY j.updated_at DESC, j.id DESC
+                    LIMIT 1
+                  ) AS parse_job_status,
                   count(DISTINCT p.id) AS page_count,
                   count(DISTINCT CASE WHEN p.status = 'parsed' THEN p.id END)
                     AS parsed_page_count,
@@ -425,7 +441,7 @@ def get_pdf_task(
             "block_count": int(row["block_count"]),
         }
     )
-    failure_code = row["failure_code"] or (
+    failure_code = row["failure_code"] or row["job_failure_code"] or (
         "unsupported_pdf_parser" if str(row["state"]) == "unsupported" else None
     )
     failure = failure_from_row(
@@ -438,7 +454,11 @@ def get_pdf_task(
         payload=(
             {"failure_code": failure_code, "failure_stage": "parse", "retryable": False}
             if failure_code and str(row["state"]) == "unsupported"
-            else {"failure_code": failure_code}
+            else {
+                "failure_code": failure_code,
+                "failure_stage": "parse",
+                "retryable": str(row["parse_job_status"] or "") != "dead",
+            }
             if failure_code
             else None
         ),

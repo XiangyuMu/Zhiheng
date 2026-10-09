@@ -32,6 +32,7 @@ from uuid import uuid4
 import httpx
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
 
 from zhiheng.knowledge.mineru_adapter import content_list_to_manifest
 from zhiheng.knowledge.pdf_manifest import validate_manifest
@@ -288,8 +289,28 @@ class MinerUGateway:
                 },
             )
         except httpx.HTTPError as exc:
+            self._persist_submission_failure(
+                task_id=task_id,
+                attempt_id=attempt_id,
+                evidence_id=evidence_id,
+                source_uri=source_uri,
+                source_sha256=source_sha256,
+                output_prefix=output_prefix,
+                source_name=source_name,
+                failure_code="mineru_submission_unknown",
+            )
             raise GatewayError("mineru_unavailable", "MinerU submission failed") from exc
         if response.status_code >= 500:
+            self._persist_submission_failure(
+                task_id=task_id,
+                attempt_id=attempt_id,
+                evidence_id=evidence_id,
+                source_uri=source_uri,
+                source_sha256=source_sha256,
+                output_prefix=output_prefix,
+                source_name=source_name,
+                failure_code="mineru_submission_unknown",
+            )
             raise GatewayError("mineru_unavailable", "MinerU submission returned a server error")
         if response.status_code >= 400:
             raise GatewayError(
@@ -317,6 +338,33 @@ class MinerUGateway:
         self._store.put(task)
         return {"attempt_id": attempt_id, "state": task.state}
 
+    def _persist_submission_failure(
+        self,
+        *,
+        task_id: str,
+        attempt_id: str,
+        evidence_id: str,
+        source_uri: str,
+        source_sha256: str,
+        output_prefix: str,
+        source_name: str,
+        failure_code: str,
+    ) -> None:
+        task = _Task(
+            attempt_id=attempt_id,
+            task_id=task_id,
+            evidence_object_id=evidence_id,
+            source_uri=source_uri,
+            source_sha256=source_sha256,
+            output_prefix=output_prefix,
+            upstream_task_id="",
+            source_name=source_name,
+            state="failed",
+            failure_code=failure_code,
+        )
+        self._tasks[attempt_id] = task
+        self._store.put(task)
+
     async def status(self, attempt_id: str) -> dict[str, Any]:
         task = self._tasks.get(attempt_id)
         if task is None:
@@ -327,6 +375,12 @@ class MinerUGateway:
             raise GatewayError("attempt_not_found", "parser attempt does not exist")
         if task.manifest is not None:
             return {"attempt_id": attempt_id, "state": "succeeded", "manifest": task.manifest}
+        if task.state == "failed":
+            return {
+                "attempt_id": attempt_id,
+                "state": "failed",
+                "failure_code": task.failure_code or "mineru_failed",
+            }
         try:
             response = await self._client.get(
                 f"/tasks/{task.upstream_task_id}",
@@ -375,14 +429,24 @@ class MinerUGateway:
         result = _json_object(result_response, "MinerU result")
         try:
             task.manifest = self._persist_manifest(task, result)
-        except GatewayError:
-            raise
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        except GatewayError as exc:
+            task.state = "failed"
+            task.failure_code = exc.code
+            self._store.put(task)
+            return {
+                "attempt_id": attempt_id,
+                "state": "failed",
+                "failure_code": task.failure_code,
+            }
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             task.state = "failed"
             task.failure_code = "mineru_manifest_invalid"
-            raise GatewayError(
-                task.failure_code, "MinerU result cannot form a valid manifest"
-            ) from exc
+            self._store.put(task)
+            return {
+                "attempt_id": attempt_id,
+                "state": "failed",
+                "failure_code": task.failure_code,
+            }
         task.state = "succeeded"
         self._store.put(task)
         return {"attempt_id": attempt_id, "state": "succeeded", "manifest": task.manifest}
@@ -555,27 +619,43 @@ def create_app(
         return {"status": "healthy"}
 
     @app.get("/ready")
-    async def ready() -> dict[str, Any]:
+    async def ready() -> JSONResponse:
         """Report gateway, upstream reachability, and model readiness separately."""
         try:
             response = await gateway._client.get(
                 "/health", headers={"Authorization": f"Bearer {gateway.config.token}"}
             )
         except httpx.HTTPError:
-            return {"status": "not_ready", "gateway": "healthy", "upstream": "unavailable"}
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "gateway": "healthy", "upstream": "unavailable"},
+            )
         if response.status_code >= 400:
-            return {
-                "status": "not_ready",
-                "gateway": "healthy",
-                "upstream": "unhealthy",
-                "upstream_http": response.status_code,
-            }
-        return {
-            "status": "ready",
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "not_ready",
+                    "gateway": "healthy",
+                    "upstream": "unhealthy",
+                    "model": "unknown",
+                    "upstream_http": response.status_code,
+                },
+            )
+        try:
+            upstream = response.json()
+        except ValueError:
+            upstream = {}
+        model_ready = isinstance(upstream, dict) and bool(
+            upstream.get("model_ready") or upstream.get("version")
+        )
+        body = {
+            "status": "ready" if model_ready else "not_ready",
             "gateway": "healthy",
             "upstream": "healthy",
-            "model": "ready",
+            "model": "ready" if model_ready else "unknown",
+            "upstream_version": upstream.get("version") if isinstance(upstream, dict) else None,
         }
+        return JSONResponse(status_code=200 if model_ready else 503, content=body)
 
     @app.post("/v1/parse")
     async def parse(

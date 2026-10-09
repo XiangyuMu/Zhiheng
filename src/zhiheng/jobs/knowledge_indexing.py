@@ -309,6 +309,16 @@ class KnowledgeJobRepository:
                 },
             )
             if int(session.execute(text("SELECT changes()")).scalar_one()) == 1:
+                if str(row["job_type"]) == KNOWLEDGE_PARSE_PDF_JOB_TYPE:
+                    task_id = _json_object(row["payload_json"]).get("task_id")
+                    if task_id:
+                        session.execute(
+                            text(
+                                "UPDATE pdf_tasks SET state='processing', updated_at=CURRENT_TIMESTAMP "
+                                "WHERE id=:task_id"
+                            ),
+                            {"task_id": str(task_id)},
+                        )
                 claimed.append(
                     ClaimedKnowledgeJob(
                         id=str(row["id"]),
@@ -452,6 +462,15 @@ class KnowledgeJobRepository:
         max_attempts = int(row["max_attempts"])
         terminal = attempts >= max_attempts
         status = "dead" if terminal else "pending"
+        payload = _json_object(row["payload_json"])
+        if job.job_type == KNOWLEDGE_PARSE_PDF_JOB_TYPE:
+            payload.update(
+                {
+                    "failure_code": _failure_code_for_job_exception(exc),
+                    "failure_stage": "parse",
+                    "retryable": True,
+                }
+            )
         session.execute(
             text(
                 """
@@ -460,6 +479,7 @@ class KnowledgeJobRepository:
                     lease_owner = NULL,
                     lease_expires_at = NULL,
                     available_at = datetime('now', '+1 minute'),
+                    payload_json = :payload_json,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = :job_id
                   AND status = 'processing' AND attempts = :attempts AND lease_owner = :owner
@@ -476,10 +496,21 @@ class KnowledgeJobRepository:
                 "attempts": job.attempts,
                 "owner": job.lease_owner,
                 "attempt_id": job.attempt_id,
+                "payload_json": json.dumps(payload, ensure_ascii=False, sort_keys=True),
             },
         )
         if int(session.execute(text("SELECT changes()")).scalar_one()) != 1:
             return False
+        if job.job_type == KNOWLEDGE_PARSE_PDF_JOB_TYPE:
+            task_id = payload.get("task_id")
+            if task_id:
+                session.execute(
+                    text(
+                        "UPDATE pdf_tasks SET state='failed', updated_at=CURRENT_TIMESTAMP "
+                        "WHERE id=:task_id"
+                    ),
+                    {"task_id": str(task_id)},
+                )
         self._record_attempt_finish(
             session,
             job_id=job.id,
@@ -503,7 +534,7 @@ class KnowledgeJobRepository:
                 {
                     "id": new_id(),
                     "job_id": job.id,
-                    "payload_json": row["payload_json"],
+                    "payload_json": json.dumps(payload, ensure_ascii=False, sort_keys=True),
                     "failure_summary": f"{exc.__class__.__name__}: {exc}",
                 },
             )
@@ -895,6 +926,17 @@ def _json_object(value: Any) -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise TypeError("job payload must be a JSON object")
     return dict(loaded)
+
+
+def _failure_code_for_job_exception(exc: Exception) -> str:
+    name = exc.__class__.__name__
+    return {
+        "ParserUnavailableError": "parser_unavailable",
+        "ParserAuthenticationError": "parser_authentication_failed",
+        "ParserProtocolError": "parser_protocol_error",
+        "ParserManifestError": "manifest_invalid",
+        "TimeoutError": "parser_timeout",
+    }.get(name, "pdf_parse_failed")
 
 
 def _completion_metadata(result: Any) -> dict[str, Any]:
