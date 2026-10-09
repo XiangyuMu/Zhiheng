@@ -8,10 +8,12 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 from sqlalchemy import text
 
 from tests.integration.test_g005_api_impl import _client, _headers, _login
+from zhiheng.api.main import create_app
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import new_id, sha256_text
 from zhiheng.db.session import session_scope
@@ -141,6 +143,31 @@ def test_pdf_upload_is_async_idempotent_and_emits_parse_event(tmp_path: Path) ->
         assert event_payload["output_prefix"] == f"artifact://pdf-attempts/{payload['task_id']}"
         assert event_payload["options"] == {}
         assert event_payload["schema_version"] == "pdf-parser.manifest.v1"
+
+
+def test_pdf_upload_uses_configured_parser_backend_when_query_omits_backend(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "configured-backend.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.upgrade(config, "head")
+    settings = Settings(
+        environment="test",
+        database_url=f"sqlite:///{db_path}",
+        pdf_parser_backend="mineru",
+    )
+    client = TestClient(create_app(settings))
+    csrf = _login(client)
+    response = client.post(
+        "/v1/knowledge/pdf-imports",
+        params={"title": "configured", "primary_domain_id": "technology.ai"},
+        content=_pdf_bytes(),
+        headers={**_headers(csrf, "configured-backend"), "Content-Type": "application/pdf"},
+    )
+    assert response.status_code == 202
+    assert response.json()["state"] == "queued"
+    assert client.get(response.json()["status_url"]).json()["backend"] == "mineru"
 
 
 def test_pdf_status_exposes_unsupported_worker_diagnostics(tmp_path: Path) -> None:

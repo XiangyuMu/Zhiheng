@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     embedding_purpose: str = "retrieval"
     answer_provider_id: str | None = Field(default=None, max_length=128)
     answer_model_id: str | None = Field(default=None, max_length=128)
+    pdf_parser_backend: Literal["deepdoc", "mineru"] = "deepdoc"
+    pdf_deepdoc_url: str | None = None
+    pdf_deepdoc_token: SecretStr | None = None
+    pdf_mineru_url: str | None = None
+    pdf_mineru_token: SecretStr | None = None
+    pdf_parser_timeout_seconds: float | None = None
+    pdf_parser_poll_interval_seconds: float | None = None
+    pdf_parser_max_polls: int | None = None
 
     @field_validator("database_url")
     @classmethod
@@ -88,6 +96,30 @@ class Settings(BaseSettings):
         if not normalized:
             raise ValueError("answer model binding fields cannot be empty")
         return normalized
+
+    @field_validator("pdf_deepdoc_url", "pdf_mineru_url")
+    @classmethod
+    def normalize_pdf_parser_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("PDF parser URL cannot be empty")
+        return normalized
+
+    @field_validator("pdf_parser_timeout_seconds", "pdf_parser_poll_interval_seconds")
+    @classmethod
+    def require_positive_pdf_parser_float(cls, value: float | None) -> float | None:
+        if value is not None and value <= 0:
+            raise ValueError("PDF parser interval/timeout must be positive")
+        return value
+
+    @field_validator("pdf_parser_max_polls")
+    @classmethod
+    def require_positive_pdf_parser_max_polls(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            raise ValueError("PDF parser max polls must be positive")
+        return value
 
     @field_validator("local_model_base_url")
     @classmethod

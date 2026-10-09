@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import html
 import re
+from collections.abc import Mapping
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -37,6 +38,9 @@ def content_list_to_manifest(
     page_width: float = 612.0,
     page_height: float = 792.0,
     image_uri_prefix: str = "artifact://mineru/",
+    image_artifacts: Mapping[str, Mapping[str, Any]] | None = None,
+    page_count: int | None = None,
+    page_dimensions: Mapping[int, tuple[float, float]] | None = None,
 ) -> dict[str, Any]:
     """Build a schema-valid manifest from MinerU's content-list response.
 
@@ -56,19 +60,27 @@ def content_list_to_manifest(
             values[3] * page_height / 1000,
         ]
 
-    pages = [
-        {
-            "page_no": i,
-            "width": page_width,
-            "height": page_height,
-            "rotation": 0,
-            "crop_box": [0, 0, page_width, page_height],
-            "user_unit": 1,
-            "render": None,
-            "status": "parsed",
-        }
-        for i in sorted({int(x.get("page_idx", 0)) + 1 for x in content})
-    ]
+    observed_pages = {int(x.get("page_idx", 0)) for x in content}
+    if page_count is None:
+        page_count = max(observed_pages, default=-1) + 1
+    if page_count < 0:
+        raise ValueError("page_count must be non-negative")
+    page_dimensions = page_dimensions or {}
+    pages = []
+    for page_index in range(page_count):
+        width, height = page_dimensions.get(page_index, (page_width, page_height))
+        pages.append(
+            {
+                "page_no": page_index + 1,
+                "width": width,
+                "height": height,
+                "rotation": 0,
+                "crop_box": [0, 0, width, height],
+                "user_unit": 1,
+                "render": None,
+                "status": "parsed" if page_index in observed_pages else "empty",
+            }
+        )
     blocks: list[dict[str, Any]] = []
     tables: list[dict[str, Any]] = []
     images: list[dict[str, Any]] = []
@@ -101,20 +113,25 @@ def content_list_to_manifest(
                 }
             )
             path = str(item.get("img_path") or "")
+            artifact = (image_artifacts or {}).get(path) or (image_artifacts or {}).get(
+                PurePosixPath(path).name
+            )
+            if artifact is None:
+                artifact = {
+                    "uri": image_uri_prefix + PurePosixPath(path).name,
+                    "sha256": PurePosixPath(path).stem
+                    if len(PurePosixPath(path).stem) == 64
+                    else _hash(path),
+                    "media_type": "image/jpeg",
+                    "bytes": 0,
+                }
             images.append(
                 {
                     "key": key,
                     "block_key": block_key,
                     "page_no": page_no,
                     "bbox": bbox,
-                    "artifact": {
-                        "uri": image_uri_prefix + PurePosixPath(path).name,
-                        "sha256": PurePosixPath(path).stem
-                        if len(PurePosixPath(path).stem) == 64
-                        else _hash(path),
-                        "media_type": "image/jpeg",
-                        "bytes": 0,
-                    },
+                    "artifact": dict(artifact),
                     "caption_block_keys": [],
                     "caption": caption,
                     "description": None,

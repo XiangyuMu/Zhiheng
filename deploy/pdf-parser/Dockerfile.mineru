@@ -25,7 +25,7 @@ RUN pip install --no-cache-dir "mineru @ file:///src/mineru"
 # wheel explicitly because the slim base image does not pull optional ML
 # runtime dependencies from the upstream package metadata.
 RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir 'transformers==4.57.1' shapely six pyclipper
+    && pip install --no-cache-dir 'transformers==4.57.1' shapely six pyclipper ftfy
 RUN mkdir -p "${MINERU_MODEL_DIR}" \
     && HOME="${MINERU_MODEL_DIR}" mineru-models-download --source "${MINERU_MODEL_SOURCE}" --model_type pipeline
 EXPOSE 9391

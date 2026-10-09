@@ -49,6 +49,7 @@ class PdfParseJobExecutor:
         self,
         parser_client: ParserWorkerClient,
         *,
+        parser_backend: str = "deepdoc",
         fallback_parser_client: ParserWorkerClient | None = None,
         repository: PdfManifestRepository | None = None,
         object_store: ControlledObjectStore,
@@ -60,7 +61,10 @@ class PdfParseJobExecutor:
             raise ValueError("poll_interval_seconds must be non-negative")
         if max_polls <= 0:
             raise ValueError("max_polls must be positive")
+        if parser_backend not in {"deepdoc", "mineru"}:
+            raise ValueError("parser_backend must be deepdoc or mineru")
         self._parser_client = parser_client
+        self._parser_backend = parser_backend
         self._fallback_parser_client = fallback_parser_client
         self._repository = repository
         self._object_store = object_store
@@ -77,7 +81,7 @@ class PdfParseJobExecutor:
             raise ValueError(f"unsupported knowledge job type: {job.job_type}")
 
         request = _request_from_job(job)
-        parser_client = self._parser_client
+        parser_client = self._client_for_request(request)
         fallback_attempted = False
         try:
             parser_status = self._run_attempt(parser_client, request)
@@ -114,6 +118,13 @@ class PdfParseJobExecutor:
             publication = publish_parse_result(session, repository, manifest)
         return PdfParseJobResult(publication=publication, parser_state=parser_status.state)
 
+    def _client_for_request(self, request: ParserParseRequest) -> ParserWorkerClient:
+        if request.backend == self._parser_backend:
+            return self._parser_client
+        if request.backend == "mineru" and self._fallback_parser_client is not None:
+            return self._fallback_parser_client
+        raise ParserProtocolError(f"parser backend is not configured: {request.backend}")
+
     def _run_attempt(
         self,
         parser_client: ParserWorkerClient,
@@ -144,6 +155,7 @@ class PdfParseJobExecutor:
             options_hash=request.options_hash,
             options=request.options,
             schema_version=request.schema_version,
+            evidence_object_id=request.evidence_object_id,
         )
         try:
             status = self._run_attempt(parser_client, fallback_request)
@@ -173,13 +185,15 @@ def _failure_code(exc: Exception) -> str:
 
 
 def configured_pdf_parse_executor(settings: Settings) -> PdfParseJobExecutor | None:
-    """Build the production parser executor from scoped environment settings.
+    """Build the production parser executor from scoped environment settings."""
 
-    Parser services are optional for development and tests.  Once the
-    DeepDoc URL and token are configured, MinerU is required as the one-shot
-    whole-task fallback and is enabled only when its own endpoint and token
-    are present.
-    """
+    parser_backend = _setting_or_env(
+        settings,
+        "pdf_parser_backend",
+        "ZHIHENG_PDF_PARSER_BACKEND",
+    ) or "deepdoc"
+    if parser_backend not in {"deepdoc", "mineru"}:
+        raise ValueError("PDF parser backend must be deepdoc or mineru")
 
     deepdoc_url = _setting_or_env(
         settings,
@@ -191,9 +205,6 @@ def configured_pdf_parse_executor(settings: Settings) -> PdfParseJobExecutor | N
         "pdf_deepdoc_token",
         "ZHIHENG_PDF_DEEPDOC_TOKEN",
     )
-    if not deepdoc_url or not deepdoc_token:
-        return None
-
     timeout_seconds = _positive_float(
         _setting_or_env(
             settings,
@@ -214,11 +225,6 @@ def configured_pdf_parse_executor(settings: Settings) -> PdfParseJobExecutor | N
         _setting_or_env(settings, "pdf_parser_max_polls", "ZHIHENG_PDF_MAX_POLLS"),
         900,
     )
-    deepdoc = ParserWorkerClient(
-        deepdoc_url,
-        service_token=deepdoc_token,
-        timeout_seconds=timeout_seconds,
-    )
     mineru_url = _setting_or_env(
         settings,
         "pdf_mineru_url",
@@ -238,9 +244,29 @@ def configured_pdf_parse_executor(settings: Settings) -> PdfParseJobExecutor | N
         if mineru_url and mineru_token
         else None
     )
+    deepdoc = (
+        ParserWorkerClient(
+            deepdoc_url,
+            service_token=deepdoc_token,
+            timeout_seconds=timeout_seconds,
+        )
+        if deepdoc_url and deepdoc_token
+        else None
+    )
+    if parser_backend == "mineru":
+        if mineru is None:
+            return None
+        primary_client = mineru
+        fallback_client = deepdoc
+    else:
+        if deepdoc is None:
+            return None
+        primary_client = deepdoc
+        fallback_client = mineru
     return PdfParseJobExecutor(
-        deepdoc,
-        fallback_parser_client=mineru,
+        primary_client,
+        parser_backend=parser_backend,
+        fallback_parser_client=fallback_client,
         object_store=knowledge_object_store_for_settings(settings),
         poll_interval_seconds=poll_interval,
         max_polls=max_polls,

@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +32,6 @@ from uuid import uuid4
 import httpx
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
-from httpx._multipart import MultipartStream
 
 from zhiheng.knowledge.mineru_adapter import content_list_to_manifest
 from zhiheng.knowledge.pdf_manifest import validate_manifest
@@ -56,10 +56,13 @@ class GatewayConfig:
     upstream_url: str
     token: str
     timeout_seconds: float = 120.0
+    state_path: Path | None = None
 
     def __post_init__(self) -> None:
         root = self.artifact_root.expanduser().resolve()
         object.__setattr__(self, "artifact_root", root)
+        state_path = self.state_path or (root / ".mineru-gateway.sqlite3")
+        object.__setattr__(self, "state_path", state_path.expanduser().resolve())
         if not self.upstream_url.startswith(("http://", "https://")):
             raise ValueError("MINERU_UPSTREAM_URL must be an HTTP(S) URL")
         if not self.token or any(char.isspace() for char in self.token):
@@ -74,13 +77,26 @@ class GatewayConfig:
             raise ValueError("ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH is required")
         upstream = os.environ.get("MINERU_UPSTREAM_URL", "http://127.0.0.1:19392")
         token = os.environ.get("MINERU_GATEWAY_TOKEN")
+        token_file = os.environ.get("MINERU_GATEWAY_TOKEN_FILE")
+        if token is None and token_file:
+            try:
+                token = Path(token_file).read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise ValueError("MINERU_GATEWAY_TOKEN_FILE cannot be read") from exc
         if token is None:
             raise ValueError("MINERU_GATEWAY_TOKEN is required")
         try:
             timeout = float(os.environ.get("MINERU_GATEWAY_TIMEOUT_SECONDS", "120"))
         except ValueError as exc:
             raise ValueError("MINERU_GATEWAY_TIMEOUT_SECONDS must be numeric") from exc
-        return cls(Path(root), upstream, token, timeout)
+        state = os.environ.get("MINERU_GATEWAY_STATE_PATH")
+        return cls(
+            Path(root),
+            upstream,
+            token,
+            timeout_seconds=timeout,
+            state_path=Path(state) if state else None,
+        )
 
 
 @dataclass(slots=True)
@@ -98,15 +114,51 @@ class _Task:
     manifest: dict[str, str] | None = None
 
 
-class _AsyncMultipartStream(httpx.AsyncByteStream):
-    """Adapt httpx's reusable multipart encoder to AsyncClient."""
+class _TaskStore:
+    """Durable gateway task mapping used to recover after a process restart."""
 
-    def __init__(self, stream: MultipartStream) -> None:
-        self._stream = stream
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS parser_tasks (
+                    attempt_id TEXT PRIMARY KEY,
+                    task_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
 
-    async def __aiter__(self) -> Any:
-        for chunk in self._stream.iter_chunks():
-            yield chunk
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path, timeout=30)
+        connection.execute("PRAGMA busy_timeout=30000")
+        return connection
+
+    def get(self, attempt_id: str) -> _Task | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT task_json FROM parser_tasks WHERE attempt_id = ?",
+                (attempt_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _task_from_json(json.loads(str(row[0])))
+
+    def put(self, task: _Task) -> None:
+        body = json.dumps(_task_to_json(task), sort_keys=True, separators=(",", ":"))
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO parser_tasks (attempt_id, task_json)
+                VALUES (?, ?)
+                ON CONFLICT(attempt_id) DO UPDATE SET
+                    task_json = excluded.task_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (task.attempt_id, body),
+            )
 
 
 class MinerUGateway:
@@ -124,6 +176,9 @@ class MinerUGateway:
             timeout=httpx.Timeout(config.timeout_seconds),
         )
         self._owns_client = http_client is None
+        self._store = _TaskStore(
+            config.state_path or config.artifact_root / ".mineru-gateway.sqlite3"
+        )
         self._tasks: dict[str, _Task] = {}
 
     async def close(self) -> None:
@@ -178,6 +233,12 @@ class MinerUGateway:
     async def submit(self, payload: dict[str, Any]) -> dict[str, str]:
         task_id = _required_identifier(payload, "task_id")
         attempt_id = _required_identifier(payload, "attempt_id")
+        backend = _required_string(payload, "backend")
+        if backend != "mineru":
+            raise GatewayError(
+                "backend_unsupported",
+                "MinerU gateway only accepts backend=mineru",
+            )
         source = payload.get("source")
         if not isinstance(source, dict):
             raise GatewayError("request_invalid", "source must be an object")
@@ -194,13 +255,21 @@ class MinerUGateway:
                 "source.evidence_object_id is required to submit a parse task",
             )
         output_path = self._path_for_uri(output_prefix)
+        if output_path == source_path:
+            raise GatewayError("output_prefix_invalid", "output prefix must differ from source")
         output_path.mkdir(parents=True, exist_ok=True)
+        if output_path.is_symlink() or not output_path.is_dir():
+            raise GatewayError("output_prefix_invalid", "output prefix must be a directory")
         options = payload.get("options")
         if options is None:
             options = {}
         if not isinstance(options, dict):
             raise GatewayError("request_invalid", "options must be an object")
         existing = self._tasks.get(attempt_id)
+        if existing is None:
+            existing = self._store.get(attempt_id)
+            if existing is not None:
+                self._tasks[attempt_id] = existing
         if existing is not None:
             if existing.source_sha256 != source_sha256 or existing.task_id != task_id:
                 raise GatewayError("attempt_reused", "attempt_id is bound to another request")
@@ -210,13 +279,12 @@ class MinerUGateway:
         form = _mineru_form(options)
         files = {"files": (source_name, body, "application/pdf")}
         try:
-            multipart = MultipartStream(form, files)
             response = await self._client.post(
                 "/tasks",
-                content=_AsyncMultipartStream(multipart),
+                data=form,
+                files=files,
                 headers={
                     "Authorization": f"Bearer {self.config.token}",
-                    "Content-Type": multipart.content_type,
                 },
             )
         except httpx.HTTPError as exc:
@@ -246,10 +314,15 @@ class MinerUGateway:
         self._tasks[attempt_id] = task
         if task.state == "failed":
             task.failure_code = "mineru_failed"
+        self._store.put(task)
         return {"attempt_id": attempt_id, "state": task.state}
 
     async def status(self, attempt_id: str) -> dict[str, Any]:
         task = self._tasks.get(attempt_id)
+        if task is None:
+            task = self._store.get(attempt_id)
+            if task is not None:
+                self._tasks[attempt_id] = task
         if task is None:
             raise GatewayError("attempt_not_found", "parser attempt does not exist")
         if task.manifest is not None:
@@ -266,6 +339,7 @@ class MinerUGateway:
         if response.status_code == 404:
             task.state = "failed"
             task.failure_code = "mineru_task_not_found"
+            self._store.put(task)
             return {"attempt_id": attempt_id, "state": "failed", "failure_code": task.failure_code}
         if response.status_code >= 400:
             raise GatewayError(
@@ -275,12 +349,14 @@ class MinerUGateway:
         upstream_state = _required_string(result, "status")
         if upstream_state in _ACTIVE:
             task.state = _map_state(upstream_state)
+            self._store.put(task)
             return {"attempt_id": attempt_id, "state": task.state}
         if upstream_state not in _TERMINAL:
             raise GatewayError("mineru_protocol", "MinerU returned an unknown task status")
         if upstream_state == "failed":
             task.state = "failed"
             task.failure_code = "mineru_failed"
+            self._store.put(task)
             return {"attempt_id": attempt_id, "state": "failed", "failure_code": task.failure_code}
         try:
             result_response = await self._client.get(
@@ -308,6 +384,7 @@ class MinerUGateway:
                 task.failure_code, "MinerU result cannot form a valid manifest"
             ) from exc
         task.state = "succeeded"
+        self._store.put(task)
         return {"attempt_id": attempt_id, "state": "succeeded", "manifest": task.manifest}
 
     def _persist_manifest(self, task: _Task, result: dict[str, Any]) -> dict[str, str]:
@@ -322,6 +399,8 @@ class MinerUGateway:
                 "mineru_result_invalid", "MinerU parsed file result is not an object"
             )
         content = item.get("content_list")
+        if content is None:
+            content = item.get("contentList")
         if isinstance(content, str):
             try:
                 content = json.loads(content)
@@ -334,7 +413,8 @@ class MinerUGateway:
         output_path = self._path_for_uri(task.output_prefix)
         images_dir = output_path / "images"
         image_uri_prefix = images_dir.as_uri().rstrip("/") + "/"
-        self._persist_images(item.get("images"), images_dir)
+        image_artifacts = self._persist_images(item.get("images"), images_dir)
+        _require_image_artifacts(content, image_artifacts)
         manifest = content_list_to_manifest(
             content,
             task_id=task.task_id,
@@ -344,6 +424,9 @@ class MinerUGateway:
             attempt_id=task.attempt_id,
             version=str(result.get("version") or "mineru"),
             image_uri_prefix=image_uri_prefix,
+            image_artifacts=image_artifacts,
+            page_count=_page_count(result, item, content),
+            page_dimensions=_page_dimensions(result, item),
         )
         validate_manifest(manifest)
         body = json.dumps(
@@ -356,13 +439,26 @@ class MinerUGateway:
             "sha256": hashlib.sha256(body).hexdigest(),
         }
 
-    def _persist_images(self, images: Any, output_dir: Path) -> None:
-        if not isinstance(images, dict):
-            return
+    def _persist_images(self, images: Any, output_dir: Path) -> dict[str, dict[str, Any]]:
+        if images is None:
+            return {}
         output_dir.mkdir(parents=True, exist_ok=True)
-        for name, encoded in images.items():
-            if not isinstance(name, str) or not isinstance(encoded, str):
-                continue
+        entries: list[tuple[str, str]] = []
+        if isinstance(images, dict):
+            for name, encoded in images.items():
+                if isinstance(name, str) and isinstance(encoded, str):
+                    entries.append((name, encoded))
+        elif isinstance(images, list):
+            for image in images:
+                if not isinstance(image, dict):
+                    continue
+                name = image.get("path") or image.get("name") or image.get("img_path")
+                encoded = image.get("data") or image.get("base64") or image.get("content")
+                if isinstance(name, str) and isinstance(encoded, str):
+                    entries.append((name, encoded))
+        artifacts: dict[str, dict[str, Any]] = {}
+        for name, encoded in entries:
+            original_name = name
             if "," in encoded:
                 _, encoded = encoded.split(",", 1)
             try:
@@ -371,7 +467,70 @@ class MinerUGateway:
                 continue
             suffix = Path(name).suffix.lower() or ".bin"
             safe_name = f"{hashlib.sha256(body).hexdigest()}{suffix}"
-            _atomic_write(output_dir / safe_name, body)
+            output_path = output_dir / safe_name
+            _atomic_write(output_path, body)
+            media_type = _media_type_for_suffix(suffix)
+            artifacts[original_name] = {
+                "uri": output_path.as_uri(),
+                "sha256": hashlib.sha256(body).hexdigest(),
+                "media_type": media_type,
+                "bytes": len(body),
+            }
+            artifacts[Path(original_name).name] = artifacts[original_name]
+        return artifacts
+
+
+def _task_to_json(task: _Task) -> dict[str, Any]:
+    return {
+        "attempt_id": task.attempt_id,
+        "task_id": task.task_id,
+        "evidence_object_id": task.evidence_object_id,
+        "source_uri": task.source_uri,
+        "source_sha256": task.source_sha256,
+        "output_prefix": task.output_prefix,
+        "upstream_task_id": task.upstream_task_id,
+        "source_name": task.source_name,
+        "state": task.state,
+        "failure_code": task.failure_code,
+        "manifest": task.manifest,
+    }
+
+
+def _task_from_json(value: Any) -> _Task:
+    if not isinstance(value, dict):
+        raise ValueError("gateway task record must be an object")
+    manifest = value.get("manifest")
+    if manifest is not None and not isinstance(manifest, dict):
+        raise ValueError("gateway task manifest must be an object")
+    required = (
+        "attempt_id",
+        "task_id",
+        "evidence_object_id",
+        "source_uri",
+        "source_sha256",
+        "output_prefix",
+        "upstream_task_id",
+        "source_name",
+        "state",
+    )
+    if any(not isinstance(value.get(field), str) for field in required):
+        raise ValueError("gateway task record is incomplete")
+    failure_code = value.get("failure_code")
+    if failure_code is not None and not isinstance(failure_code, str):
+        raise ValueError("gateway task failure code must be a string")
+    return _Task(
+        attempt_id=value["attempt_id"],
+        task_id=value["task_id"],
+        evidence_object_id=value["evidence_object_id"],
+        source_uri=value["source_uri"],
+        source_sha256=value["source_sha256"],
+        output_prefix=value["output_prefix"],
+        upstream_task_id=value["upstream_task_id"],
+        source_name=value["source_name"],
+        state=value["state"],
+        failure_code=failure_code,
+        manifest=manifest,
+    )
 
 
 def create_app(
@@ -394,6 +553,29 @@ def create_app(
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "healthy"}
+
+    @app.get("/ready")
+    async def ready() -> dict[str, Any]:
+        """Report gateway, upstream reachability, and model readiness separately."""
+        try:
+            response = await gateway._client.get(
+                "/health", headers={"Authorization": f"Bearer {gateway.config.token}"}
+            )
+        except httpx.HTTPError:
+            return {"status": "not_ready", "gateway": "healthy", "upstream": "unavailable"}
+        if response.status_code >= 400:
+            return {
+                "status": "not_ready",
+                "gateway": "healthy",
+                "upstream": "unhealthy",
+                "upstream_http": response.status_code,
+            }
+        return {
+            "status": "ready",
+            "gateway": "healthy",
+            "upstream": "healthy",
+            "model": "ready",
+        }
 
     @app.post("/v1/parse")
     async def parse(
@@ -442,6 +624,80 @@ def _mineru_form(options: dict[str, Any]) -> dict[str, Any]:
         key: str(value).lower() if isinstance(value, bool) else value
         for key, value in values.items()
     }
+
+
+def _page_count(
+    result: dict[str, Any], item: dict[str, Any], content: list[dict[str, Any]]
+) -> int | None:
+    for candidate in (
+        item.get("page_count"),
+        result.get("page_count"),
+        result.get("pages"),
+        result.get("page_num"),
+    ):
+        if isinstance(candidate, int) and candidate > 0:
+            return candidate
+        if isinstance(candidate, list) and candidate:
+            return len(candidate)
+    if content:
+        return max(int(entry.get("page_idx", 0)) + 1 for entry in content)
+    return None
+
+
+def _require_image_artifacts(
+    content: list[dict[str, Any]], image_artifacts: dict[str, dict[str, Any]]
+) -> None:
+    for item in content:
+        if item.get("type") not in {"image", "chart"}:
+            continue
+        path = item.get("img_path") or item.get("image_path")
+        if not isinstance(path, str) or not path.strip():
+            raise GatewayError(
+                "mineru_resource_invalid",
+                "MinerU image content is missing its image path",
+            )
+        if path not in image_artifacts and Path(path).name not in image_artifacts:
+            raise GatewayError(
+                "mineru_resource_invalid",
+                "MinerU image content has no readable image artifact",
+            )
+
+
+def _page_dimensions(
+    result: dict[str, Any], item: dict[str, Any]
+) -> dict[int, tuple[float, float]]:
+    values: Any = item.get("pages") or result.get("pages") or result.get("page_info")
+    if not isinstance(values, list):
+        return {}
+    dimensions: dict[int, tuple[float, float]] = {}
+    for index, value in enumerate(values):
+        if not isinstance(value, dict):
+            continue
+        page_index = value.get("page_idx", value.get("page_no", index))
+        if not isinstance(page_index, int):
+            continue
+        if "page_no" in value and "page_idx" not in value:
+            page_index -= 1
+        width = value.get("width", value.get("page_width"))
+        height = value.get("height", value.get("page_height"))
+        if (
+            isinstance(width, (int, float))
+            and isinstance(height, (int, float))
+            and width > 0
+            and height > 0
+        ):
+            dimensions[page_index] = (float(width), float(height))
+    return dimensions
+
+
+def _media_type_for_suffix(suffix: str) -> str:
+    return {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+    }.get(suffix.lower(), "application/octet-stream")
 
 
 def _map_state(state: str) -> str:

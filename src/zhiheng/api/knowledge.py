@@ -289,8 +289,12 @@ async def upload_pdf(
     idempotency_key: WriteDep,
     title: str,
     primary_domain_id: str,
-    backend: Literal["deepdoc", "mineru"] = "deepdoc",
+    backend: Literal["deepdoc", "mineru"] | None = None,
 ) -> PdfTaskResponse | JSONResponse:
+    settings: Settings = request.app.state.knowledge_settings
+    selected_backend = backend or settings.pdf_parser_backend
+    if selected_backend not in {"deepdoc", "mineru"}:
+        raise HTTPException(status_code=400, detail="unsupported PDF parser backend")
     if request.headers.get("content-type", "").split(";", 1)[0].lower() != "application/pdf":
         raise HTTPException(status_code=415, detail="content-type must be application/pdf")
     body = await request.body()
@@ -319,7 +323,7 @@ async def upload_pdf(
     payload = {
         "title": title,
         "primary_domain_id": primary_domain_id,
-        "backend": backend,
+        "backend": selected_backend,
         "source_sha256": source_sha256,
         "byte_size": len(body),
     }
@@ -334,7 +338,6 @@ async def upload_pdf(
     if replay is not None:
         return JSONResponse(status_code=202, content=replay.result)
 
-    settings: Settings = request.app.state.knowledge_settings
     artifact = knowledge_object_store_for_settings(settings).write_binary_artifact(
         body, namespace="evidence/pdf"
     )
@@ -351,7 +354,7 @@ async def upload_pdf(
             byte_size=artifact.byte_size,
             title=title,
             primary_domain_id=primary_domain_id,
-            backend=backend,
+            backend=selected_backend,
             options_hash=options_hash,
             idempotency_key=operation_key,
         )

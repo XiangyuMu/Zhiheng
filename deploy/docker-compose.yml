@@ -55,7 +55,7 @@ services:
       ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH: /data/knowledge-object-store
       ZHIHENG_WORKER_ROLE: publisher
       ZHIHENG_PDF_DEEPDOC_URL: http://deepdoc-worker:9390
-      ZHIHENG_PDF_MINERU_URL: http://mineru-worker:9391
+      ZHIHENG_PDF_MINERU_URL: http://mineru-gateway:9392
       ZHIHENG_PDF_DEEPDOC_TOKEN_FILE: /run/secrets/deepdoc_service_token
       ZHIHENG_PDF_MINERU_TOKEN_FILE: /run/secrets/mineru_service_token
     volumes:
@@ -68,6 +68,34 @@ services:
     depends_on:
       api:
         condition: service_healthy
+  mineru-gateway:
+    profiles: ["pdf"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH: /data/knowledge-object-store
+      MINERU_GATEWAY_STATE_PATH: /data/mineru-gateway.sqlite3
+      MINERU_UPSTREAM_URL: http://mineru-worker:9391
+      MINERU_GATEWAY_TOKEN_FILE: /run/secrets/mineru_service_token
+      MINERU_GATEWAY_HOST: 0.0.0.0
+      MINERU_GATEWAY_PORT: 9392
+    volumes:
+      - zhiheng-data:/data
+    secrets:
+      - mineru_service_token
+    command: ["python", "deploy/pdf-parser/mineru_gateway.py"]
+    expose:
+      - "9392"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9392/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    depends_on:
+      mineru-worker:
+        condition: service_started
   deepdoc-worker:
     profiles: ["pdf"]
     image: deepdoc_oss:local
