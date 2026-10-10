@@ -42,6 +42,7 @@ from zhiheng.knowledge import (
 )
 from zhiheng.knowledge.import_adapters import fetch_web, parse_markdown, parse_ocr
 from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
+from zhiheng.knowledge.pdf_manifest import validate_manifest
 from zhiheng.retrieval.qualification import formal_searchable_sql
 
 SESSION_COOKIE = "zhiheng_session"
@@ -208,6 +209,8 @@ class PdfTaskStatusResponse(BaseModel):
     error_code: str | None = None
     redacted_summary: str | None = None
     retryable: bool = False
+    manifest_uri: str | None = None
+    manifest_sha256: str | None = None
 
 
 def install_knowledge_routes(app: Any, settings: Settings) -> None:
@@ -390,6 +393,8 @@ def get_pdf_task(
                   t.id AS task_id, t.evidence_object_id, t.state, t.backend,
                   eo.sha256 AS source_sha256,
                   a.id AS attempt_id,
+                  a.manifest_uri,
+                  a.manifest_sha256,
                   a.failure_code,
                   (
                     SELECT json_extract(j.payload_json, '$.failure_code')
@@ -553,7 +558,78 @@ def get_pdf_task(
         error_code=failure.code if failure else None,
         redacted_summary=failure.redacted_summary if failure else None,
         retryable=bool(failure.retryable if failure else state in {"failed", "dead"}),
+        manifest_uri=str(row["manifest_uri"]) if row["manifest_uri"] else None,
+        manifest_sha256=str(row["manifest_sha256"]) if row["manifest_sha256"] else None,
     )
+
+
+@router.get("/v1/knowledge/pdf-imports/{task_id}/manifest")
+def get_pdf_manifest(
+    task_id: str,
+    session_factory: SessionFactoryDep,
+    user_id: AuthDep,
+    request: Request,
+) -> dict[str, Any]:
+    """Return the validated manifest for an owned, successful parse attempt.
+
+    This is intentionally a read-only, authenticated projection.  It lets the
+    browser acceptance check the persisted manifest and its digest without
+    reaching into the database or the gateway's private filesystem.
+    """
+    with session_scope(session_factory) as session:
+        row = (
+            session.execute(
+                text(
+                    """
+                    SELECT a.manifest_uri, a.manifest_sha256, a.status,
+                           t.backend, eo.sha256 AS source_sha256
+                    FROM pdf_parse_attempts a
+                    JOIN pdf_tasks t ON t.id=a.task_id
+                    JOIN evidence_objects eo ON eo.id=a.evidence_object_id
+                    WHERE a.task_id=:task_id
+                      AND json_extract(eo.source_metadata_json, '$.owner_user_id')=:user_id
+                    ORDER BY a.attempt_no DESC
+                    LIMIT 1
+                    """
+                ),
+                {"task_id": task_id, "user_id": user_id},
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="PDF manifest not found")
+        if row["status"] not in {"succeeded", "published", "completed"}:
+            raise HTTPException(status_code=409, detail="PDF manifest is not successful")
+        uri = str(row["manifest_uri"] or "")
+        expected = str(row["manifest_sha256"] or "")
+        if not uri or len(expected) != 64:
+            raise HTTPException(status_code=409, detail="PDF manifest metadata is incomplete")
+        try:
+            body = knowledge_object_store_for_settings(
+                request.app.state.knowledge_settings
+            ).read_bytes(uri)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(
+                status_code=502, detail="PDF manifest artifact unavailable"
+            ) from exc
+        actual = hashlib.sha256(body).hexdigest()
+        if actual != expected:
+            raise HTTPException(status_code=502, detail="PDF manifest hash mismatch")
+        try:
+            manifest = json.loads(body)
+            if not isinstance(manifest, dict):
+                raise ValueError("manifest must be an object")
+            validate_manifest(manifest)
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=502, detail="PDF manifest schema invalid") from exc
+        return {
+            "manifest": manifest,
+            "manifest_uri": uri,
+            "manifest_sha256": expected,
+            "source_sha256": str(row["source_sha256"]),
+            "backend": str(row["backend"]),
+        }
 
 
 @router.post("/v1/knowledge/pdf-imports/{task_id}/retry")

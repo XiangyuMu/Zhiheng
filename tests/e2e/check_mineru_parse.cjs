@@ -20,11 +20,15 @@ const report = {
   input: {name:path.basename(file), sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')},
   states: [], errors: [], status:'running',
 };
+if (process.env.ZHIHENG_EXPECTED_SHA) {
+  assert.equal(report.sha, process.env.ZHIHENG_EXPECTED_SHA, 'Acceptance must bind to expected SHA');
+}
 const save = () => fs.writeFileSync(path.join(output,'report.json'), JSON.stringify(report,null,2), {mode:0o600});
 (async () => {
   let browser;
   let page;
   try {
+    assert.equal(report.dirty, false, 'Acceptance requires a clean checkout');
     browser = await chromium.launch({headless:true});
     report.browser = browser.version();
     page = await browser.newPage({viewport:{width:1440,height:1000}});
@@ -88,6 +92,35 @@ const save = () => fs.writeFileSync(path.join(output,'report.json'), JSON.string
     assert.equal(terminal.parsed_page_count,terminal.page_count);
     assert(terminal.block_count>0);
     report.parsed=terminal;
+    const manifestResponse = await page.evaluate(async id => {
+      const r = await fetch('/v1/knowledge/pdf-imports/'+encodeURIComponent(id)+'/manifest');
+      return {http:r.status, body:await r.json()};
+    }, id);
+    assert.equal(manifestResponse.http, 200, 'Persisted manifest must be readable through the API');
+    const manifestPayload = manifestResponse.body;
+    const manifest = manifestPayload.manifest;
+    assert.equal(manifestPayload.backend, 'mineru');
+    assert.equal(manifestPayload.source_sha256, report.input.sha256);
+    assert.equal(manifestPayload.manifest_sha256, terminal.manifest_sha256);
+    assert.equal(manifest.schema_version, 'pdf-parser.manifest.v1');
+    assert.equal(manifest.task_id, id);
+    assert.equal(manifest.source.sha256, report.input.sha256);
+    assert.equal(manifest.source.evidence_object_id, terminal.evidence_object_id);
+    assert.equal(manifest.parser.backend, 'mineru');
+    assert.equal(manifest.parser.attempt_id, terminal.attempt_id);
+    assert(manifest.pages.length > 0 && manifest.blocks.length > 0);
+    for (const page of manifest.pages) assert(['parsed', 'empty'].includes(page.status));
+    for (const image of manifest.images) {
+      assert(image.artifact && image.artifact.uri && /^[a-f0-9]{64}$/.test(image.artifact.sha256));
+    }
+    report.manifest = {
+      uri: manifestPayload.manifest_uri,
+      sha256: manifestPayload.manifest_sha256,
+      schema_version: manifest.schema_version,
+      page_count: manifest.pages.length,
+      block_count: manifest.blocks.length,
+      image_count: manifest.images.length,
+    };
     report.status='passed';
   } catch(error) {report.status='failed';report.failure=String(error.stack || error);process.exitCode=1;}
   finally {

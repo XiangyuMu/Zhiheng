@@ -161,6 +161,13 @@ def _summarize_inspect(data: object) -> list[dict[str, object]]:
 
 
 def _collect_diagnostics(compose: list[str]) -> dict[str, object]:
+    # Unit tests and callers that only exercise the lifecycle state machine may
+    # provide a placeholder compose path.  There is no useful Docker evidence
+    # to collect in that case, and attempting commands would obscure the
+    # original warmup result.  Real deployments always pass an existing file.
+    compose_file = Path(compose[2]) if len(compose) > 2 else None
+    if compose_file is None or not compose_file.is_file():
+        return {"status": "unavailable", "error": "compose_file_unavailable"}
     diagnostics: dict[str, object] = {
         "docker_compose_images": _capture_json_command([*compose, "images", "--format", "json"]),
         "docker_compose_ps": _capture_json_command([*compose, "ps", "--format", "json"]),
