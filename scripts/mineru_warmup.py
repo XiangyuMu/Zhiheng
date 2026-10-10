@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -70,6 +72,7 @@ def _safe_json_loads(value: str) -> object:
 
 
 def _capture_command(command: list[str], *, timeout: float = 10) -> dict[str, object]:
+    metadata: dict[str, object] = {"command": command}
     try:
         result = subprocess.run(
             command,
@@ -79,12 +82,23 @@ def _capture_command(command: list[str], *, timeout: float = 10) -> dict[str, ob
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return {"status": "unavailable", "error": "timeout"}
+        return {**metadata, "status": "unavailable", "error": "timeout"}
     except OSError:
-        return {"status": "unavailable", "error": "command_unavailable"}
+        return {**metadata, "status": "unavailable", "error": "command_unavailable"}
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+    metadata.update(
+        {
+            "exit_code": result.returncode,
+            "stdout_sha256": hashlib.sha256(stdout.encode()).hexdigest(),
+            "stdout_bytes": len(stdout.encode()),
+            "stderr_sha256": hashlib.sha256(stderr.encode()).hexdigest(),
+            "stderr_bytes": len(stderr.encode()),
+        }
+    )
     if result.returncode != 0:
-        return {"status": "unavailable", "exit_code": result.returncode}
-    return {"status": "captured", "data": result.stdout}
+        return {**metadata, "status": "unavailable"}
+    return {**metadata, "status": "captured", "data": stdout}
 
 
 def _capture_json_command(
@@ -194,7 +208,38 @@ def warmup(compose_file: Path, diagnostics: Path, timeout: float) -> int:
         "started_at": datetime.now(UTC).isoformat(),
         "budget_seconds": timeout,
         "status": "warming",
+        "command": [str(value) for value in sys.argv],
+        "compose_file": str(compose_file),
+        "diagnostics_dir": str(diagnostics),
     }
+    if compose_file.is_file():
+        try:
+            repo_root = Path(
+                subprocess.check_output(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                ).strip()
+            )
+            report["evidence_scope"] = (
+                "checkout"
+                if diagnostics.resolve().is_relative_to(repo_root.resolve())
+                else "external"
+            )
+        except (OSError, subprocess.SubprocessError, ValueError):
+            report["evidence_scope"] = "unknown"
+    else:
+        report["evidence_scope"] = "unknown"
+    if compose_file.is_file():
+        try:
+            report["git_sha"] = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL, timeout=5
+            ).strip()
+        except (OSError, subprocess.SubprocessError):
+            report["git_sha"] = None
+    else:
+        report["git_sha"] = None
     compose = ["docker", "compose", "-f", str(compose_file), "--profile", "pdf"]
     submitted = False
     ready: dict[str, object] = {}
@@ -248,7 +293,7 @@ def warmup(compose_file: Path, diagnostics: Path, timeout: float) -> int:
         report["elapsed_seconds"] = time.monotonic() - started
         try:
             report["diagnostics"] = _collect_diagnostics(compose)
-        except (OSError, ValueError, TypeError, subprocess.SubprocessError) as exc:
+        except Exception as exc:
             report["diagnostics"] = {
                 "status": "unavailable",
                 "error": "diagnostic_failure",
@@ -265,9 +310,12 @@ def warmup(compose_file: Path, diagnostics: Path, timeout: float) -> int:
                     timeout=10,
                     check=False,
                 )
-                (diagnostics / "warmup-timeout.log").write_text(logs.stdout)
-            except (OSError, subprocess.TimeoutExpired):
+                (diagnostics / "warmup-timeout.log").write_text(logs.stdout + logs.stderr)
+                report["log_capture"] = {"exit_code": logs.returncode, "status": "captured"}
+            except Exception:
                 (diagnostics / "warmup-timeout.log").write_text("log_capture_unavailable\n")
+                report["log_capture"] = {"status": "unavailable"}
+        (diagnostics / "warmup.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
 def main() -> int:

@@ -224,6 +224,8 @@ class AnswerResponse(BaseModel):
         exclude_if=lambda value: not value,
     )
     context_prompts: list[dict[str, Any]] = Field(default_factory=list)
+    answer_provider_id: str | None = None
+    answer_model_id: str | None = None
 
 
 class LookupResponse(BaseModel):
@@ -460,6 +462,13 @@ def answer_question(
         conversation_context=conversation_context,
     )
     response = _answer_response(result, reason=decision.reason_code)
+    selected_answer_route = model_defaults(session).get("text")
+    if isinstance(selected_answer_route, dict):
+        response.answer_provider_id = str(selected_answer_route["provider_id"])
+        response.answer_model_id = str(selected_answer_route["model_id"])
+    elif request.app.state.retrieval_settings.answer_provider_id is not None:
+        response.answer_provider_id = request.app.state.retrieval_settings.answer_provider_id
+        response.answer_model_id = request.app.state.retrieval_settings.answer_model_id
     response.context_prompts = _contextual_prompts(
         session, query=payload.query, user_id=user_id, result=result
     )

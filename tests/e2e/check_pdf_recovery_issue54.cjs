@@ -36,6 +36,7 @@ const report = {
   restarts: [],
   states: [],
   status: 'running',
+  exit_code: null,
 };
 const save = () => fs.writeFileSync(
   path.join(output, 'report.json'), JSON.stringify(report, null, 2), { mode: 0o600 },
@@ -43,11 +44,21 @@ const save = () => fs.writeFileSync(
 
 function restart(kind, command) {
   const started = Date.now();
+  const safeName = `${kind}-${report.restarts.length + 1}`;
+  const commandDigest = crypto.createHash('sha256').update(command).digest('hex');
+  const stdoutPath = path.join(output, `${safeName}.stdout.log`);
+  const stderrPath = path.join(output, `${safeName}.stderr.log`);
+  const writeLog = (file, value) => fs.writeFileSync(file, String(value || '').replace(/(token|key|secret|password)=\S+/gi, '$1=[REDACTED]'), { mode: 0o600 });
   try {
-    execFileSync('bash', ['-lc', command], { stdio: 'pipe', timeout: 120_000 });
-    report.restarts.push({ kind, status: 'succeeded', elapsed_ms: Date.now() - started });
+    const stdout = execFileSync('bash', ['-lc', command], { encoding: 'utf8', stdio: 'pipe', timeout: 120_000 });
+    writeLog(stdoutPath, stdout);
+    writeLog(stderrPath, '');
+    report.restarts.push({ kind, status: 'succeeded', exit_code: 0, command_sha256: commandDigest, elapsed_ms: Date.now() - started, stdout_path: stdoutPath, stderr_path: stderrPath });
   } catch (error) {
-    report.restarts.push({ kind, status: 'failed', elapsed_ms: Date.now() - started });
+    writeLog(stdoutPath, error.stdout);
+    writeLog(stderrPath, error.stderr || error.message);
+    report.restarts.push({ kind, status: 'failed', exit_code: typeof error.status === 'number' ? error.status : null, command_sha256: commandDigest, elapsed_ms: Date.now() - started, stdout_path: stdoutPath, stderr_path: stderrPath, timed_out: error.killed === true });
+    save();
     throw error;
   }
   save();
@@ -103,13 +114,15 @@ function restart(kind, command) {
       if (firstAttempt && state.attempt_id) assert.equal(state.attempt_id, firstAttempt);
       report.states.push({ at: new Date().toISOString(), ...response });
       save();
-      if (!workerRestarted && state.state === 'processing') {
+      if (!workerRestarted && state.state === 'processing' && state.attempt_id) {
         restart('worker', process.env.ZHIHENG_RESTART_WORKER_COMMAND);
         workerRestarted = true;
+        await page.screenshot({path: path.join(output, 'after-worker-restart.png'), fullPage: true});
       }
-      if (workerRestarted && !gatewayRestarted && state.state === 'processing') {
+      if (workerRestarted && !gatewayRestarted && state.state === 'processing' && state.attempt_id) {
         restart('gateway', process.env.ZHIHENG_RESTART_GATEWAY_COMMAND);
         gatewayRestarted = true;
+        await page.screenshot({path: path.join(output, 'after-gateway-restart.png'), fullPage: true});
       }
       if (['failed', 'partial', 'unsupported', 'dead'].includes(state.state)) {
         throw Error(`recovery reached terminal failure: ${state.state} ${state.error_code || ''}`);
@@ -118,14 +131,18 @@ function restart(kind, command) {
       await page.waitForTimeout(1_000);
     }
     assert(workerRestarted && gatewayRestarted, 'both real process restart commands must run');
+    assert(firstAttempt, 'the original parser attempt must be persisted before restart');
     assert(report.states.some(item => item.body.state === 'parsed'), 'task did not recover to parsed');
+    assert(report.states.filter(item => item.body.state === 'parsed').every(item => item.body.attempt_id === firstAttempt), 'recovery changed parser attempt identity');
     report.status = 'passed';
   } catch (error) {
     report.status = 'failed';
     report.failure = String(error.stack || error);
+    if (browser) await browser.pages()[0].screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {});
     process.exitCode = 1;
   } finally {
     report.finished = new Date().toISOString();
+    report.exit_code = process.exitCode || 0;
     save();
     if (browser) await browser.close();
   }

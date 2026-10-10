@@ -17,6 +17,7 @@ const report = {
   sha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   dirty: Boolean(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim()),
   imports: [], answers: [], errors: [],
+  status: 'running',
 };
 const saveReport = () => fs.writeFileSync(
   path.join(output, 'browser-report.json'),
@@ -89,6 +90,7 @@ const saveReport = () => fs.writeFileSync(
       );
       await page.locator('#answer-form button[type=submit]').click();
       const answerHttp = await answerResponse;
+      const answerBody = await answerHttp.json();
       await page.waitForFunction(
         previous => {
           const value = document.querySelector('#answer')?.textContent?.trim() || '';
@@ -97,11 +99,19 @@ const saveReport = () => fs.writeFileSync(
         previousAnswer,
         { timeout: 240000 },
       );
-      const answer={question: question.value, kind: question.kind, status:answerHttp.status(),answer:await page.locator('#answer').innerText(),route:await page.locator('#route').innerText(),citations:await page.locator('#citations .source-card').count()};
+      const answer={question: question.value, kind: question.kind, status:answerHttp.status(),answer:await page.locator('#answer').innerText(),route:await page.locator('#route').innerText(),citations:await page.locator('#citations .source-card').count(), citation_payload_count: Array.isArray(answerBody.citations) ? answerBody.citations.length : 0};
+      answer.answer_provider_id = answerBody.answer_provider_id || null;
+      answer.answer_model_id = answerBody.answer_model_id || null;
       if (answer.status !== 200) throw Error(`answer request failed with HTTP ${answer.status}`);
       if (!answer.answer.trim()) throw Error(`empty answer for ${question.kind}`);
       if (question.kind !== 'negative' && answer.citations < 1) {
         throw Error(`answer for ${question.kind} has no supporting citation`);
+      }
+      if (process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID && answer.answer_provider_id !== process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID) {
+        throw Error(`answer used provider ${answer.answer_provider_id || 'unset'}, expected ${process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID}`);
+      }
+      if (process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID && answer.answer_model_id !== process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID) {
+        throw Error(`answer used model ${answer.answer_model_id || 'unset'}, expected ${process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID}`);
       }
       if (question.kind === 'negative') {
         if (!/(没有|不足|无法|未提供|未找到|证据)/.test(answer.answer)) {
@@ -115,17 +125,44 @@ const saveReport = () => fs.writeFileSync(
       await page.screenshot({path:path.join(output,`answer-${report.answers.length}.png`),fullPage:true});
       if(answer.citations) {
         await page.locator('#citations .source-card').first().click();
-        await page.waitForTimeout(1000);
-        report.answers.at(-1).source_text=await page.locator('#citation-context-text').innerText();
+        const context = page.locator('#citation-context-text');
+        await page.waitForFunction(() => {
+          const value = document.querySelector('#citation-context-text')?.textContent?.trim() || '';
+          const title = document.querySelector('#citation-title')?.textContent?.trim() || '';
+          return value && !/^(正在|暂无可显示|暂时无法)/.test(value) && title && !/^(正在|暂时无法)/.test(title);
+        }, { timeout: 20000 });
+        report.answers.at(-1).source_text=await context.innerText();
+        report.answers.at(-1).source_title=await page.locator('#citation-title').innerText();
         if (!report.answers.at(-1).source_text.trim()) throw Error('citation source text is empty');
+        if (question.kind === 'pdf') {
+          const link = page.locator('#citation-page-link');
+          await link.waitFor({state:'visible', timeout:10000});
+          const href = await link.getAttribute('href');
+          if (!href) throw Error('PDF citation did not expose an original source link');
+          const original = await page.request.get(new URL(href, base).href);
+          if (original.status() !== 200) throw Error(`PDF citation source returned HTTP ${original.status()}`);
+          const returnedSha = crypto.createHash('sha256').update(await original.body()).digest('hex');
+          if (returnedSha !== itemForPdfSha(report.imports, files)) throw Error('PDF citation source digest does not match imported PDF');
+          report.answers.at(-1).source_pdf_sha256 = returnedSha;
+          report.answers.at(-1).source_page_link = href;
+        }
         await page.screenshot({path:path.join(output,`source-${report.answers.length}.png`),fullPage:true});
         await page.locator('#close-citation').click();
       }
     }
-  } catch(error) {report.failure=error.stack; process.exitCode=1;}
+    report.status = 'passed';
+  } catch(error) {report.status = 'failed'; report.failure=error.stack; process.exitCode=1;}
   finally {
     report.finished=new Date().toISOString();
+    report.exit_code = process.exitCode || 0;
     saveReport();
     if (browser) await browser.close();
   }
 })();
+
+function itemForPdfSha(imports, inputFiles) {
+  const pdf = inputFiles.find(file => file.toLowerCase().endsWith('.pdf'));
+  const item = imports.find(entry => entry.file === path.basename(pdf));
+  if (!item) throw Error('PDF import record is missing');
+  return item.sha256;
+}

@@ -1,0 +1,12 @@
+# DeepDoc is opt-in. Loading this override makes its credential requirement
+# explicit while the MinerU-only profile remains usable without DeepDoc.
+services:
+  worker:
+    volumes:
+      - ${DEEPDOC_SERVICE_TOKEN_FILE:?DEEPDOC_SERVICE_TOKEN_FILE must be set for the deepdoc profile}:/run/secrets/deepdoc_service_token:ro
+  publisher-worker:
+    volumes:
+      - ${DEEPDOC_SERVICE_TOKEN_FILE:?DEEPDOC_SERVICE_TOKEN_FILE must be set for the deepdoc profile}:/run/secrets/deepdoc_service_token:ro
+  deepdoc-worker:
+    volumes:
+      - ${DEEPDOC_SERVICE_TOKEN_FILE:?DEEPDOC_SERVICE_TOKEN_FILE must be set for the deepdoc profile}:/run/secrets/deepdoc_service_token:ro

@@ -23,12 +23,53 @@ def git(repo: Path, *args: str) -> str:
 
 def clean_environment() -> dict[str, str]:
     # Never inherit production storage, credentials, pytest selectors or local import paths.
-    return {
+    cleaned = {
         key: value
         for key, value in os.environ.items()
         if not key.startswith(("ZHIHENG_", "RESTIC_", "PYTEST_", "UV_"))
         and key not in {"PYTHONPATH", "VIRTUAL_ENV", "BROWSER_CHANNEL", "PLAYWRIGHT_MODULE_PATH"}
     }
+    # These names are the deliberately narrow, private inputs for the real PDF
+    # stages.  They are copied without ever being serialized into the report.
+    for key in {
+        "ZHIHENG_TEST_USERNAME",
+        "ZHIHENG_TEST_PASSWORD",
+        "ZHIHENG_PDF_ACCEPTANCE_URL",
+        "ZHIHENG_PDF_FILE",
+        "ZHIHENG_REAL_FILE_A",
+        "ZHIHENG_REAL_FILE_B",
+        "ZHIHENG_RESTART_WORKER_COMMAND",
+        "ZHIHENG_RESTART_GATEWAY_COMMAND",
+        "ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID",
+        "ZHIHENG_EXPECTED_ANSWER_MODEL_ID",
+        "MINERU_PARSER_PROFILE",
+        "MINERU_WARMUP_TIMEOUT_SECONDS",
+    }:
+        if key in os.environ:
+            cleaned[key] = os.environ[key]
+    return cleaned
+
+
+def real_pdf_preflight() -> list[str]:
+    required = [
+        "ZHIHENG_TEST_USERNAME",
+        "ZHIHENG_TEST_PASSWORD",
+        "ZHIHENG_PDF_ACCEPTANCE_URL",
+        "ZHIHENG_PDF_FILE",
+        "ZHIHENG_REAL_FILE_A",
+        "ZHIHENG_REAL_FILE_B",
+        "ZHIHENG_RESTART_WORKER_COMMAND",
+        "ZHIHENG_RESTART_GATEWAY_COMMAND",
+    ]
+    code = (
+        "import os, pathlib, sys; "
+        f"missing=[k for k in {required!r} if not os.environ.get(k)]; "
+        "missing += [k for k in ('ZHIHENG_PDF_FILE','ZHIHENG_REAL_FILE_A','ZHIHENG_REAL_FILE_B') "
+        "if os.environ.get(k) and not pathlib.Path(os.environ[k]).is_file()]; "
+        "print('missing real PDF acceptance inputs: ' + ','.join(missing)) if missing else None; "
+        "raise SystemExit(2 if missing else 0)"
+    )
+    return [sys.executable, "-c", code]
 
 
 def execute(
@@ -97,6 +138,9 @@ def main() -> int:
     env["ZHIHENG_ACCEPTANCE_OUTPUT"] = str(output / "browser")
     env["ZHIHENG_DELIVERY_EVIDENCE"] = str(output / "recovery")
     env["ZHIHENG_REQUIRE_DELIVERY_EVIDENCE"] = "1"
+    env["ZHIHENG_EXPECTED_SHA"] = sha
+    env["ZHIHENG_EVIDENCE_DIR"] = str(output)
+    env["MINERU_DIAGNOSTIC_DIR"] = str(output / "mineru-warmup")
     report: dict[str, Any] = {
         "sha": sha,
         "status": "running",
@@ -140,6 +184,52 @@ def main() -> int:
             ],
         ),
         ("browser", ["bash", "scripts/browser_acceptance.sh"]),
+        ("real-pdf-preflight", real_pdf_preflight()),
+        (
+            "mineru-warmup",
+            ["bash", "scripts/mineru_local.sh", "start"],
+        ),
+        (
+            "pdf-parse",
+            [
+                "node",
+                "tests/e2e/check_mineru_parse.cjs",
+                os.environ.get("ZHIHENG_PDF_ACCEPTANCE_URL", ""),
+                str(output / "pdf-parse"),
+                os.environ.get("ZHIHENG_PDF_FILE", ""),
+            ],
+        ),
+        (
+            "pdf-search",
+            [
+                "node",
+                "tests/e2e/check_pdf_search_issue53.cjs",
+                os.environ.get("ZHIHENG_PDF_ACCEPTANCE_URL", ""),
+                str(output / "pdf-search"),
+                os.environ.get("ZHIHENG_PDF_FILE", ""),
+            ],
+        ),
+        (
+            "pdf-recovery",
+            [
+                "node",
+                "tests/e2e/check_pdf_recovery_issue54.cjs",
+                os.environ.get("ZHIHENG_PDF_ACCEPTANCE_URL", ""),
+                str(output / "pdf-recovery"),
+                os.environ.get("ZHIHENG_PDF_FILE", ""),
+            ],
+        ),
+        (
+            "real-files",
+            [
+                "node",
+                "tests/e2e/check_real_files.cjs",
+                os.environ.get("ZHIHENG_PDF_ACCEPTANCE_URL", ""),
+                str(output / "real-files"),
+                os.environ.get("ZHIHENG_REAL_FILE_A", ""),
+                os.environ.get("ZHIHENG_REAL_FILE_B", ""),
+            ],
+        ),
         (
             "extraction",
             [
@@ -161,7 +251,12 @@ def main() -> int:
         result = execute(repo, output, name, command, args.timeout + 30, env)
         report["steps"].append(result)
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-        if name == "dependencies" and result["status"] != "passed":
+        if (
+            name == "dependencies"
+            or name == "real-pdf-preflight"
+            or name == "mineru-warmup"
+            or name in {"pdf-parse", "pdf-search", "pdf-recovery"}
+        ) and result["status"] != "passed":
             break
     report["clean_after"] = not bool(git(repo, "status", "--porcelain", "--untracked-files=all"))
     report["same_sha"] = sha == git(repo, "rev-parse", "HEAD")
