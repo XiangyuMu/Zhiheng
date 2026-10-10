@@ -440,6 +440,26 @@ def test_explicit_insufficient_answer_does_not_expose_retrieved_citations() -> N
     assert answer.citations == ()
 
 
+def test_explicit_absence_question_stays_evidence_only_without_model_call() -> None:
+    model = _Model()
+    service = BoundedAgenticRagService(
+        structured_lookup=_Lookup(),
+        hybrid_retrieval=_Hybrid([_manifest()]),
+        evidence_verifier=_Verifier(),
+        model_gateway=model,
+    )
+
+    answer = service.answer(
+        QuerySessionStub(),
+        "材料有没有作者的银行账户号码？没有证据请明确说明。",
+        route=QueryRoute.HYBRID,
+    )  # type: ignore[arg-type]
+
+    assert answer.stop_reason is StopReason.EVIDENCE_ONLY
+    assert answer.citations == ()
+    assert model.calls == 0
+
+
 def test_agentic_service_exposes_no_external_action_ports() -> None:
     public = {name for name in dir(BoundedAgenticRagService) if not name.startswith("_")}
 

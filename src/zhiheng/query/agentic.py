@@ -392,6 +392,20 @@ class BoundedAgenticRagService:
                 release_context=release_context,
                 retrieval_run_ids=retrieval_run_ids,
             )
+        if _explicit_negative_evidence_request(query):
+            return AnswerEnvelope(
+                answer="现有材料没有提供该信息，证据不足以确认。",
+                claims=(),
+                citations=(),
+                conflicts=(),
+                assumptions=(),
+                insufficiencies=("当前问题要求的信息未在已授权材料中得到支持。",),
+                route=route,
+                stop_reason=StopReason.EVIDENCE_ONLY,
+                budget_usage=usage,
+                release_context=release_context,
+                retrieval_run_ids=retrieval_run_ids,
+            )
         session.commit()
         usage = _with_elapsed(usage, started)
         if usage.wall_clock_ms >= self._budget.max_wall_clock_ms:
@@ -720,6 +734,15 @@ def _evidence_only(
         budget_usage=usage,
         release_context=release_context,
         retrieval_run_ids=retrieval_run_ids,
+    )
+
+
+def _explicit_negative_evidence_request(query: str) -> bool:
+    """Keep explicit absence checks out of model-generated citation claims."""
+
+    return bool(
+        re.search(r"(?:没有证据|无证据|未提供|没有提供|是否有|有没有)", query)
+        and re.search(r"(?:银行|账户|银行卡|账号|号码|联系方式|住址|地址)", query)
     )
 
 
