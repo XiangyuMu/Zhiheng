@@ -90,3 +90,21 @@ def test_submission_cannot_extend_readiness_budget(
     assert warmup_module.warmup(tmp_path / "compose.yml", tmp_path, 1) == 1
     probe.assert_not_called()
     assert json.loads((tmp_path / "warmup.json").read_text())["status"] == "timeout"
+
+
+def test_diagnostics_resolves_compose_path_after_f_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compose_file = tmp_path / "compose.yml"
+    compose_file.write_text("services: {}\n")
+    monkeypatch.setattr(
+        warmup_module,
+        "_capture_json_command",
+        lambda command, timeout=10: {"status": "captured", "data": []},
+    )
+    monkeypatch.setattr(warmup_module, "_container_ids", lambda compose: {})
+    diagnostics = warmup_module._collect_diagnostics(
+        ["docker", "compose", "-f", str(compose_file), "--profile", "pdf"]
+    )
+    assert diagnostics["docker_compose_images"]["status"] == "captured"
+    assert diagnostics["docker_compose_ps"]["status"] == "captured"
