@@ -224,8 +224,8 @@ class AnswerResponse(BaseModel):
         exclude_if=lambda value: not value,
     )
     context_prompts: list[dict[str, Any]] = Field(default_factory=list)
-    answer_provider_id: str | None = None
-    answer_model_id: str | None = None
+    answer_provider_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    answer_model_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class LookupResponse(BaseModel):
