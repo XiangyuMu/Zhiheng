@@ -120,7 +120,13 @@ class PdfRepository:
         row = (
             session.execute(
                 text(
-                    "SELECT id, evidence_object_id, backend, options_hash FROM pdf_tasks WHERE id = :id"
+                    """
+                    SELECT t.id, t.evidence_object_id, t.backend, t.options_hash,
+                           eo.object_uri AS source_uri, eo.sha256 AS source_sha256
+                    FROM pdf_tasks t
+                    JOIN evidence_objects eo ON eo.id = t.evidence_object_id
+                    WHERE t.id = :id
+                    """
                 ),
                 {"id": task_id},
             )
@@ -145,6 +151,8 @@ class PdfRepository:
                     {
                         "task_id": task_id,
                         "evidence_object_id": str(row["evidence_object_id"]),
+                        "source_uri": str(row["source_uri"]),
+                        "source_sha256": str(row["source_sha256"]),
                         "backend": str(row["backend"]),
                         "options_hash": str(row["options_hash"]),
                         "output_prefix": f"artifact://pdf-attempts/{task_id}",

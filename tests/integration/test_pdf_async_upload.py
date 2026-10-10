@@ -251,9 +251,29 @@ def test_pdf_parser_failure_is_projected_to_retryable_task_status(tmp_path: Path
     assert body["state"] == "failed"
     assert body["error_code"] == "parser_unavailable"
     assert body["retryable"] is True
+    retry = client.post(
+        f"/v1/knowledge/pdf-imports/{task['task_id']}/retry",
+        headers={**_headers(csrf, "pdf-parser-retry"), "If-Match": body["etag"]},
+    )
+    assert retry.status_code == 200
+    with session_scope(session_factory) as session:
+        retry_payload = json.loads(
+            session.execute(
+                text(
+                    "SELECT payload_json FROM outbox_events "
+                    "WHERE aggregate_id=:task_id ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"task_id": task["task_id"]},
+            ).scalar_one()
+        )
+    assert retry_payload["source_uri"].startswith("file:")
+    assert retry_payload["source_sha256"] == task["source_sha256"]
 
 
-def test_pdf_index_failure_is_projected_after_parse(tmp_path: Path) -> None:
+def test_pdf_index_worker_exception_is_projected_after_parse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client, session_factory = _client(tmp_path)
     csrf = _login(client)
     response = client.post(
@@ -273,8 +293,10 @@ def test_pdf_index_failure_is_projected_after_parse(tmp_path: Path) -> None:
         session.execute(
             text(
                 """
-                INSERT INTO jobs (id, job_type, idempotency_key, payload_json, status, attempts)
-                VALUES (:id, 'knowledge.index', :key, :payload, 'failed', 1)
+                INSERT INTO jobs (
+                  id, job_type, idempotency_key, payload_json, status, max_attempts
+                )
+                VALUES (:id, 'knowledge.index', :key, :payload, 'pending', 1)
                 """
             ),
             {
@@ -283,28 +305,64 @@ def test_pdf_index_failure_is_projected_after_parse(tmp_path: Path) -> None:
                 "payload": json.dumps(
                     {
                         "task_id": task["task_id"],
-                        "failure_code": "embedding_unavailable",
-                        "failure_stage": "index",
-                        "retryable": True,
+                        "knowledge_object_id": "missing-index-object",
                     }
                 ),
             },
         )
-        session.execute(
-            text(
-                "INSERT INTO job_attempts (id, job_id, status, error_class, error_message) "
-                "VALUES (:id, :job_id, 'failed', 'EmbeddingError', 'embedding unavailable')"
-            ),
-            {"id": new_id(), "job_id": job_id},
+
+    def fail_index(*_: object) -> None:
+        raise RuntimeError("vector writer exploded")
+
+    executor = KnowledgeIndexJobExecutor(Settings(environment="test"))
+    monkeypatch.setattr(executor, "execute", fail_index)
+    assert (
+        process_knowledge_jobs_once(
+            session_factory,
+            executor,
+            worker_id="pdf-index-failure-worker",
         )
-    body = client.get(task["status_url"]).json()
+        == 0
+    )
+
+    with session_scope(session_factory) as session:
+        failed_job = (
+            session.execute(
+                text(
+                    """
+                    SELECT status, attempts, max_attempts, payload_json
+                    FROM jobs
+                    WHERE id=:job_id
+                    """
+                ),
+                {"job_id": job_id},
+            )
+            .mappings()
+            .one()
+        )
+    payload = json.loads(failed_job["payload_json"])
+    assert failed_job["status"] == "dead"
+    assert failed_job["attempts"] == 1
+    assert failed_job["max_attempts"] == 1
+    assert payload["failure_code"] == "indexing_failed"
+    assert payload["failure_stage"] == "index"
+    assert payload["retryable"] is False
+
+    status = client.get(task["status_url"])
+    assert status.status_code == 200
+    body = status.json()
     assert body["state"] == "failed"
-    assert body["error_code"] == "embedding_unavailable"
-    assert body["retryable"] is True
+    assert body["error_code"] == "indexing_failed"
+    assert body["retryable"] is False
     history = client.get("/v1/knowledge/import-tasks?task_type=pdf").json()["items"]
     item = next(entry for entry in history if entry["task_id"] == task["task_id"])
-    assert item["status"] == "failed"
-    assert item["failure"]["code"] == "embedding_unavailable"
+    assert item["job_id"] == job_id
+    assert item["status"] == "dead_letter"
+    assert item["attempts"] == 1
+    assert item["max_attempts"] == 1
+    assert item["failure"]["code"] == "indexing_failed"
+    assert item["failure"]["stage"] == "index"
+    assert item["failure"]["retryable"] is False
 
 
 def test_pdf_terminal_parser_failure_preserves_code_after_attempts_are_exhausted(

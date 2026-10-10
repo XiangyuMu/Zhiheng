@@ -441,14 +441,14 @@ def list_import_tasks(
               t.id AS task_id,
               'pdf' AS task_type,
               t.id AS source_id,
-              j.id AS job_id,
+              COALESCE(ij.id, j.id) AS job_id,
               json_extract(eo.source_metadata_json, '$.title') AS title,
               t.state AS source_status,
               COALESCE(ij.status, j.status) AS job_status,
               t.created_at AS created_at,
               t.updated_at AS updated_at,
-              j.attempts AS job_attempts,
-              j.max_attempts AS max_attempts,
+              COALESCE(ij.attempts, j.attempts) AS job_attempts,
+              COALESCE(ij.max_attempts, j.max_attempts) AS max_attempts,
               (
                 SELECT count(*)
                 FROM pdf_pages p

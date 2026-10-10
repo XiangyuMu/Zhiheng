@@ -467,7 +467,7 @@ class KnowledgeJobRepository:
         if job.job_type == KNOWLEDGE_PARSE_PDF_JOB_TYPE:
             payload.update(
                 {
-                    "failure_code": _failure_code_for_job_exception(exc),
+                    "failure_code": _failure_code_for_job_exception(exc, job_type=job.job_type),
                     "failure_stage": "parse",
                     "retryable": True,
                 }
@@ -475,7 +475,7 @@ class KnowledgeJobRepository:
         elif job.job_type == KNOWLEDGE_INDEX_JOB_TYPE:
             payload.update(
                 {
-                    "failure_code": _failure_code_for_job_exception(exc),
+                    "failure_code": _failure_code_for_job_exception(exc, job_type=job.job_type),
                     "failure_stage": "index",
                     "retryable": not terminal,
                 }
@@ -949,7 +949,9 @@ def _json_object(value: Any) -> dict[str, Any]:
     return dict(loaded)
 
 
-def _failure_code_for_job_exception(exc: Exception) -> str:
+def _failure_code_for_job_exception(exc: Exception, *, job_type: str) -> str:
+    if job_type == KNOWLEDGE_INDEX_JOB_TYPE:
+        return "indexing_failed"
     if isinstance(exc, ParserTerminalFailure):
         return exc.failure_code
     name = exc.__class__.__name__
