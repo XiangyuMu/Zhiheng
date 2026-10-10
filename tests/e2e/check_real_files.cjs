@@ -115,6 +115,19 @@ const saveReport = () => fs.writeFileSync(
       if (question.kind !== 'negative' && answer.citations < 1) {
         throw Error(`answer for ${question.kind} has no supporting citation`);
       }
+      const expectedAnswer = expectedPdf?.answers?.find(item => item.kind === question.kind)
+        || expectedPdf?.questions?.find(item => item.kind === question.kind);
+      if (expectedAnswer) {
+        const facts = expectedAnswer.contains || expectedAnswer.answer_contains || expectedAnswer.facts || [];
+        for (const fact of (Array.isArray(facts) ? facts : [facts])) {
+          if (fact && !answer.answer.includes(String(fact))) {
+            throw Error(`answer for ${question.kind} is missing expected fact`);
+          }
+        }
+        if (expectedAnswer.unanswerable === true && answer.citations !== 0) {
+          throw Error(`unanswerable ${question.kind} question returned citations`);
+        }
+      }
       if (process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID && answer.answer_provider_id !== process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID) {
         throw Error(`answer used provider ${answer.answer_provider_id || 'unset'}, expected ${process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID}`);
       }
