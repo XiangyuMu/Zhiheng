@@ -136,6 +136,7 @@ def test_pdf_upload_is_async_idempotent_and_emits_parse_event(tmp_path: Path) ->
         assert event["aggregate_type"] == "pdf_task"
         event_payload = json.loads(event["payload_json"])
         assert event_payload["task_id"] == payload["task_id"]
+        assert event_payload["parser_attempt_id"]
         assert event_payload["evidence_object_id"] == payload["evidence_object_id"]
         assert event_payload["source_sha256"] == payload["source_sha256"]
         assert event_payload["source_uri"].startswith("file://")

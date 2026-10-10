@@ -62,8 +62,8 @@ services:
       ZHIHENG_PDF_MINERU_TOKEN_FILE: /run/secrets/mineru_service_token
     volumes:
       - zhiheng-data:/data
+      - ${DEEPDOC_SERVICE_TOKEN_FILE:-/dev/null}:/run/secrets/deepdoc_service_token:ro
     secrets:
-      - deepdoc_service_token
       - mineru_service_token
     command: ["zhiheng-worker", "--role", "worker"]
     restart: unless-stopped
@@ -92,8 +92,8 @@ services:
       ZHIHENG_PDF_MINERU_TOKEN_FILE: /run/secrets/mineru_service_token
     volumes:
       - zhiheng-data:/data
+      - ${DEEPDOC_SERVICE_TOKEN_FILE:-/dev/null}:/run/secrets/deepdoc_service_token:ro
     secrets:
-      - deepdoc_service_token
       - mineru_service_token
     command: ["zhiheng-worker", "--role", "publisher"]
     restart: unless-stopped
@@ -129,7 +129,7 @@ services:
       mineru-worker:
         condition: service_started
   deepdoc-worker:
-    profiles: ["pdf"]
+    profiles: ["deepdoc"]
     image: deepdoc_oss:local
     build:
       context: ..
@@ -138,8 +138,8 @@ services:
       - "9390"
     environment:
       DEEPDOC_SERVICE_TOKEN_FILE: /run/secrets/deepdoc_service_token
-    secrets:
-      - deepdoc_service_token
+    volumes:
+      - ${DEEPDOC_SERVICE_TOKEN_FILE:-/dev/null}:/run/secrets/deepdoc_service_token:ro
     read_only: true
     cap_drop: ["ALL"]
     security_opt:
@@ -205,7 +205,5 @@ volumes:
   mineru-models:
   mineru-output:
 secrets:
-  deepdoc_service_token:
-    file: ${DEEPDOC_SERVICE_TOKEN_FILE:-../var/secrets/deepdoc_service_token}
   mineru_service_token:
     file: ${MINERU_SERVICE_TOKEN_FILE:-../var/secrets/mineru_service_token}

@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends restic sqlite3 
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY migrations ./migrations
+COPY schemas ./schemas
 COPY scripts ./scripts
 COPY deploy ./deploy
 COPY alembic.ini ./

@@ -85,6 +85,7 @@ class PdfRepository:
             },
         )
         event_id = new_id()
+        parser_attempt_id = new_id()
         session.execute(
             text(
                 """
@@ -102,6 +103,7 @@ class PdfRepository:
                 "payload": json_text(
                     {
                         "task_id": task_id,
+                        "parser_attempt_id": parser_attempt_id,
                         "evidence_object_id": evidence_object_id,
                         "source_uri": source_uri,
                         "source_sha256": source_sha256,
@@ -149,6 +151,7 @@ class PdfRepository:
                 "id": task_id,
                 "payload": json_text(
                     {
+                        "parser_attempt_id": new_id(),
                         "task_id": task_id,
                         "evidence_object_id": str(row["evidence_object_id"]),
                         "source_uri": str(row["source_uri"]),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
@@ -92,6 +93,16 @@ def test_parse_job_submits_polls_loads_and_publishes(monkeypatch: pytest.MonkeyP
     assert sleeps == [0.25]
     parser.load_manifest.assert_called_once()
     repository.persist_manifest.assert_called_once()
+
+
+def test_parser_attempt_id_survives_job_lease_reclaim() -> None:
+    from zhiheng.jobs.pdf_parsing import _request_from_job
+
+    first = _request_from_job(_job())
+    reclaimed = replace(_job(), attempts=2, attempt_id="job-attempt-2")
+    second = _request_from_job(reclaimed)
+    assert first.attempt_id == second.attempt_id == "attempt-1"
+    assert first.output_prefix == second.output_prefix
 
 
 def test_parse_job_rejects_other_job_types_before_network() -> None:
