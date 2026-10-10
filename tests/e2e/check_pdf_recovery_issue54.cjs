@@ -331,7 +331,9 @@ function recordRegressionReferences() {
     await page.locator('#import-submit').click();
     const receipt = await receiptPromise;
     assert.equal(receipt.status(), 202);
-    const receiptBody = await receipt.json();
+    // Read the body before any other browser polling can evict it from the
+    // DevTools response cache.
+    const receiptBody = JSON.parse((await receipt.body()).toString('utf8'));
     assert(receiptBody.task_id && receiptBody.evidence_object_id);
     assert.equal(receiptBody.source_sha256, report.input.sha256);
     report.receipt = {
