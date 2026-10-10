@@ -43,6 +43,7 @@ from zhiheng.knowledge import (
 from zhiheng.knowledge.import_adapters import fetch_web, parse_markdown, parse_ocr
 from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
 from zhiheng.knowledge.pdf_manifest import validate_manifest
+from zhiheng.models.configuration import embedding_route
 from zhiheng.retrieval.qualification import formal_searchable_sql
 
 SESSION_COOKIE = "zhiheng_session"
@@ -1084,6 +1085,13 @@ def get_knowledge_detail(
 ) -> KnowledgeDetailResponse:
     with session_scope(session_factory) as session:
         detail = repository.get_detail(session, knowledge_object_id)
+        if detail is not None and detail.retrieval_generation is not None:
+            route = embedding_route(session)
+            if (
+                route is not None
+                and route.get("model_id") == detail.retrieval_generation.get("model_id")
+            ):
+                detail.retrieval_generation["provider_id"] = route.get("provider_id")
     if detail is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="knowledge not found")
     return KnowledgeDetailResponse(**detail.__dict__)

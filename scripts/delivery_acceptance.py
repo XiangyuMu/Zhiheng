@@ -45,6 +45,8 @@ def clean_environment() -> dict[str, str]:
         "ZHIHENG_RESTART_GATEWAY_IDENTITY_COMMAND",
         "ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID",
         "ZHIHENG_EXPECTED_ANSWER_MODEL_ID",
+        "ZHIHENG_EXPECTED_EMBEDDING_PROVIDER_ID",
+        "ZHIHENG_EXPECTED_EMBEDDING_MODEL_ID",
         "MINERU_PARSER_PROFILE",
         "MINERU_WARMUP_TIMEOUT_SECONDS",
     }:
@@ -68,6 +70,8 @@ def real_pdf_preflight() -> list[str]:
         "ZHIHENG_RESTART_GATEWAY_IDENTITY_COMMAND",
         "ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID",
         "ZHIHENG_EXPECTED_ANSWER_MODEL_ID",
+        "ZHIHENG_EXPECTED_EMBEDDING_PROVIDER_ID",
+        "ZHIHENG_EXPECTED_EMBEDDING_MODEL_ID",
     ]
     code = (
         "import os, pathlib, sys; "
@@ -201,6 +205,10 @@ def main() -> int:
             ["bash", "scripts/mineru_local.sh", "start"],
         ),
         (
+            "parser-health",
+            ["bash", "scripts/mineru_local.sh", "health"],
+        ),
+        (
             "pdf-parse",
             [
                 "node",
@@ -267,6 +275,7 @@ def main() -> int:
             name == "dependencies"
             or name == "real-pdf-preflight"
             or name == "mineru-warmup"
+            or name == "parser-health"
             or name in {"pdf-parse", "pdf-search", "pdf-recovery"}
         ) and result["status"] != "passed":
             break
