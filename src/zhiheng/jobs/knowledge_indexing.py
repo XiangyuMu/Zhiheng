@@ -743,6 +743,7 @@ class KnowledgeIndexJobExecutor:
             vector_repository = VectorIndexRepository()
             generation_id = vector_repository.create_generation(
                 session,
+                provider_id=None if route is None else route["provider_id"],
                 model_id=embedding_model_id,
                 model_revision=embedding_model_revision,
                 dimension=self._settings.embedding_dimension,

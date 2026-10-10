@@ -152,6 +152,50 @@ def test_knowledge_index_job_rebuilds_fts_and_active_vector_generation(
     assert hits
 
 
+def test_index_job_persists_actual_embedding_provider_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings, session_factory = _migrated(tmp_path)
+    fake_embedder = _FakeEmbedder()
+    route = {
+        "provider_id": "provider-siliconflow-a",
+        "provider_kind": "siliconflow",
+        "model_id": "BAAI/bge-m3",
+        "revision": "synthetic-worker-revision",
+        "endpoint_url": "https://api.siliconflow.cn/v1",
+        "endpoint_origin": "https://api.siliconflow.cn",
+        "secret_ref": "env:TEST_EMBEDDING_KEY",
+    }
+    artifacts = stored_text_artifacts(tmp_path, "索引代次必须记录实际 Embedding Provider。")
+
+    with session_scope(session_factory) as session:
+        _ingest(session, artifacts, "索引代次必须记录实际 Embedding Provider。")
+
+    monkeypatch.setattr("zhiheng.jobs.knowledge_indexing.embedding_route", lambda _session: route)
+    assert process_outbox_once(settings) == 1
+    completed = process_knowledge_jobs_once(
+        session_factory,
+        KnowledgeIndexJobExecutor(settings, embedder_factory=lambda: fake_embedder),
+        worker_id="knowledge-worker",
+    )
+
+    with session_scope(session_factory) as session:
+        generation = session.execute(
+            text(
+                """
+                SELECT provider_id, model_id, model_revision, index_status
+                FROM embedding_generations
+                """
+            )
+        ).mappings().one()
+
+    assert completed == 1
+    assert generation["provider_id"] == "provider-siliconflow-a"
+    assert generation["model_id"] == "BAAI/bge-m3"
+    assert generation["model_revision"] == "synthetic-worker-revision"
+    assert generation["index_status"] == "active"
+
+
 def test_index_job_marks_unsupported_without_confirmed_embedding_route(tmp_path: Path) -> None:
     settings, session_factory = _migrated(tmp_path)
     production = settings.model_copy(update={"environment": "production"})

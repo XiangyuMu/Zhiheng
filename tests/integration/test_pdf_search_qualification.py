@@ -186,12 +186,14 @@ def _complete_retrieval_generation(
     session_factory: sessionmaker[Session],
     knowledge_id: str,
     *,
+    provider_id: str | None = None,
     model_revision: str = "issue53-complete",
 ) -> str:
     vector = VectorIndexRepository()
     with session_scope(session_factory) as session:
         generation_id = vector.create_generation(
             session,
+            provider_id=provider_id,
             model_id="test-embedding",
             model_revision=model_revision,
             dimension=2,
@@ -268,6 +270,7 @@ def test_search_and_detail_require_active_generation_and_matching_embeddings(
     detail_payload = detail.json()
     assert detail_payload["searchable"] is True
     assert detail_payload["retrieval_generation"]["id"] == generation_id
+    assert detail_payload["retrieval_generation"]["provider_id"] is None
     assert detail_payload["retrieval_generation"]["model_id"] == "test-embedding"
     assert detail_payload["retrieval_generation"]["model_revision"] == "issue53-complete"
     assert detail_payload["retrieval_generation"]["dimension"] == 2
@@ -283,6 +286,67 @@ def test_search_and_detail_require_active_generation_and_matching_embeddings(
     assert reader.status_code == 200
     assert reader.json()["searchable"] is True
     assert reader.json()["primary_domain_id"] == "technology.ai"
+
+
+def test_knowledge_detail_uses_persisted_embedding_provider_not_current_route(
+    tmp_path: Path,
+) -> None:
+    client, session_factory = _client(tmp_path)
+    _login(client)
+    knowledge_id = _knowledge(session_factory, tmp_path)
+    generation_id = _complete_retrieval_generation(
+        session_factory, knowledge_id, provider_id="provider-siliconflow-a"
+    )
+
+    with session_scope(session_factory) as session:
+        session.execute(
+            text(
+                """
+                INSERT INTO model_provider_configs (
+                  id, provider_kind, display_name, enabled, policy_json,
+                  model_allowlist_json, endpoint_url, endpoint_origin, policy_revision
+                ) VALUES (
+                  'provider-openai-compatible-b', 'openai-compatible', 'Provider B', 1, '{}',
+                  '[\"test-embedding\"]', 'https://example.test/v1',
+                  'https://example.test', 'provider-b-revision'
+                )
+                """
+            )
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO model_provider_models (
+                  id, provider_id, model_id, display_name, source, protocol,
+                  suggested_capabilities_json, confirmed_capabilities_json, enabled, stale
+                ) VALUES (
+                  'provider-b-test-embedding', 'provider-openai-compatible-b',
+                  'test-embedding', 'test-embedding', 'manual', 'embeddings',
+                  '[\"embedding\"]', '[\"embedding\"]', 1, 0
+                )
+                """
+            )
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO model_route_defaults (
+                  id, embedding_provider_id, embedding_model_id, etag
+                ) VALUES (
+                  'embedding-default-provider-b', 'provider-openai-compatible-b',
+                  'test-embedding', 'defaults:provider-b'
+                )
+                """
+            )
+        )
+
+    detail = client.get(f"/v1/knowledge/{knowledge_id}")
+    assert detail.status_code == 200
+    retrieval_generation = detail.json()["retrieval_generation"]
+    assert retrieval_generation["id"] == generation_id
+    assert retrieval_generation["provider_id"] == "provider-siliconflow-a"
+    assert retrieval_generation["model_id"] == "test-embedding"
+    reader = client.get(f"/v1/knowledge/{knowledge_id}/reader")
     assert reader.json()["source_metadata"]["fixture"] == "issue53"
     assert reader.json()["citations"]
 

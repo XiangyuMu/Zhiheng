@@ -73,6 +73,7 @@ function restart(kind, command) {
 
 (async () => {
   let browser;
+  let page;
   try {
     assert(process.env.ZHIHENG_TEST_USERNAME && process.env.ZHIHENG_TEST_PASSWORD, 'Missing credentials');
     assert(process.env.ZHIHENG_RESTART_WORKER_COMMAND, 'Missing Worker restart command');
@@ -82,7 +83,7 @@ function restart(kind, command) {
     assert.equal(report.dirty, false, 'Recovery evidence requires a clean checkout');
     if (process.env.ZHIHENG_EXPECTED_SHA) assert.equal(report.sha, process.env.ZHIHENG_EXPECTED_SHA);
     browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     await page.goto(`${base}/login?next=${encodeURIComponent('/knowledge-agent#library')}`);
     await page.locator('#username').fill(process.env.ZHIHENG_TEST_USERNAME);
     await page.locator('#password').fill(process.env.ZHIHENG_TEST_PASSWORD);
@@ -150,7 +151,7 @@ function restart(kind, command) {
   } catch (error) {
     report.status = 'failed';
     report.failure = String(error.stack || error);
-    if (browser) await browser.pages()[0].screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {});
+    if (page) await page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {});
     process.exitCode = 1;
   } finally {
     report.finished = new Date().toISOString();

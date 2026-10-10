@@ -17,6 +17,7 @@ from zhiheng.retrieval.qualification import formal_searchable_sql
 @dataclass(frozen=True)
 class EmbeddingGeneration:
     id: str
+    provider_id: str | None
     model_id: str
     model_revision: str
     dimension: int
@@ -31,6 +32,7 @@ class QueryEmbeddingPort(Protocol):
         self,
         query: str,
         *,
+        provider_id: str | None = None,
         model_id: str,
         model_revision: str,
         dimension: int,
@@ -164,6 +166,7 @@ class VectorIndexRepository:
         self,
         session: Session,
         *,
+        provider_id: str | None = None,
         model_id: str,
         model_revision: str,
         dimension: int,
@@ -180,15 +183,18 @@ class VectorIndexRepository:
             text(
                 """
                 INSERT INTO embedding_generations (
-                  id, model_id, model_revision, dimension, normalize, index_status, purpose
+                  id, provider_id, model_id, model_revision, dimension, normalize, index_status,
+                  purpose
                 )
                 VALUES (
-                  :id, :model_id, :model_revision, :dimension, :normalize, 'building', :purpose
+                  :id, :provider_id, :model_id, :model_revision, :dimension, :normalize,
+                  'building', :purpose
                 )
                 """
             ),
             {
                 "id": generation_id,
+                "provider_id": provider_id,
                 "model_id": model_id,
                 "model_revision": model_revision,
                 "dimension": dimension,
@@ -508,8 +514,8 @@ class VectorIndexRepository:
                 text(
                     """
                 SELECT
-                  id, model_id, model_revision, dimension, normalize, index_status, purpose,
-                  physical_index_ref
+                  id, provider_id, model_id, model_revision, dimension, normalize, index_status,
+                  purpose, physical_index_ref
                 FROM embedding_generations
                 WHERE id = :generation_id
                 """
@@ -535,8 +541,8 @@ class VectorIndexRepository:
                 text(
                     """
                 SELECT
-                  id, model_id, model_revision, dimension, normalize, index_status, purpose,
-                  physical_index_ref
+                  id, provider_id, model_id, model_revision, dimension, normalize, index_status,
+                  purpose, physical_index_ref
                 FROM embedding_generations
                 WHERE model_id = :model_id
                   AND model_revision = :model_revision
@@ -561,6 +567,7 @@ class VectorIndexRepository:
     def _to_generation(row: RowMapping) -> EmbeddingGeneration:
         return EmbeddingGeneration(
             id=str(row["id"]),
+            provider_id=None if row["provider_id"] is None else str(row["provider_id"]),
             model_id=str(row["model_id"]),
             model_revision=str(row["model_revision"]),
             dimension=int(row["dimension"]),

@@ -1111,7 +1111,7 @@ class KnowledgeRepository:
                 session.execute(
                     text(
                         f"""
-                    SELECT id, model_id, model_revision, dimension, purpose,
+                    SELECT id, provider_id, model_id, model_revision, dimension, purpose,
                            index_status, physical_index_ref, built_count,
                            source_manifest_hash
                     FROM embedding_generations eg
