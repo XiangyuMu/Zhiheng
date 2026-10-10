@@ -297,9 +297,11 @@ def configured_pdf_parse_executor(settings: Settings) -> PdfParseJobExecutor | N
 
 
 def _setting_or_env(settings: Settings, attribute: str, env_name: str) -> str | None:
-    value = getattr(settings, attribute, None)
+    # Runtime process configuration must override development Settings
+    # defaults, notably ``pdf_parser_backend=deepdoc``.
+    value = os.environ.get(env_name)
     if value is None:
-        value = os.environ.get(env_name)
+        value = getattr(settings, attribute, None)
     if value is None:
         return None
     normalized = str(value).strip()
