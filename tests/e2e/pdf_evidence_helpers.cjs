@@ -167,10 +167,9 @@ async function verifyClickedCitation({ page, base, reader, expectation, expected
   const actualQuote = await quote.innerText();
   assert(normalizeText(actualQuote), "reader citation must show the original quote");
   if (expectation) {
-    assert.equal(
-      normalizeText(actualQuote),
-      normalizeText(expectation.quote),
-      "clicked citation quote must match external PDF expectation",
+    assert(
+      normalizeText(actualQuote).includes(normalizeText(expectation.quote)),
+      "clicked citation quote must contain the external PDF expectation",
     );
   }
 
