@@ -10,7 +10,7 @@ uv sync --extra dev --frozen
 uv run ruff check .
 uv run mypy src tests
 run_id="$(date +%Y%m%d-%H%M%S)-$$"
-uv run python scripts/pytest_delivery_gate.py --output "$HOME/.local/share/zhiheng-pytest-evidence/$run_id" --timeout 7200
+uv run python scripts/pytest_delivery_gate.py --output "$HOME/.local/share/zhiheng-pytest-evidence/$run_id" --timeout 900 --natural-completion
 ```
 
 每次使用一个尚不存在、位于检出目录之外的输出目录；脚本会创建该目录及其父目录，
@@ -18,6 +18,11 @@ uv run python scripts/pytest_delivery_gate.py --output "$HOME/.local/share/zhihe
 依赖版本、耗时、退出码及工作树状态写入 `evidence.json`；`pytest.log` 和
 `pytest.xml` 保留完整输出及 JUnit 结果。超时或中断属于不完整执行，不能认定
 未执行的测试通过，也不能把测试耗时直接当作功能故障。
+
+使用 `--natural-completion` 时不因超过预算终止 pytest。`status` 表示功能结果，
+`budget_seconds` 与 `budget_status` 独立记录 900 秒预算；功能通过但预算超出
+不代表原耗时门禁通过。统一采集脚本自动采用自然完成模式，并在顶层记录
+`pytest_budget_status`；MinerU 预热保留独立的 1800 秒限额。
 
 失败所在测试文件仅表示功能分组，不自动证明根因。依据失败详情、单独复现和
 调用链确认根因后，在交付报告记录：首个失败、全部失败节点、复现命令、根因、
@@ -39,7 +44,7 @@ CI 上传与提交绑定的 `pytest-delivery` artifact，即使测试失败也�
 release_sha=$(git rev-parse HEAD)
 uv run python scripts/delivery_acceptance.py \
   --output "$HOME/.local/share/zhiheng-delivery/evidence-${release_sha}" \
-  --timeout 7200
+  --timeout 900
 ```
 
 在其他机器将输出根目录替换为自己的持久目录；每次运行使用全新的目录。

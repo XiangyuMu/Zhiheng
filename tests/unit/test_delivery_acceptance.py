@@ -60,3 +60,13 @@ def test_collector_bounds_hung_step(tmp_path: Path) -> None:
     )
     assert result["status"] == "timeout"
     assert result["seconds"] < 10
+
+
+@pytest.mark.parametrize("profile,backend", [("pdf", "mineru"), ("deepdoc", "deepdoc")])
+def test_parser_profile_maps_to_supported_application_backend(profile: str, backend: str) -> None:
+    assert collector().parser_backend(profile) == backend
+
+
+def test_unknown_parser_profile_is_rejected() -> None:
+    with pytest.raises(ValueError, match="parser profile"):
+        collector().parser_backend("unknown")

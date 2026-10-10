@@ -21,6 +21,13 @@ def git(repo: Path, *args: str) -> str:
     return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
 
 
+def parser_backend(profile: str) -> str:
+    backends = {"pdf": "mineru", "deepdoc": "deepdoc"}
+    if profile not in backends:
+        raise ValueError("parser profile must be pdf or deepdoc")
+    return backends[profile]
+
+
 def clean_environment() -> dict[str, str]:
     # Never inherit production storage, credentials, pytest selectors or local import paths.
     cleaned = {
@@ -89,7 +96,7 @@ def execute(
     output: Path,
     name: str,
     command: list[str],
-    timeout: float,
+    timeout: float | None,
     env: dict[str, str],
 ) -> dict[str, Any]:
     started = time.monotonic()
@@ -155,7 +162,7 @@ def main() -> int:
     env["ZHIHENG_EXPECTED_SHA"] = sha
     env["ZHIHENG_EVIDENCE_DIR"] = str(output)
     env["MINERU_DIAGNOSTIC_DIR"] = str(output / "mineru-warmup")
-    env["ZHIHENG_PDF_PARSER_BACKEND"] = env.get("MINERU_PARSER_PROFILE", "pdf")
+    env["ZHIHENG_PDF_PARSER_BACKEND"] = parser_backend(env.get("MINERU_PARSER_PROFILE", "pdf"))
     report: dict[str, Any] = {
         "sha": sha,
         "status": "running",
@@ -196,6 +203,7 @@ def main() -> int:
                 str(output / "pytest"),
                 "--timeout",
                 str(args.timeout),
+                "--natural-completion",
             ],
         ),
         ("browser", ["bash", "scripts/browser_acceptance.sh"]),
@@ -268,7 +276,10 @@ def main() -> int:
     ]
     for name, command in steps:
         print(f"Running {name} for {sha}", flush=True)
-        result = execute(repo, output, name, command, args.timeout + 30, env)
+        timeout = (
+            None if name == "pytest" else 1830 if name == "mineru-warmup" else args.timeout + 30
+        )
+        result = execute(repo, output, name, command, timeout, env)
         report["steps"].append(result)
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         if (
@@ -295,6 +306,7 @@ def main() -> int:
     if pytest_evidence.exists():
         evidence = json.loads(pytest_evidence.read_text())
         report["skips"] = evidence.get("skips", [])
+        report["pytest_budget_status"] = evidence.get("budget_status", "unknown")
         if report["skips"] or evidence.get("sha") != sha or evidence.get("status") != "passed":
             report["status"] = "failed"
     else:

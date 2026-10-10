@@ -155,8 +155,7 @@ def test_gate_retains_setup_failure_from_incremental_outcomes(tmp_path: Path) ->
     assert evidence["status"] == "failed"
     assert evidence["incremental_outcomes"]["first_failure"]["when"] == "setup"
     assert (
-        "setup evidence survives"
-        in evidence["incremental_outcomes"]["first_failure"]["longrepr"]
+        "setup evidence survives" in evidence["incremental_outcomes"]["first_failure"]["longrepr"]
     )
     assert evidence["failure_details"][0]["kind"] == "error"
 
@@ -232,3 +231,36 @@ def run_gate(repo: Path, output: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+def test_natural_completion_preserves_results_after_budget_expires(tmp_path: Path) -> None:
+    repo = tiny_repo(tmp_path)
+    module = load_gate_module()
+    for filename in set(module.REQUIRED.values()):
+        (repo / "tests/integration" / filename).write_text("def test_pass():\n    assert True\n")
+    commit_all(repo)
+    output = tmp_path / "natural-evidence"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--output",
+            str(output),
+            "--timeout",
+            "0.001",
+            "--natural-completion",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    evidence = json.loads((output / "evidence.json").read_text())
+    assert evidence["termination"] == "completed"
+    assert evidence["status"] == "passed"
+    assert evidence["budget_status"] == "exceeded"
+    assert evidence["timeout_seconds"] is None
+    assert evidence["budget_seconds"] == 0.001

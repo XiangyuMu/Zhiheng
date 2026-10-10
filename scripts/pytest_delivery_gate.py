@@ -33,9 +33,7 @@ REQUIRED = {
 
 def _module_path_from_dotted(value: str) -> str:
     parts = value.split(".")
-    boundary = next(
-        (i for i, part in enumerate(parts) if part.startswith("test_")), len(parts) - 1
-    )
+    boundary = next((i for i, part in enumerate(parts) if part.startswith("test_")), len(parts) - 1)
     return "/".join(parts[: boundary + 1]) + ".py"
 
 
@@ -51,9 +49,7 @@ def _node_from_case(case: ET.Element) -> str:
     if classname == name:
         return name
     parts = classname.split(".")
-    boundary = next(
-        (i for i, part in enumerate(parts) if part.startswith("test_")), len(parts) - 1
-    )
+    boundary = next((i for i, part in enumerate(parts) if part.startswith("test_")), len(parts) - 1)
     filename = _module_path_from_dotted(classname)
     remaining = parts[boundary + 1 :]
     return "::".join([filename, *remaining, name])
@@ -256,6 +252,11 @@ def main() -> int:
     parser.add_argument(
         "--timeout", type=float, default=900, help="Full-suite seconds (default 900)"
     )
+    parser.add_argument(
+        "--natural-completion",
+        action="store_true",
+        help="Wait for pytest to finish; report --timeout as a separate time budget",
+    )
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be a finite positive number")
@@ -313,7 +314,8 @@ def main() -> int:
         "python": platform.python_version(),
         "platform": platform.platform(),
         "versions": versions,
-        "timeout_seconds": args.timeout,
+        "timeout_seconds": None if args.natural_completion else args.timeout,
+        "budget_seconds": args.timeout,
         "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "clean_before": True,
         "status": "failed",
@@ -325,7 +327,7 @@ def main() -> int:
             command, cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
         )
         try:
-            process.wait(timeout=args.timeout)
+            process.wait(timeout=None if args.natural_completion else args.timeout)
         except subprocess.TimeoutExpired:
             evidence["termination"] = "timeout"
             terminate_group(process)
@@ -333,6 +335,7 @@ def main() -> int:
             evidence["termination"] = "interrupted"
             terminate_group(process)
     evidence["elapsed_seconds"] = round(time.monotonic() - start, 3)
+    evidence["budget_status"] = "met" if evidence["elapsed_seconds"] <= args.timeout else "exceeded"
     evidence["exit_code"] = process.returncode
     evidence["clean_after"] = not bool(git(repo, "status", "--porcelain", "--untracked-files=all"))
     log_text = (output / "pytest.log").read_text(encoding="utf-8", errors="replace")
