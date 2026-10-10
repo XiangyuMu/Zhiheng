@@ -107,11 +107,13 @@ class _Model:
         *,
         fail: BaseException | None = None,
         answer: str = "有证据支持的回答",
+        insufficiencies: tuple[str, ...] = (),
         output_tokens: int = 7,
     ) -> None:
         self.citation_id = citation_id
         self.fail = fail
         self.answer = answer
+        self.insufficiencies = insufficiencies
         self.output_tokens = output_tokens
         self.calls = 0
         self.manifests: list[AuthorizedContextManifest] = []
@@ -141,6 +143,7 @@ class _Model:
         return GeneratedAnswer(
             answer=self.answer,
             claims=(AnswerClaim(text="正式知识库证据", citation_ids=(citation_id,)),),
+            insufficiencies=self.insufficiencies,
             output_tokens=self.output_tokens,
         )
 
@@ -417,6 +420,24 @@ def test_manifest_validation_failure_is_evidence_only() -> None:
 
     assert answer.stop_reason is StopReason.CITATION_VALIDATION_FAILED
     assert answer.claims == ()
+
+
+def test_explicit_insufficient_answer_does_not_expose_retrieved_citations() -> None:
+    service = BoundedAgenticRagService(
+        structured_lookup=_Lookup(),
+        hybrid_retrieval=_Hybrid([_manifest()]),
+        evidence_verifier=_Verifier(),
+        model_gateway=_Model(
+            answer="没有足够证据回答。",
+            insufficiencies=("证据不足。",),
+        ),
+    )
+
+    answer = service.answer(QuerySessionStub(), "query", route=QueryRoute.HYBRID)  # type: ignore[arg-type]
+
+    assert answer.stop_reason is StopReason.COMPLETED
+    assert answer.claims == ()
+    assert answer.citations == ()
 
 
 def test_agentic_service_exposes_no_external_action_ports() -> None:

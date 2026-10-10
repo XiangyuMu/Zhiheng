@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -527,10 +528,22 @@ class BoundedAgenticRagService:
                 release_context=release_context,
                 retrieval_run_ids=retrieval_run_ids,
             )
-        cited_ids = {key for claim in generated.claims for key in claim.citation_ids}
+        declares_insufficient = bool(
+            generated.insufficiencies
+            and re.search(
+                r"没有|不足|无法|未提供|未找到|no evidence|insufficient",
+                generated.answer,
+                re.I,
+            )
+        )
+        cited_ids = (
+            set()
+            if declares_insufficient
+            else {key for claim in generated.claims for key in claim.citation_ids}
+        )
         return AnswerEnvelope(
             answer=generated.answer,
-            claims=generated.claims,
+            claims=() if declares_insufficient else generated.claims,
             citations=tuple(
                 citation for citation in citations if citation.citation_id in cited_ids
             ),
