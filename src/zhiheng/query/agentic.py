@@ -527,10 +527,13 @@ class BoundedAgenticRagService:
                 release_context=release_context,
                 retrieval_run_ids=retrieval_run_ids,
             )
+        cited_ids = {key for claim in generated.claims for key in claim.citation_ids}
         return AnswerEnvelope(
             answer=generated.answer,
             claims=generated.claims,
-            citations=citations,
+            citations=tuple(
+                citation for citation in citations if citation.citation_id in cited_ids
+            ),
             conflicts=generated.conflicts,
             assumptions=generated.assumptions,
             insufficiencies=generated.insufficiencies,

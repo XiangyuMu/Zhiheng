@@ -13,7 +13,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from zhiheng.core.config import Settings
 from zhiheng.db.session import session_scope
 from zhiheng.jobs.knowledge_indexing import ClaimedKnowledgeJob
-from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
+from zhiheng.knowledge.object_store import (
+    StoredBinaryArtifact,
+    knowledge_object_store_for_settings,
+)
 from zhiheng.knowledge.pdf_publication import (
     PdfManifestRepository,
     PdfPublicationResult,
@@ -22,6 +25,7 @@ from zhiheng.knowledge.pdf_publication import (
 )
 from zhiheng.knowledge.pdf_repository import PdfRepository
 from zhiheng.knowledge.pdf_worker import (
+    ParserManifestReference,
     ParserParseRequest,
     ParserProtocolError,
     ParserStatus,
@@ -35,6 +39,10 @@ KNOWLEDGE_PARSE_PDF_JOB_TYPE = "knowledge.parse_pdf"
 
 class ControlledObjectStore(Protocol):
     def read_bytes(self, uri: str) -> bytes: ...
+
+    def write_binary_artifact(
+        self, body: bytes, *, namespace: str = "source"
+    ) -> StoredBinaryArtifact: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,10 +121,13 @@ class PdfParseJobExecutor:
         if parser_status.manifest is None:
             raise ParserProtocolError("terminal parser status did not include manifest")
 
-        manifest = parser_client.load_manifest(
+        loaded_manifest = parser_client.load_manifest_with_reference(
             parser_status.manifest,
             read_bytes=self._object_store.read_bytes,
+            write_bytes=self._write_canonical_manifest,
         )
+        manifest = loaded_manifest.manifest
+        manifest_reference = loaded_manifest.reference
         repository = self._repository or PdfRepository()
         with session_scope(session_factory) as session:
             _assert_current_lease(session, job)
@@ -124,10 +135,14 @@ class PdfParseJobExecutor:
                 session,
                 repository,
                 manifest,
-                manifest_uri=parser_status.manifest.uri,
-                manifest_sha256=parser_status.manifest.sha256,
+                manifest_uri=manifest_reference.uri,
+                manifest_sha256=manifest_reference.sha256,
             )
         return PdfParseJobResult(publication=publication, parser_state=parser_status.state)
+
+    def _write_canonical_manifest(self, body: bytes) -> ParserManifestReference:
+        artifact = self._object_store.write_binary_artifact(body, namespace="manifests")
+        return ParserManifestReference(uri=artifact.uri, sha256=artifact.sha256)
 
     def _client_for_request(self, request: ParserParseRequest) -> ParserWorkerClient:
         client = self._client_for_backend(request.backend)

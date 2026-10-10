@@ -863,7 +863,7 @@ def _ensure_query_services(app: Any, *, eager_answer_model: bool = False) -> Non
             hybrid_retrieval=app.state.hybrid_retriever,
             evidence_verifier=app.state.evidence_verifier,
             model_gateway=app.state.answer_model,
-            budget=AgenticBudget(),
+            budget=AgenticBudget(max_wall_clock_ms=settings.answer_max_wall_clock_ms),
             memory_context_service=app.state.memory_context_service,
         )
     if not hasattr(app.state, "query_answer_service"):

@@ -3,10 +3,12 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const { chromium } = require("playwright");
 
 const {
   initializeEvidence,
   loadExpectation,
+  revealReaderCitations,
 } = require("./pdf_evidence_helpers.cjs");
 
 test("initializeEvidence creates a new output directory and report without overwrite", () => {
@@ -48,4 +50,28 @@ test("loadExpectation requires an expectation bound to the input PDF digest", ()
     () => loadExpectation(expectationPath, "b".repeat(64)),
     /bound to the input PDF SHA/,
   );
+});
+
+test("revealReaderCitations opens collapsed reader citation details", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <dialog id="knowledge-detail" open>
+        <details class="supplementary">
+          <summary>原文定位信息</summary>
+          <ul>
+            <li><button type="button" data-reader-citation="true">第 1 页</button></li>
+          </ul>
+        </details>
+      </dialog>
+    `);
+    assert.equal(await page.locator('[data-reader-citation="true"]').isVisible(), false);
+    const citations = await revealReaderCitations(page);
+    await citations.first().waitFor({ state: "visible", timeout: 5_000 });
+    assert.equal(await citations.count(), 1);
+    assert.equal(await page.locator("#knowledge-detail details.supplementary").evaluate((node) => node.open), true);
+  } finally {
+    await browser.close();
+  }
 });

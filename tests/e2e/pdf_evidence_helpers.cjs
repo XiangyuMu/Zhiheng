@@ -137,7 +137,7 @@ function sanitizedExpectation(expectation, localPdfCheck) {
 }
 
 async function verifyClickedCitation({ page, base, reader, expectation, expectedPdfSha }) {
-  const citations = page.locator('[data-reader-citation="true"]');
+  const citations = await revealReaderCitations(page);
   await citations.first().waitFor({ state: "visible", timeout: 20_000 });
   const citationCount = await citations.count();
   let selected = citations.first();
@@ -201,11 +201,23 @@ async function verifyClickedCitation({ page, base, reader, expectation, expected
   };
 }
 
+async function revealReaderCitations(page) {
+  await page.locator("#knowledge-detail").waitFor({ state: "visible", timeout: 20_000 });
+  const citationPanel = page.locator("#knowledge-detail details.supplementary").first();
+  if ((await citationPanel.count()) > 0) {
+    await citationPanel.evaluate((node) => {
+      node.open = true;
+    });
+  }
+  return page.locator('#knowledge-detail [data-reader-citation="true"]');
+}
+
 module.exports = {
   initializeEvidence,
   loadExpectation,
   normalizeText,
   privateTextProof,
+  revealReaderCitations,
   sanitizedExpectation,
   sha256Buffer,
   sha256File,

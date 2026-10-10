@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,7 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from zhiheng.core.config import Settings
-from zhiheng.core.ids import json_text, new_id, sha256_text
+from zhiheng.core.ids import json_text, new_id
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
 from zhiheng.jobs.knowledge_indexing import (
     ClaimedKnowledgeJob,
@@ -19,6 +20,7 @@ from zhiheng.jobs.knowledge_indexing import (
 )
 from zhiheng.jobs.outbox import OutboxRepository
 from zhiheng.jobs.pdf_parsing import PdfParseJobExecutor
+from zhiheng.knowledge.object_store import StoredBinaryArtifact
 from zhiheng.knowledge.pdf_worker import (
     ParserManifestReference,
     ParserReceipt,
@@ -168,58 +170,26 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
             },
         )
 
-    manifest: dict[str, object] = {
-        "schema_version": "pdf-parser.manifest.v1",
-        "task_id": task_id,
-        "source": {
+    native_content_list = [
+        {"type": "text", "text": "hello", "bbox": [0, 0, 100, 20], "page_idx": 0}
+    ]
+    native_payload = {
+        "content_list": native_content_list,
+        "metadata": {
+            "task_id": task_id,
             "evidence_object_id": evidence_id,
-            "uri": "artifact://evidence/source.pdf",
-            "sha256": source_sha256,
-        },
-        "parser": {
-            "backend": "deepdoc",
-            "version": "test",
+            "source_uri": "artifact://evidence/source.pdf",
+            "source_sha256": source_sha256,
             "attempt_id": "attempt-1",
+            "version": "mineru-fixture",
         },
-        "pages": [
-            {
-                "page_no": 1,
-                "width": 200,
-                "height": 100,
-                "rotation": 0,
-                "crop_box": [0, 0, 200, 100],
-                "user_unit": 1,
-                "render": None,
-                "status": "parsed",
-            }
-        ],
-        "blocks": [
-            {
-                "key": "body-1",
-                "page_no": 1,
-                "region_type": "paragraph",
-                "reading_order": 0,
-                "bbox": [0, 0, 100, 20],
-                "raw_bbox": [0, 0, 100, 20],
-                "raw_space": "pdf_bottom_left",
-                "transform_version": "pdf-crop-rotate-v1",
-                "text": "hello",
-                "quote_hash": sha256_text("hello"),
-                "confidence": None,
-                "status": "formal",
-                "parent_key": None,
-                "text_source": "text_layer",
-            }
-        ],
-        "tables": [],
-        "images": [],
-        "diagnostics": [],
-        "artifacts": [],
     }
+    native_body = json.dumps(native_payload).encode("utf-8")
+    native_digest = hashlib.sha256(native_body).hexdigest()
 
     class _Parser(ParserWorkerClient):
         def __init__(self) -> None:
-            pass
+            self._allowed_uri_schemes = frozenset({"artifact", "file"})
 
         def submit(self, request: object) -> ParserReceipt:
             return ParserReceipt("attempt-1", "accepted")
@@ -228,25 +198,35 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
             return ParserStatus(
                 "attempt-1",
                 "succeeded",
-                ParserManifestReference("artifact://manifests/attempt-1.json", "d" * 64),
+                ParserManifestReference("artifact://manifests/attempt-1.raw.json", native_digest),
                 None,
             )
 
-        def load_manifest(
-            self, reference: ParserManifestReference, *, read_bytes: Callable[[str], bytes]
-        ) -> dict[str, object]:
-            return manifest
-
     class _Store:
-        def read_bytes(self, _uri: str) -> bytes:
-            return b"unused"
+        def __init__(self) -> None:
+            self.written: dict[str, bytes] = {}
+
+        def read_bytes(self, uri: str) -> bytes:
+            if uri == "artifact://manifests/attempt-1.raw.json":
+                return native_body
+            return self.written[uri]
+
+        def write_binary_artifact(
+            self, body: bytes, *, namespace: str = "source"
+        ) -> StoredBinaryArtifact:
+            digest = hashlib.sha256(body).hexdigest()
+            uri = f"file:///objects/{namespace}/{digest}.bin"
+            self.written[uri] = body
+            return StoredBinaryArtifact(uri=uri, sha256=digest, byte_size=len(body))
+
+    store = _Store()
 
     with session_scope(session_factory) as session:
         claimed = OutboxRepository().claim_pending(session, limit=10)
         assert claimed == []
 
     parse_executor = PdfParseJobExecutor(
-        _Parser(), object_store=_Store(), poll_interval_seconds=0, sleep=lambda _: None
+        _Parser(), object_store=store, poll_interval_seconds=0, sleep=lambda _: None
     )
     index_executor = _RecordingExecutor(
         KnowledgeIndexResult(fts_indexed=0, vector_indexed=0, generation_id="generation-1")
@@ -263,12 +243,12 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
         state = session.execute(
             text(
                 """
-                SELECT j.status, a.status, COUNT(b.id)
+                SELECT j.status, a.status, COUNT(b.id), a.manifest_uri, a.manifest_sha256
                 FROM jobs j
                 JOIN pdf_parse_attempts a ON a.task_id = :task_id
                 LEFT JOIN evidence_blocks b ON b.attempt_id = a.id
                 WHERE j.job_type = 'knowledge.parse_pdf'
-                GROUP BY j.status, a.status
+                GROUP BY j.status, a.status, a.manifest_uri, a.manifest_sha256
                 """
             ),
             {"task_id": task_id},
@@ -284,7 +264,7 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
         ).one()
         materialized = session.execute(
             text("""
-                SELECT ko.id, kv.id, c.id, c.raw_text, cs.page_no
+                SELECT ko.id, kv.id, c.id, c.raw_text, cs.page_no, cv.text_artifact_uri
                 FROM knowledge_objects ko
                 JOIN knowledge_versions kv ON kv.id=ko.current_version_id
                 JOIN chunks c ON c.source_id=ko.id AND c.source_version_id=kv.id
@@ -296,9 +276,17 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
         ).one()
 
     assert completed == 1
-    assert state == ("completed", "succeeded", 1)
+    assert state[0:3] == ("completed", "succeeded", 1)
+    canonical_uri = str(state[3])
+    canonical_sha256 = str(state[4])
+    assert canonical_uri.startswith("file:///objects/manifests/")
+    assert canonical_uri in store.written
+    assert hashlib.sha256(store.written[canonical_uri]).hexdigest() == canonical_sha256
+    persisted_manifest = json.loads(store.written[canonical_uri])
+    assert persisted_manifest["schema_version"] == "pdf-parser.manifest.v1"
+    assert "content_list" not in persisted_manifest
     assert index_event[0:3] == ("knowledge.index", "pdf_parse_attempt", "attempt-1")
-    assert materialized[3:] == ("hello", 1)
+    assert materialized[3:] == ("hello", 1, canonical_uri)
     assert materialized[0] in str(index_event[3])
 
 

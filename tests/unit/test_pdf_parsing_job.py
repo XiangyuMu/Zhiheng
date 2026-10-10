@@ -10,6 +10,7 @@ import zhiheng.jobs.pdf_parsing as pdf_parsing
 from zhiheng.jobs.knowledge_indexing import ClaimedKnowledgeJob
 from zhiheng.jobs.pdf_parsing import PdfParseJobExecutor
 from zhiheng.knowledge.pdf_worker import (
+    LoadedParserManifest,
     ParserManifestReference,
     ParserParseRequest,
     ParserReceipt,
@@ -57,7 +58,7 @@ def test_parse_job_submits_polls_loads_and_publishes(monkeypatch: pytest.MonkeyP
             None,
         ),
     ]
-    parser.load_manifest.return_value = {
+    manifest = {
         "schema_version": "pdf-parser.manifest.v1",
         "task_id": "task-1",
         "source": {"evidence_object_id": "evidence-1"},
@@ -67,6 +68,10 @@ def test_parse_job_submits_polls_loads_and_publishes(monkeypatch: pytest.MonkeyP
         "manifest_uri": "file:///objects/manifest.json",
         "manifest_sha256": "c" * 64,
     }
+    parser.load_manifest_with_reference.return_value = LoadedParserManifest(
+        manifest,
+        ParserManifestReference("file:///objects/manifest.json", "c" * 64),
+    )
     repository = Mock()
     repository.persist_manifest.return_value = "attempt-1"
     session = Mock()
@@ -91,7 +96,7 @@ def test_parse_job_submits_polls_loads_and_publishes(monkeypatch: pytest.MonkeyP
     parser.submit.assert_called_once()
     assert parser.status.call_count == 2
     assert sleeps == [0.25]
-    parser.load_manifest.assert_called_once()
+    parser.load_manifest_with_reference.assert_called_once()
     repository.persist_manifest.assert_called_once()
     persisted_kwargs = repository.persist_manifest.call_args.kwargs
     assert persisted_kwargs["manifest_uri"] == "file:///objects/manifest.json"
@@ -161,7 +166,7 @@ def test_explicit_deepdoc_failure_falls_back_to_mineru_when_mineru_is_primary(
         ParserManifestReference("file:///objects/mineru-manifest.json", "d" * 64),
         None,
     )
-    mineru.load_manifest.return_value = {
+    manifest = {
         "schema_version": "pdf-parser.manifest.v1",
         "task_id": "task-1",
         "source": {"evidence_object_id": "evidence-1"},
@@ -171,6 +176,10 @@ def test_explicit_deepdoc_failure_falls_back_to_mineru_when_mineru_is_primary(
         "manifest_uri": "file:///objects/mineru-manifest.json",
         "manifest_sha256": "d" * 64,
     }
+    mineru.load_manifest_with_reference.return_value = LoadedParserManifest(
+        manifest,
+        ParserManifestReference("file:///objects/mineru-manifest.json", "d" * 64),
+    )
     deepdoc = Mock()
     deepdoc.submit.return_value = ParserReceipt("attempt-1", "accepted")
     deepdoc.status.return_value = ParserStatus(
@@ -203,7 +212,7 @@ def test_explicit_deepdoc_failure_falls_back_to_mineru_when_mineru_is_primary(
     submitted = mineru.submit.call_args.args[0]
     assert submitted.backend == "mineru"
     assert submitted.attempt_id == "attempt-1:mineru"
-    mineru.load_manifest.assert_called_once()
+    mineru.load_manifest_with_reference.assert_called_once()
 
 
 def test_parse_job_terminal_failure_preserves_parser_failure_code() -> None:

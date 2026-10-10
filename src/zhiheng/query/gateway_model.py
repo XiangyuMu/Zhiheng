@@ -12,7 +12,7 @@ from zhiheng.query.contracts import AnswerClaim, GeneratedAnswer, Personalizatio
 from zhiheng.retrieval.citations import CitationBuilder
 from zhiheng.retrieval.contracts import AuthorizedContextManifest, Citation
 
-_PROMPT_VERSION = "gateway-answer-model-v3"
+_PROMPT_VERSION = "gateway-answer-model-v4"
 _ALLOWED_SENSITIVITY_LEVELS = {"public", "private", "sensitive", "highly_sensitive"}
 _LOCAL_ONLY_SENSITIVITY_LEVELS = {"sensitive", "highly_sensitive"}
 
@@ -130,15 +130,8 @@ def _canonical_prompt(
         ],
         "KNOWLEDGE_EVIDENCE": [
             {
-                "chunk_id": chunk.chunk_id,
                 "citation_ids": citation_ids_by_chunk.get(chunk.chunk_id, []),
-                "confirmation_generation": chunk.confirmation_generation,
-                "generation": chunk.generation,
-                "quote_hash": chunk.quote_hash,
                 "rank": chunk.rank,
-                "source_id": chunk.source_id,
-                "source_type": chunk.source_type,
-                "source_version_id": chunk.source_version_id,
                 "text": chunk.text,
                 "title": chunk.title,
             }
@@ -162,9 +155,6 @@ def _canonical_prompt(
             for item in (conversation_context or ())
         ],
         "max_output_tokens": max_output_tokens,
-        "manifest": {
-            "query_hash": manifest.query_hash,
-        },
         "prompt_version": _PROMPT_VERSION,
         "user_query": query,
     }

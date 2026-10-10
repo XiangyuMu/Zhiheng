@@ -173,10 +173,25 @@ def test_load_manifest_normalizes_mineru_content_list() -> None:
         },
     }
     body = json.dumps(payload).encode()
+    written: list[bytes] = []
+
+    def write_bytes(value: bytes) -> ParserManifestReference:
+        written.append(value)
+        return ParserManifestReference(
+            "file:///canonical-manifest.json", hashlib.sha256(value).hexdigest()
+        )
+
     with _client(lambda request: httpx.Response(500)) as client:
-        result = client.load_manifest(
+        loaded = client.load_manifest_with_reference(
             ParserManifestReference("file:///manifest.json", hashlib.sha256(body).hexdigest()),
             read_bytes=lambda _: body,
+            write_bytes=write_bytes,
         )
+    result = loaded.manifest
     assert result["parser"]["backend"] == "mineru"
     assert result["blocks"][0]["text"] == "Hello"
+    assert loaded.reference.uri == "file:///canonical-manifest.json"
+    assert written
+    persisted = json.loads(written[0])
+    assert persisted["schema_version"] == "pdf-parser.manifest.v1"
+    assert "content_list" not in persisted

@@ -21,6 +21,7 @@ from zhiheng.jobs.pdf_parsing import PdfParseJobExecutor
 from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
 from zhiheng.knowledge.pdf_repository import PdfRepository
 from zhiheng.knowledge.pdf_worker import (
+    LoadedParserManifest,
     ParserManifestReference,
     ParserReceipt,
     ParserStatus,
@@ -119,20 +120,31 @@ class _ParserFixture:
             None,
         )
 
-    def load_manifest(
-        self, reference: ParserManifestReference, *, read_bytes: Any
-    ) -> dict[str, Any]:
-        del reference, read_bytes
+    def load_manifest_with_reference(
+        self,
+        reference: ParserManifestReference,
+        *,
+        read_bytes: Any,
+        write_bytes: Any = None,
+    ) -> LoadedParserManifest:
+        del reference, read_bytes, write_bytes
         self.loaded += 1
         if self.on_load is not None:
             self.on_load()
-        return self.manifest
+        return LoadedParserManifest(
+            self.manifest,
+            ParserManifestReference("artifact://manifest.json", "c" * 64),
+        )
 
 
 class _ObjectStore:
     def read_bytes(self, uri: str) -> bytes:
         del uri
         return b"{}"
+
+    def write_binary_artifact(self, body: bytes, *, namespace: str = "source") -> Any:
+        del body, namespace
+        raise AssertionError("canonical manifest write is not expected for canonical fixtures")
 
 
 def _seed_parse_job(

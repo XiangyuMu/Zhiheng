@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     embedding_purpose: str = "retrieval"
     answer_provider_id: str | None = Field(default=None, max_length=128)
     answer_model_id: str | None = Field(default=None, max_length=128)
+    answer_max_wall_clock_ms: int = 10_000
     pdf_parser_backend: Literal["deepdoc", "mineru"] = "deepdoc"
     pdf_deepdoc_url: str | None = None
     pdf_deepdoc_token: SecretStr | None = None
@@ -78,6 +79,13 @@ class Settings(BaseSettings):
     def require_positive_embedding_dimension(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("embedding_dimension must be positive")
+        return value
+
+    @field_validator("answer_max_wall_clock_ms")
+    @classmethod
+    def require_positive_answer_budget(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("answer_max_wall_clock_ms must be positive")
         return value
 
     @field_validator("embedding_purpose")

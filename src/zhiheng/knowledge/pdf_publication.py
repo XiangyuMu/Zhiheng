@@ -106,6 +106,7 @@ def _materialize_pdf_knowledge(
     manifest: dict[str, Any],
     *,
     attempt_id: str,
+    manifest_uri: str,
 ) -> tuple[str, str] | None:
     """Create formal knowledge rows from a complete PDF parse.
 
@@ -207,7 +208,7 @@ def _materialize_pdf_knowledge(
             "processor_version": str(
                 (manifest.get("parser") or {}).get("schema_version") or "manifest-v1"
             ),
-            "artifact_uri": str(manifest.get("manifest_uri") or ""),
+            "artifact_uri": manifest_uri,
             "content_sha256": body_hash,
         },
     )
@@ -333,7 +334,12 @@ def publish_parse_result(
         )
         indexed = formal_block_count > 0 and manifest_is_complete(manifest)
         materialized = (
-            _materialize_pdf_knowledge(session, manifest, attempt_id=attempt_id)
+            _materialize_pdf_knowledge(
+                session,
+                manifest,
+                attempt_id=attempt_id,
+                manifest_uri=str(manifest_uri or manifest.get("manifest_uri") or ""),
+            )
             if indexed
             else None
         )

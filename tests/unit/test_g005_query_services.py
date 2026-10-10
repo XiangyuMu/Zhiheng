@@ -373,7 +373,9 @@ def test_agentic_rag_combines_authorized_evidence_from_multiple_subqueries() -> 
     assert answer.budget_usage.context_chunks == 2
     assert model.calls == 1
     assert tuple(chunk.chunk_id for chunk in model.manifests[0].chunks) == ("paper", "finance")
-    assert tuple(citation.chunk_id for citation in answer.citations) == ("paper", "finance")
+    # Both sources reach the model; only the source used by its claim is
+    # presented as an answer citation.
+    assert tuple(citation.chunk_id for citation in answer.citations) == ("paper",)
     assert tuple(citation.chunk_id for citation in model.citations_seen[0]) == ("paper", "finance")
     assert verifier.manifests[0].seal == model.manifests[0].seal
 

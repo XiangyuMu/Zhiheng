@@ -27,6 +27,7 @@ from zhiheng.privacy.gateway import DeterministicPatternAnalyzer, PrivacyPipelin
 @dataclass
 class _AnswerJsonTransport:
     calls: list[str]
+    evidence_insufficient: bool = False
 
     def complete(
         self,
@@ -51,6 +52,13 @@ class _AnswerJsonTransport:
             "output_tokens": 8,
             "personalization_refs": memory_ref_ids,
         }
+        if self.evidence_insufficient:
+            response.update(
+                answer="材料未提供答案，证据不足。",
+                claims=[],
+                insufficiencies=["检索到的材料不支持当前问题。"],
+                personalization_refs=[],
+            )
         return TransportResponse(
             text=json.dumps(response, ensure_ascii=False),
             response_hash=sha256_text(payload.text),
@@ -125,7 +133,7 @@ def test_answer_api_uses_configured_model_gateway_and_counting_transport(
     payload = response.json()
     prompt = json.loads(transport.calls[0])
     assert len(transport.calls) == 1
-    assert prompt["prompt_version"] == "gateway-answer-model-v3"
+    assert prompt["prompt_version"] == "gateway-answer-model-v4"
     assert prompt["KNOWLEDGE_EVIDENCE"]
     assert prompt["USER_CONFIRMED_CONTEXT"]["entries"]
     assert "pending-memory-sentinel" not in transport.calls[0]
@@ -141,6 +149,33 @@ def test_answer_api_uses_configured_model_gateway_and_counting_transport(
         assert payload["answer_provider_id"] == audit["provider_id"]
         assert payload["answer_model_id"] == audit["model_id"]
         assert audit["status"] == "succeeded"
+
+
+def test_answer_api_insufficient_answer_does_not_present_retrieved_material_as_citations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "secret-value")
+    client, session_factory, transport = _gateway_client(tmp_path, external_models_enabled=True)
+    transport.evidence_insufficient = True
+    csrf = _login(client)
+    _seed(session_factory, tmp_path)
+    with session_scope(session_factory) as session:
+        _insert_provider(session)
+
+    response = client.post(
+        "/v1/answers",
+        json={"query": "中文 全文 检索 正式 视图"},
+        headers=_headers(csrf, "answer-gateway-insufficient"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert json.loads(transport.calls[0])["KNOWLEDGE_EVIDENCE"]
+    assert payload["stop_reason"] == "completed"
+    assert payload["answer_audit_id"]
+    assert payload["insufficiencies"]
+    assert payload["claims"] == []
+    assert payload["citations"] == []
 
 
 def test_answer_api_external_model_disabled_returns_privacy_denied_zero_send(

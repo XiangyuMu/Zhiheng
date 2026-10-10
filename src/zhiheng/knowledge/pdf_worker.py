@@ -80,6 +80,12 @@ class ParserManifestReference:
 
 
 @dataclass(frozen=True, slots=True)
+class LoadedParserManifest:
+    manifest: dict[str, Any]
+    reference: ParserManifestReference
+
+
+@dataclass(frozen=True, slots=True)
 class ParserReceipt:
     attempt_id: str
     state: str
@@ -195,6 +201,22 @@ class ParserWorkerClient:
         read_bytes: Callable[[str], bytes],
     ) -> dict[str, Any]:
         """Load and validate a manifest through the caller's scoped artifact store."""
+        return self.load_manifest_with_reference(reference, read_bytes=read_bytes).manifest
+
+    def load_manifest_with_reference(
+        self,
+        reference: ParserManifestReference,
+        *,
+        read_bytes: Callable[[str], bytes],
+        write_bytes: Callable[[bytes], ParserManifestReference] | None = None,
+    ) -> LoadedParserManifest:
+        """Load a manifest and return the canonical artifact reference.
+
+        Native MinerU ``content_list`` responses are converted before publication.
+        When a writer is supplied, the canonical JSON is persisted and its URI and
+        digest become the durable manifest reference; the raw parser artifact is
+        never exposed through the manifest API.
+        """
 
         _validate_artifact_uri(reference.uri, self._allowed_uri_schemes, "manifest.uri")
         body = read_bytes(reference.uri)
@@ -212,6 +234,7 @@ class ParserWorkerClient:
         # MinerU workers may return their native content-list artifact. Convert
         # it at this boundary so every downstream publisher receives the same
         # versioned manifest contract.
+        converted = False
         if "schema_version" not in manifest and isinstance(manifest.get("content_list"), list):
             meta = manifest.get("metadata")
             if not isinstance(meta, dict):
@@ -227,13 +250,24 @@ class ParserWorkerClient:
                     version=str(meta.get("version") or "mineru"),
                     image_uri_prefix=str(meta.get("image_uri_prefix") or "artifact://mineru/"),
                 )
+                converted = True
             except (KeyError, TypeError, ValueError) as exc:
                 raise ParserManifestError("invalid MinerU content-list metadata") from exc
         try:
             validate_manifest(manifest)
         except ValueError as exc:
             raise ParserManifestError(str(exc)) from exc
-        return cast(dict[str, Any], manifest)
+        canonical = cast(dict[str, Any], manifest)
+        canonical_reference = reference
+        if converted and write_bytes is not None:
+            body = json.dumps(
+                canonical,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            canonical_reference = write_bytes(body)
+        return LoadedParserManifest(canonical, canonical_reference)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         try:

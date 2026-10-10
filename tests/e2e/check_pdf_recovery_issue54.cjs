@@ -11,6 +11,7 @@
  */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
@@ -31,7 +32,11 @@ const report = {
     sha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
   },
   restarts: [],
+  db_snapshots: [],
+  fault_injections: [],
+  regression_references: [],
   states: [],
+  timings: {},
   status: 'running',
   exit_code: null,
 };
@@ -68,6 +73,232 @@ function restart(kind, command) {
     save();
     throw error;
   }
+  save();
+}
+
+function jsonEnv(name, fallback) {
+  const raw = process.env[name];
+  if (!raw || !raw.trim()) return fallback;
+  try { return JSON.parse(raw); }
+  catch (error) { throw Error(`${name} must be valid JSON: ${error.message}`); }
+}
+
+function redact(value) {
+  return String(value || '').replace(/(token|key|secret|password)=\S+/gi, '$1=[REDACTED]');
+}
+
+function dbSnapshot(taskId, label) {
+  const database = process.env.ZHIHENG_SQLITE_PATH
+    || process.env.ZHIHENG_DATABASE_PATH
+    || path.join(os.homedir(), '.local/share/zhiheng/zhiheng.sqlite');
+  if (!fs.existsSync(database)) {
+    report.db_snapshots.push({ label, skipped: true, reason: `database does not exist: ${database}` });
+    save();
+    return null;
+  }
+  const script = String.raw`
+import json, sqlite3, sys
+db, task_id = sys.argv[1], sys.argv[2]
+conn = sqlite3.connect(db)
+conn.row_factory = sqlite3.Row
+def payload(value):
+    try:
+        parsed = json.loads(value or '{}')
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return parsed
+task = conn.execute('SELECT id, state, backend, evidence_object_id FROM pdf_tasks WHERE id=?', (task_id,)).fetchone()
+jobs = []
+for row in conn.execute("""
+    SELECT id, job_type, status, attempts, max_attempts, lease_owner, payload_json
+    FROM jobs
+    WHERE json_extract(payload_json, '$.task_id') = ?
+    ORDER BY updated_at, id
+""", (task_id,)):
+    body = payload(row['payload_json'])
+    jobs.append({
+        'id': row['id'],
+        'job_type': row['job_type'],
+        'status': row['status'],
+        'attempts': row['attempts'],
+        'max_attempts': row['max_attempts'],
+        'lease_owner_sha256': __import__('hashlib').sha256(str(row['lease_owner'] or '').encode()).hexdigest() if row['lease_owner'] else None,
+        'parser_attempt_id': body.get('parser_attempt_id') or body.get('attempt_id'),
+        'knowledge_object_id': body.get('knowledge_object_id'),
+        'failure_code': body.get('failure_code'),
+        'failure_stage': body.get('failure_stage'),
+        'retryable': body.get('retryable'),
+    })
+attempts = [dict(row) for row in conn.execute(
+    'SELECT id, attempt_no, status, backend, manifest_uri, manifest_sha256 FROM pdf_parse_attempts WHERE task_id=? ORDER BY attempt_no',
+    (task_id,),
+)]
+outbox = []
+for row in conn.execute("""
+    SELECT id, event_type, status, payload_json
+    FROM outbox_events
+    WHERE aggregate_id=? OR json_extract(payload_json, '$.task_id')=?
+    ORDER BY created_at, id
+""", (task_id, task_id)):
+    body = payload(row['payload_json'])
+    outbox.append({
+        'id': row['id'],
+        'event_type': row['event_type'],
+        'status': row['status'],
+        'parser_attempt_id': body.get('parser_attempt_id') or body.get('attempt_id'),
+        'knowledge_object_id': body.get('knowledge_object_id'),
+    })
+print(json.dumps({'task': dict(task) if task else None, 'jobs': jobs, 'attempts': attempts, 'outbox': outbox}, ensure_ascii=False))
+`;
+  const stdout = execFileSync('python3', ['-c', script, database, taskId], {
+    encoding: 'utf8', stdio: 'pipe', timeout: 30_000,
+  });
+  const snapshot = { label, at: new Date().toISOString(), ...JSON.parse(stdout) };
+  report.db_snapshots.push(snapshot);
+  save();
+  return snapshot;
+}
+
+function parserAttemptFrom(snapshot) {
+  if (!snapshot) return null;
+  for (const collection of [snapshot.jobs || [], snapshot.outbox || [], snapshot.attempts || []]) {
+    for (const item of collection) {
+      const value = item.parser_attempt_id || item.id;
+      if (value) return value;
+    }
+  }
+  return null;
+}
+
+async function api(page, path, options = {}) {
+  return await page.evaluate(async ({ path, options }) => {
+    const response = await fetch(path, options);
+    let body = null;
+    try { body = await response.json(); } catch { body = await response.text(); }
+    return { http: response.status, body };
+  }, { path, options });
+}
+
+async function csrfToken(page) {
+  return await page.evaluate(() => {
+    const match = document.cookie.match(/(?:^|; )zhiheng_csrf=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+  });
+}
+
+async function waitForTask(page, taskId, predicate, label, timeoutMs) {
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < timeoutMs) {
+    const response = await api(page, `/v1/knowledge/pdf-imports/${encodeURIComponent(taskId)}`);
+    assert.equal(response.http, 200);
+    last = response.body;
+    report.states.push({ at: new Date().toISOString(), label, http: response.http, body: response.body });
+    save();
+    if (predicate(response.body)) return response.body;
+    await page.waitForTimeout(1_000);
+  }
+  throw Error(`${label} timed out; last state was ${JSON.stringify(last)}`);
+}
+
+async function runFaultInjections(page, taskId) {
+  const scenarios = jsonEnv('ZHIHENG_ISSUE54_FAULTS_JSON', []);
+  assert(Array.isArray(scenarios), 'ZHIHENG_ISSUE54_FAULTS_JSON must be an array');
+  for (const scenario of scenarios) {
+    const name = String(scenario.name || '').trim();
+    assert(name, 'fault injection scenario requires name');
+    const started = Date.now();
+    const record = {
+      name,
+      type: String(scenario.type || 'external-command'),
+      label: 'fault-injection',
+      status: 'running',
+      expected_state: scenario.expected_state || null,
+      task_id: scenario.task_id || taskId,
+    };
+    report.fault_injections.push(record);
+    save();
+    try {
+      if (scenario.command) {
+        const stdoutPath = path.join(output, `fault-${name}.stdout.log`);
+        const stderrPath = path.join(output, `fault-${name}.stderr.log`);
+        try {
+          const stdout = execFileSync('bash', ['-lc', scenario.command], {
+            encoding: 'utf8', stdio: 'pipe', timeout: Number(scenario.timeout_ms || 120_000),
+          });
+          fs.writeFileSync(stdoutPath, redact(stdout), { mode: 0o600 });
+          fs.writeFileSync(stderrPath, '', { mode: 0o600 });
+        } catch (error) {
+          fs.writeFileSync(stdoutPath, redact(error.stdout), { mode: 0o600 });
+          fs.writeFileSync(stderrPath, redact(error.stderr || error.message), { mode: 0o600 });
+          throw error;
+        }
+        record.stdout_path = stdoutPath;
+        record.stderr_path = stderrPath;
+      }
+      if (scenario.expected_state) {
+        const terminal = await waitForTask(
+          page,
+          record.task_id,
+          state => state.state === scenario.expected_state,
+          `fault-${name}`,
+          Number(scenario.wait_ms || 120_000),
+        );
+        record.observed = {
+          state: terminal.state,
+          error_code: terminal.error_code || null,
+          retryable: Boolean(terminal.retryable),
+          redacted_summary_present: Boolean(terminal.redacted_summary),
+        };
+        if (scenario.expect_retry_endpoint) {
+          const retry = await api(page, `/v1/knowledge/pdf-imports/${encodeURIComponent(record.task_id)}/retry`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-CSRF-Token': await csrfToken(page),
+              'If-Match': terminal.etag,
+              'Idempotency-Key': crypto.randomUUID(),
+            },
+            body: '{}',
+          });
+          assert.equal(retry.http, 200, `retry endpoint failed for ${name}`);
+          record.retry_http = retry.http;
+        }
+      }
+      record.elapsed_ms = Date.now() - started;
+      record.status = 'passed';
+    } catch (error) {
+      record.elapsed_ms = Date.now() - started;
+      record.status = 'failed';
+      record.failure = String(error.stack || error);
+      save();
+      throw error;
+    }
+    save();
+  }
+  if (scenarios.length === 0) {
+    report.fault_injections.push({
+      status: 'not_run',
+      label: 'fault-injection',
+      reason: 'Set ZHIHENG_ISSUE54_FAULTS_JSON to run lost-task, failure, partial, unsupported, and retry scenarios.',
+    });
+    save();
+  }
+}
+
+function recordRegressionReferences() {
+  report.regression_references = [
+    {
+      claim: 'stale lease writeback is rejected and duplicate completion does not publish twice',
+      command: 'uv run pytest -q tests/integration/test_pdf_parser_lease.py tests/integration/test_knowledge_job_claim_authority.py',
+    },
+    {
+      claim: 'terminal failed/partial/unsupported browser states stop polling and expose recovery actions',
+      command: 'node --test tests/e2e/test_import_polling.cjs && node tests/e2e/check_delivery_contracts.cjs ...',
+    },
+  ];
   save();
 }
 
@@ -109,44 +340,62 @@ function restart(kind, command) {
       source_sha256: receiptBody.source_sha256,
     };
     const taskId = receiptBody.task_id;
-    let firstAttempt;
-    let workerRestarted = false;
-    let gatewayRestarted = false;
+    const receiptAt = Date.now();
+    const initialSnapshot = dbSnapshot(taskId, 'after-receipt');
+    const persistedParserAttempt = parserAttemptFrom(initialSnapshot);
+    assert(persistedParserAttempt, 'database snapshot must expose the durable local parser attempt identity');
+    report.receipt.parser_attempt_id = persistedParserAttempt;
+    let firstAttempt = null;
     const deadline = Date.now() + 300_000;
-    while (Date.now() < deadline) {
-      const response = await page.evaluate(async id => {
-        const result = await fetch(`/v1/knowledge/pdf-imports/${encodeURIComponent(id)}`);
-        return { http: result.status, body: await result.json() };
-      }, taskId);
-      assert.equal(response.http, 200);
-      const state = response.body;
-      assert.equal(state.task_id, taskId);
-      assert.equal(state.evidence_object_id, receiptBody.evidence_object_id);
-      assert.equal(state.source_sha256, report.input.sha256);
-      if (state.attempt_id) firstAttempt ||= state.attempt_id;
-      if (firstAttempt && state.attempt_id) assert.equal(state.attempt_id, firstAttempt);
-      report.states.push({ at: new Date().toISOString(), ...response });
-      save();
-      if (!workerRestarted && state.state === 'processing' && state.attempt_id) {
-        restart('worker', process.env.ZHIHENG_RESTART_WORKER_COMMAND);
-        workerRestarted = true;
-        await page.screenshot({path: path.join(output, 'after-worker-restart.png'), fullPage: true});
-      }
-      if (workerRestarted && !gatewayRestarted && state.state === 'processing' && state.attempt_id) {
-        restart('gateway', process.env.ZHIHENG_RESTART_GATEWAY_COMMAND);
-        gatewayRestarted = true;
-        await page.screenshot({path: path.join(output, 'after-gateway-restart.png'), fullPage: true});
-      }
-      if (['failed', 'partial', 'unsupported', 'dead'].includes(state.state)) {
-        throw Error(`recovery reached terminal failure: ${state.state} ${state.error_code || ''}`);
-      }
-      if (state.state === 'parsed') break;
-      await page.waitForTimeout(1_000);
+    const preWorker = await waitForTask(
+      page,
+      taskId,
+      state => ['queued', 'processing'].includes(state.state),
+      'before-worker-restart',
+      30_000,
+    );
+    assert.equal(preWorker.task_id, taskId);
+    assert.equal(preWorker.evidence_object_id, receiptBody.evidence_object_id);
+    assert.equal(preWorker.source_sha256, report.input.sha256);
+    restart('worker', process.env.ZHIHENG_RESTART_WORKER_COMMAND);
+    dbSnapshot(taskId, 'after-worker-restart');
+    await page.screenshot({path: path.join(output, 'after-worker-restart.png'), fullPage: true});
+
+    const preGateway = await waitForTask(
+      page,
+      taskId,
+      state => state.state === 'processing' || state.attempt_id || state.manifest_sha256,
+      'before-gateway-restart',
+      Math.max(1_000, deadline - Date.now()),
+    );
+    if (preGateway.attempt_id) firstAttempt = preGateway.attempt_id;
+    if (firstAttempt) assert.equal(firstAttempt, persistedParserAttempt);
+    restart('gateway', process.env.ZHIHENG_RESTART_GATEWAY_COMMAND);
+    dbSnapshot(taskId, 'after-gateway-restart');
+    await page.screenshot({path: path.join(output, 'after-gateway-restart.png'), fullPage: true});
+
+    const parsed = await waitForTask(
+      page,
+      taskId,
+      state => ['parsed', 'failed', 'partial', 'unsupported', 'dead'].includes(state.state),
+      'terminal-after-restarts',
+      Math.max(1_000, deadline - Date.now()),
+    );
+    if (['failed', 'partial', 'unsupported', 'dead'].includes(parsed.state)) {
+      throw Error(`recovery reached terminal failure: ${parsed.state} ${parsed.error_code || ''}`);
     }
-    assert(workerRestarted && gatewayRestarted, 'both real process restart commands must run');
-    assert(firstAttempt, 'the original parser attempt must be persisted before restart');
-    assert(report.states.some(item => item.body.state === 'parsed'), 'task did not recover to parsed');
-    assert(report.states.filter(item => item.body.state === 'parsed').every(item => item.body.attempt_id === firstAttempt), 'recovery changed parser attempt identity');
+    assert.equal(parsed.state, 'parsed');
+    assert.equal(parsed.attempt_id, persistedParserAttempt, 'recovery changed parser attempt identity');
+    assert(parsed.manifest_uri && parsed.manifest_sha256, 'recovered parse must publish a durable manifest reference');
+    const finalSnapshot = dbSnapshot(taskId, 'parsed-after-restarts');
+    const parseAttempts = finalSnapshot ? (finalSnapshot.attempts || []) : [];
+    assert.equal(parseAttempts.length, 1, 'recovery must not duplicate PDF parse attempts');
+    assert.equal(parseAttempts[0].id, persistedParserAttempt);
+    assert.equal(parseAttempts[0].manifest_sha256, parsed.manifest_sha256);
+    report.timings.parse_and_recovery_ms = Date.now() - receiptAt;
+    assert(report.timings.parse_and_recovery_ms <= 300_000, 'parse plus recovery exceeded the 5 minute budget');
+    await runFaultInjections(page, taskId);
+    recordRegressionReferences();
     report.status = 'passed';
   } catch (error) {
     report.status = 'failed';
