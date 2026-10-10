@@ -33,6 +33,9 @@ const saveReport = () => fs.writeFileSync(
     expectedPdf = process.env.ZHIHENG_PDF_EXPECTATION_FILE
       ? JSON.parse(fs.readFileSync(process.env.ZHIHENG_PDF_EXPECTATION_FILE, 'utf8'))
       : null;
+    if (!expectedPdf || !Array.isArray(expectedPdf.answers || expectedPdf.questions)) {
+      throw Error('expectation file must declare keyed answers/questions for positive and negative checks');
+    }
     if (process.env.ZHIHENG_EXPECTED_SHA && report.sha !== process.env.ZHIHENG_EXPECTED_SHA) {
       throw Error('Acceptance SHA mismatch');
     }
@@ -95,6 +98,10 @@ const saveReport = () => fs.writeFileSync(
       );
       await page.locator('#answer-form button[type=submit]').click();
       const answerHttp = await answerResponse;
+      const requestPayload = answerHttp.request().postDataJSON();
+      if (!requestPayload || requestPayload.query !== question.value) {
+        throw Error(`answer response was not bound to the current question: ${question.kind}`);
+      }
       const answerBody = await answerHttp.json();
       await page.waitForFunction(
         previous => {
