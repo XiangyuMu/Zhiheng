@@ -33,8 +33,17 @@ const saveReport = () => fs.writeFileSync(
     expectedPdf = process.env.ZHIHENG_PDF_EXPECTATION_FILE
       ? JSON.parse(fs.readFileSync(process.env.ZHIHENG_PDF_EXPECTATION_FILE, 'utf8'))
       : null;
-    if (!expectedPdf || !Array.isArray(expectedPdf.answers || expectedPdf.questions)) {
+    const declaredExpectations = expectedPdf?.answers || expectedPdf?.questions;
+    if (!expectedPdf || !Array.isArray(declaredExpectations)) {
       throw Error('expectation file must declare keyed answers/questions for positive and negative checks');
+    }
+    const requiredKinds = new Set(['text', 'pdf', 'negative']);
+    const declaredKinds = new Set(declaredExpectations.map(item => item?.kind));
+    for (const kind of requiredKinds) {
+      if (!declaredKinds.has(kind)) throw Error(`expectation file is missing ${kind} answer contract`);
+    }
+    if (declaredExpectations.filter(item => item?.kind === 'negative').some(item => item.unanswerable !== true)) {
+      throw Error('negative expectation must explicitly declare unanswerable=true');
     }
     if (process.env.ZHIHENG_EXPECTED_SHA && report.sha !== process.env.ZHIHENG_EXPECTED_SHA) {
       throw Error('Acceptance SHA mismatch');

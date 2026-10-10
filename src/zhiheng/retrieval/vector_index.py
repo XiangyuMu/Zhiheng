@@ -345,6 +345,7 @@ class VectorIndexRepository:
         session: Session,
         *,
         model_id: str,
+        provider_id: str | None = None,
         model_revision: str,
         dimension: int,
         purpose: str = "retrieval",
@@ -355,6 +356,7 @@ class VectorIndexRepository:
                 SELECT id
                 FROM embedding_generations
                 WHERE model_id = :model_id
+                  AND provider_id IS :provider_id
                   AND model_revision = :model_revision
                   AND dimension = :dimension
                   AND purpose = :purpose
@@ -363,6 +365,7 @@ class VectorIndexRepository:
             ),
             {
                 "model_id": model_id,
+                "provider_id": provider_id,
                 "model_revision": model_revision,
                 "dimension": dimension,
                 "purpose": purpose,
@@ -395,6 +398,7 @@ class VectorIndexRepository:
         query_embedding: Sequence[float],
         *,
         model_id: str,
+        provider_id: str | None = None,
         model_revision: str,
         dimension: int,
         purpose: str = "retrieval",
@@ -407,6 +411,7 @@ class VectorIndexRepository:
         generation = self._active_generation(
             session,
             model_id=model_id,
+            provider_id=provider_id,
             model_revision=model_revision,
             dimension=dimension,
             purpose=purpose,
@@ -487,23 +492,27 @@ class VectorIndexRepository:
         *,
         embedder: QueryEmbeddingPort,
         model_id: str,
+        provider_id: str | None = None,
         model_revision: str,
         dimension: int,
         purpose: str = "retrieval",
         normalize: bool = True,
         limit: int = 10,
     ) -> list[RetrievalCandidate]:
-        query_embedding = embedder.embed_query(
-            query,
-            model_id=model_id,
-            model_revision=model_revision,
-            dimension=dimension,
-            normalize=normalize,
-        )
+        embed_kwargs: dict[str, Any] = {
+            "model_id": model_id,
+            "model_revision": model_revision,
+            "dimension": dimension,
+            "normalize": normalize,
+        }
+        if provider_id is not None:
+            embed_kwargs["provider_id"] = provider_id
+        query_embedding = embedder.embed_query(query, **embed_kwargs)
         return self.search_active(
             session,
             query_embedding,
             model_id=model_id,
+            provider_id=provider_id,
             model_revision=model_revision,
             dimension=dimension,
             purpose=purpose,
@@ -548,7 +557,7 @@ class VectorIndexRepository:
                   purpose, physical_index_ref
                 FROM embedding_generations
                 WHERE model_id = :model_id
-                  AND (:provider_id IS NULL OR provider_id = :provider_id)
+                  AND provider_id IS :provider_id
                   AND model_revision = :model_revision
                   AND dimension = :dimension
                   AND purpose = :purpose

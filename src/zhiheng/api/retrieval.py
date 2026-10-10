@@ -962,10 +962,13 @@ class ProviderQueryEmbedder:
         query: str,
         *,
         model_id: str,
+        provider_id: str | None = None,
         model_revision: str,
         dimension: int,
         normalize: bool,
     ) -> Sequence[float]:
+        if provider_id != self._route["provider_id"]:
+            raise ValueError("query provider does not match configured embedding route")
         route = TransportRoute(
             provider_id=self._route["provider_id"],
             provider_kind=self._route["provider_kind"],
@@ -1068,14 +1071,16 @@ class VectorAwareHybridRetriever:
 
         session.commit()
         try:
-            embedding = self._query_embedder().embed_query(
-                query,
-                provider_id=generation.provider_id,
-                model_id=generation.model_id,
-                model_revision=generation.model_revision,
-                dimension=generation.dimension,
-                normalize=generation.normalize,
-            )
+            embed_kwargs: dict[str, Any] = {
+                "model_id": generation.model_id,
+                "model_revision": generation.model_revision,
+                "dimension": generation.dimension,
+                "normalize": generation.normalize,
+            }
+            generation_provider_id = getattr(generation, "provider_id", None)
+            if generation_provider_id is not None:
+                embed_kwargs["provider_id"] = generation_provider_id
+            embedding = self._query_embedder().embed_query(query, **embed_kwargs)
         except (
             EmbeddingTransportError,
             PermissionError,

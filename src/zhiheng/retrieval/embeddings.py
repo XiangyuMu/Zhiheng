@@ -39,6 +39,7 @@ class BgeM3QueryEmbedder:
         query: str,
         *,
         model_id: str,
+        provider_id: str | None = None,
         model_revision: str,
         dimension: int,
         normalize: bool,
@@ -53,6 +54,8 @@ class BgeM3QueryEmbedder:
             )
         if not query.strip():
             raise ValueError("query cannot be empty")
+        if provider_id is not None:
+            raise ValueError("local query embedder cannot serve a provider generation")
 
         encoded = self._load_model().encode(
             [query],

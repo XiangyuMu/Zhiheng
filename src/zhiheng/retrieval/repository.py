@@ -82,6 +82,7 @@ class VectorIndexSearchPort(Protocol):
         session: Session,
         *,
         model_id: str,
+        provider_id: str | None = None,
         model_revision: str,
         dimension: int,
         purpose: str = "retrieval",
@@ -93,6 +94,7 @@ class VectorIndexSearchPort(Protocol):
         query_embedding: Sequence[float],
         *,
         model_id: str,
+        provider_id: str | None = None,
         model_revision: str,
         dimension: int,
         purpose: str = "retrieval",
@@ -102,6 +104,7 @@ class VectorIndexSearchPort(Protocol):
 
 @dataclass(frozen=True)
 class VectorGenerationMetadata:
+    provider_id: str | None
     model_id: str
     model_revision: str
     dimension: int
@@ -217,6 +220,7 @@ class VectorRetriever:
         session: Session,
         *,
         model_id: str,
+        provider_id: str | None = None,
         model_revision: str,
         dimension: int,
         purpose: str = "retrieval",
@@ -224,6 +228,7 @@ class VectorRetriever:
         return self._index.active_generation_id(
             session,
             model_id=model_id,
+            provider_id=provider_id,
             model_revision=model_revision,
             dimension=dimension,
             purpose=purpose,
@@ -239,7 +244,7 @@ class VectorRetriever:
             session.execute(
                 text(
                     """
-                SELECT model_id, model_revision, dimension, purpose, index_status
+                SELECT provider_id, model_id, model_revision, dimension, purpose, index_status
                 FROM embedding_generations
                 WHERE id = :generation_id
                 """
@@ -252,6 +257,7 @@ class VectorRetriever:
         if row is None:
             return None
         return VectorGenerationMetadata(
+            provider_id=None if row["provider_id"] is None else str(row["provider_id"]),
             model_id=str(row["model_id"]),
             model_revision=str(row["model_revision"]),
             dimension=int(row["dimension"]),
@@ -265,6 +271,7 @@ class VectorRetriever:
         query_embedding: Sequence[float],
         *,
         generation_id: str,
+        provider_id: str | None = None,
         limit: int = 10,
         filters: RetrievalFilters | None = None,
     ) -> list[RetrievalCandidate]:
@@ -279,6 +286,7 @@ class VectorRetriever:
         active_id = self.active_generation_id(
             session,
             model_id=generation.model_id,
+            provider_id=provider_id if provider_id is not None else generation.provider_id,
             model_revision=generation.model_revision,
             dimension=generation.dimension,
             purpose=generation.purpose,
@@ -303,6 +311,7 @@ class VectorRetriever:
                 session,
                 query_embedding,
                 model_id=generation.model_id,
+                provider_id=provider_id if provider_id is not None else generation.provider_id,
                 model_revision=generation.model_revision,
                 dimension=generation.dimension,
                 purpose=generation.purpose,
