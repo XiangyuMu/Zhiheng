@@ -19,9 +19,6 @@ const { chromium } = require('playwright');
 const [base, output, file] = process.argv.slice(2);
 assert(base && output && file, 'Expected URL, output directory and PDF');
 assert(['localhost', '127.0.0.1'].includes(new URL(base).hostname), 'Local service only');
-assert(process.env.ZHIHENG_TEST_USERNAME && process.env.ZHIHENG_TEST_PASSWORD, 'Missing credentials');
-assert(process.env.ZHIHENG_RESTART_WORKER_COMMAND, 'Missing Worker restart command');
-assert(process.env.ZHIHENG_RESTART_GATEWAY_COMMAND, 'Missing gateway restart command');
 fs.mkdirSync(output, { recursive: true, mode: 0o700 });
 
 const report = {
@@ -67,6 +64,9 @@ function restart(kind, command) {
 (async () => {
   let browser;
   try {
+    assert(process.env.ZHIHENG_TEST_USERNAME && process.env.ZHIHENG_TEST_PASSWORD, 'Missing credentials');
+    assert(process.env.ZHIHENG_RESTART_WORKER_COMMAND, 'Missing Worker restart command');
+    assert(process.env.ZHIHENG_RESTART_GATEWAY_COMMAND, 'Missing gateway restart command');
     assert.equal(report.dirty, false, 'Recovery evidence requires a clean checkout');
     if (process.env.ZHIHENG_EXPECTED_SHA) assert.equal(report.sha, process.env.ZHIHENG_EXPECTED_SHA);
     browser = await chromium.launch({ headless: true });

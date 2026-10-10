@@ -120,6 +120,7 @@ class GeneratedAnswer:
     insufficiencies: tuple[str, ...] = ()
     output_tokens: int = 0
     personalization_refs: tuple[PersonalizationRef, ...] = ()
+    model_audit_id: str | None = None
 
 
 class HybridRetrievalPort(Protocol):

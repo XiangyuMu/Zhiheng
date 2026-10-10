@@ -19,6 +19,9 @@ const report = {
   imports: [], answers: [], errors: [],
   status: 'running',
 };
+const expectedPdf = process.env.ZHIHENG_PDF_EXPECTATION_FILE
+  ? JSON.parse(fs.readFileSync(process.env.ZHIHENG_PDF_EXPECTATION_FILE, 'utf8'))
+  : null;
 const saveReport = () => fs.writeFileSync(
   path.join(output, 'browser-report.json'),
   JSON.stringify(report, null, 2),
@@ -102,6 +105,7 @@ const saveReport = () => fs.writeFileSync(
       const answer={question: question.value, kind: question.kind, status:answerHttp.status(),answer:await page.locator('#answer').innerText(),route:await page.locator('#route').innerText(),citations:await page.locator('#citations .source-card').count(), citation_payload_count: Array.isArray(answerBody.citations) ? answerBody.citations.length : 0};
       answer.answer_provider_id = answerBody.answer_provider_id || null;
       answer.answer_model_id = answerBody.answer_model_id || null;
+      answer.answer_audit_id = answerBody.answer_audit_id || null;
       if (answer.status !== 200) throw Error(`answer request failed with HTTP ${answer.status}`);
       if (!answer.answer.trim()) throw Error(`empty answer for ${question.kind}`);
       if (question.kind !== 'negative' && answer.citations < 1) {
@@ -112,6 +116,9 @@ const saveReport = () => fs.writeFileSync(
       }
       if (process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID && answer.answer_model_id !== process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID) {
         throw Error(`answer used model ${answer.answer_model_id || 'unset'}, expected ${process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID}`);
+      }
+      if (process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID && !answer.answer_audit_id) {
+        throw Error('answer did not expose a successful model-call audit id');
       }
       if (question.kind === 'negative') {
         if (!/(没有|不足|无法|未提供|未找到|证据)/.test(answer.answer)) {
@@ -143,6 +150,14 @@ const saveReport = () => fs.writeFileSync(
           if (original.status() !== 200) throw Error(`PDF citation source returned HTTP ${original.status()}`);
           const returnedSha = crypto.createHash('sha256').update(await original.body()).digest('hex');
           if (returnedSha !== itemForPdfSha(report.imports, files)) throw Error('PDF citation source digest does not match imported PDF');
+          if (expectedPdf) {
+            const expectedSha = expectedPdf.sha256 || expectedPdf.source_sha256 || expectedPdf.pdf_sha256;
+            const expectedPage = Number(expectedPdf.page_no ?? expectedPdf.page ?? expectedPdf.expected_page_no);
+            const expectedQuote = String(expectedPdf.quote || expectedPdf.expected_quote || '').replace(/\s+/g, ' ').trim();
+            if (expectedSha !== returnedSha) throw Error('PDF expectation is bound to a different source digest');
+            if (!Number.isInteger(expectedPage) || !href.endsWith(`#page=${expectedPage}`)) throw Error('PDF citation page does not match the bound expectation');
+            if (!expectedQuote || !report.answers.at(-1).source_text.replace(/\s+/g, ' ').includes(expectedQuote)) throw Error('PDF citation quote does not match the bound expectation');
+          }
           report.answers.at(-1).source_pdf_sha256 = returnedSha;
           report.answers.at(-1).source_page_link = href;
         }

@@ -37,10 +37,15 @@ case "${1:-}" in
     "${COMPOSE[@]}" stop "${PARSER_SERVICES[@]}"
     ;;
   health)
-    curl --connect-timeout 3 --max-time 10 --fail --silent --show-error http://127.0.0.1:9392/health
-    printf '\n'
-    curl --connect-timeout 3 --max-time 10 --fail --silent --show-error http://127.0.0.1:9392/ready
-    printf '\n'
+    if [[ "$PARSER_PROFILE" == deepdoc ]]; then
+      curl --connect-timeout 3 --max-time 10 --fail --silent --show-error "${DEEPDOC_HEALTH_URL:-http://127.0.0.1:9390/health}"
+      printf '\n'
+    else
+      curl --connect-timeout 3 --max-time 10 --fail --silent --show-error http://127.0.0.1:9392/health
+      printf '\n'
+      curl --connect-timeout 3 --max-time 10 --fail --silent --show-error http://127.0.0.1:9392/ready
+      printf '\n'
+    fi
     ;;
   diagnose)
     "${COMPOSE[@]}" ps "${PARSER_SERVICES[@]}"

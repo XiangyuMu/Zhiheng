@@ -226,6 +226,7 @@ class AnswerResponse(BaseModel):
     context_prompts: list[dict[str, Any]] = Field(default_factory=list)
     answer_provider_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
     answer_model_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    answer_audit_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class LookupResponse(BaseModel):
@@ -470,6 +471,7 @@ def answer_question(
         elif request.app.state.retrieval_settings.answer_provider_id is not None:
             response.answer_provider_id = request.app.state.retrieval_settings.answer_provider_id
             response.answer_model_id = request.app.state.retrieval_settings.answer_model_id
+        response.answer_audit_id = getattr(result, "model_audit_id", None)
     response.context_prompts = _contextual_prompts(
         session, query=payload.query, user_id=user_id, result=result
     )

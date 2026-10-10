@@ -36,6 +36,7 @@ def clean_environment() -> dict[str, str]:
         "ZHIHENG_TEST_PASSWORD",
         "ZHIHENG_PDF_ACCEPTANCE_URL",
         "ZHIHENG_PDF_FILE",
+        "ZHIHENG_PDF_EXPECTATION_FILE",
         "ZHIHENG_REAL_FILE_A",
         "ZHIHENG_REAL_FILE_B",
         "ZHIHENG_RESTART_WORKER_COMMAND",
@@ -56,10 +57,13 @@ def real_pdf_preflight() -> list[str]:
         "ZHIHENG_TEST_PASSWORD",
         "ZHIHENG_PDF_ACCEPTANCE_URL",
         "ZHIHENG_PDF_FILE",
+        "ZHIHENG_PDF_EXPECTATION_FILE",
         "ZHIHENG_REAL_FILE_A",
         "ZHIHENG_REAL_FILE_B",
         "ZHIHENG_RESTART_WORKER_COMMAND",
         "ZHIHENG_RESTART_GATEWAY_COMMAND",
+        "ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID",
+        "ZHIHENG_EXPECTED_ANSWER_MODEL_ID",
     ]
     code = (
         "import os, pathlib, sys; "
@@ -207,6 +211,7 @@ def main() -> int:
                 os.environ.get("ZHIHENG_PDF_ACCEPTANCE_URL", ""),
                 str(output / "pdf-search"),
                 os.environ.get("ZHIHENG_PDF_FILE", ""),
+                os.environ.get("ZHIHENG_PDF_EXPECTATION_FILE", ""),
             ],
         ),
         (

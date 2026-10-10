@@ -136,6 +136,8 @@ services:
       dockerfile: deploy/pdf-parser/Dockerfile.deepdoc
     expose:
       - "9390"
+    ports:
+      - "127.0.0.1:9390:9390"
     environment:
       DEEPDOC_SERVICE_TOKEN_FILE: /run/secrets/deepdoc_service_token
     volumes:

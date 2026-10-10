@@ -72,6 +72,7 @@ class GatewayAnswerModel:
                 replace(claim, citation_ids=tuple(original_ids[key] for key in claim.citation_ids))
                 for claim in result.claims
             ),
+            model_audit_id=response.audit_id,
         )
 
 
