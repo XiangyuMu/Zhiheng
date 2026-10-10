@@ -375,6 +375,7 @@ class VectorIndexRepository:
         session: Session,
         *,
         model_id: str,
+        provider_id: str | None = None,
         model_revision: str,
         dimension: int,
         purpose: str = "retrieval",
@@ -382,6 +383,7 @@ class VectorIndexRepository:
         return self._active_generation(
             session,
             model_id=model_id,
+            provider_id=provider_id,
             model_revision=model_revision,
             dimension=dimension,
             purpose=purpose,
@@ -532,6 +534,7 @@ class VectorIndexRepository:
         session: Session,
         *,
         model_id: str,
+        provider_id: str | None = None,
         model_revision: str,
         dimension: int,
         purpose: str,
@@ -545,6 +548,7 @@ class VectorIndexRepository:
                   purpose, physical_index_ref
                 FROM embedding_generations
                 WHERE model_id = :model_id
+                  AND (:provider_id IS NULL OR provider_id = :provider_id)
                   AND model_revision = :model_revision
                   AND dimension = :dimension
                   AND purpose = :purpose
@@ -553,6 +557,7 @@ class VectorIndexRepository:
                 ),
                 {
                     "model_id": model_id,
+                    "provider_id": provider_id,
                     "model_revision": model_revision,
                     "dimension": dimension,
                     "purpose": purpose,

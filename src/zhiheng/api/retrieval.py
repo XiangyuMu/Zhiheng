@@ -1051,6 +1051,7 @@ class VectorAwareHybridRetriever:
         generation = self._vector_index.active_generation(
             session,
             model_id=embedding_model_id,
+            provider_id=None if configured_route is None else configured_route["provider_id"],
             model_revision=embedding_model_revision,
             dimension=self._settings.embedding_dimension,
             purpose=self._settings.embedding_purpose,
@@ -1069,6 +1070,7 @@ class VectorAwareHybridRetriever:
         try:
             embedding = self._query_embedder().embed_query(
                 query,
+                provider_id=generation.provider_id,
                 model_id=generation.model_id,
                 model_revision=generation.model_revision,
                 dimension=generation.dimension,
