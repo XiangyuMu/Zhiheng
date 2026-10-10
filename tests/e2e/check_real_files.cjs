@@ -10,7 +10,6 @@ const { execFileSync } = require('node:child_process');
 const { chromium } = require('playwright');
 const [base, output, ...files] = process.argv.slice(2);
 if (!base || !output || files.length !== 2 || !['localhost', '127.0.0.1'].includes(new URL(base).hostname)) throw Error('Expected local URL, private output directory and two files');
-if (!process.env.ZHIHENG_TEST_USERNAME || !process.env.ZHIHENG_TEST_PASSWORD) throw Error('Missing test credentials');
 fs.mkdirSync(output, { recursive: true, mode: 0o700 });
 const report = {
   started: new Date().toISOString(),
@@ -19,9 +18,7 @@ const report = {
   imports: [], answers: [], errors: [],
   status: 'running',
 };
-const expectedPdf = process.env.ZHIHENG_PDF_EXPECTATION_FILE
-  ? JSON.parse(fs.readFileSync(process.env.ZHIHENG_PDF_EXPECTATION_FILE, 'utf8'))
-  : null;
+let expectedPdf = null;
 const saveReport = () => fs.writeFileSync(
   path.join(output, 'browser-report.json'),
   JSON.stringify(report, null, 2),
@@ -31,6 +28,11 @@ const saveReport = () => fs.writeFileSync(
   let browser;
   let page;
   try {
+    if (!process.env.ZHIHENG_TEST_USERNAME || !process.env.ZHIHENG_TEST_PASSWORD) throw Error('Missing test credentials');
+    if (!process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID || !process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID) throw Error('Missing expected answer provider/model identity');
+    expectedPdf = process.env.ZHIHENG_PDF_EXPECTATION_FILE
+      ? JSON.parse(fs.readFileSync(process.env.ZHIHENG_PDF_EXPECTATION_FILE, 'utf8'))
+      : null;
     if (process.env.ZHIHENG_EXPECTED_SHA && report.sha !== process.env.ZHIHENG_EXPECTED_SHA) {
       throw Error('Acceptance SHA mismatch');
     }
@@ -106,6 +108,8 @@ const saveReport = () => fs.writeFileSync(
       answer.answer_provider_id = answerBody.answer_provider_id || null;
       answer.answer_model_id = answerBody.answer_model_id || null;
       answer.answer_audit_id = answerBody.answer_audit_id || null;
+      report.answers.push(answer);
+      saveReport();
       if (answer.status !== 200) throw Error(`answer request failed with HTTP ${answer.status}`);
       if (!answer.answer.trim()) throw Error(`empty answer for ${question.kind}`);
       if (question.kind !== 'negative' && answer.citations < 1) {
@@ -128,7 +132,6 @@ const saveReport = () => fs.writeFileSync(
           throw Error('negative answer appears to fabricate an account number');
         }
       }
-      report.answers.push(answer);
       await page.screenshot({path:path.join(output,`answer-${report.answers.length}.png`),fullPage:true});
       if(answer.citations) {
         await page.locator('#citations .source-card').first().click();
@@ -166,7 +169,11 @@ const saveReport = () => fs.writeFileSync(
       }
     }
     report.status = 'passed';
-  } catch(error) {report.status = 'failed'; report.failure=error.stack; process.exitCode=1;}
+  } catch(error) {
+    report.status = 'failed'; report.failure=error.stack;
+    if (page) await page.screenshot({path:path.join(output,'failure.png'),fullPage:true}).catch(() => {});
+    process.exitCode=1;
+  }
   finally {
     report.finished=new Date().toISOString();
     report.exit_code = process.exitCode || 0;

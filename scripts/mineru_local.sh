@@ -25,7 +25,7 @@ usage() {
 
 case "${1:-}" in
   start)
-    "${COMPOSE[@]}" up -d "${PARSER_SERVICES[@]}"
+    "${COMPOSE[@]}" up -d --build --force-recreate "${PARSER_SERVICES[@]}"
     if [[ "$PARSER_PROFILE" == pdf ]]; then
       python3 "$ROOT/scripts/mineru_warmup.py" \
         --timeout "$WARMUP_TIMEOUT_SECONDS" \

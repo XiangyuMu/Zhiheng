@@ -214,11 +214,20 @@ def configured_pdf_parse_executor(settings: Settings) -> PdfParseJobExecutor | N
         "pdf_deepdoc_url",
         "ZHIHENG_PDF_DEEPDOC_URL",
     )
-    deepdoc_token = _secret_or_env(
-        settings,
-        "pdf_deepdoc_token",
-        "ZHIHENG_PDF_DEEPDOC_TOKEN",
+    deepdoc_token = None
+    deepdoc_token_file = os.environ.get("ZHIHENG_PDF_DEEPDOC_TOKEN_FILE")
+    deepdoc_configured = (
+        parser_backend == "deepdoc"
+        or getattr(settings, "pdf_deepdoc_token", None) is not None
+        or bool(os.environ.get("ZHIHENG_PDF_DEEPDOC_TOKEN"))
+        or bool(deepdoc_token_file and os.path.isfile(deepdoc_token_file))
     )
+    if deepdoc_configured:
+        deepdoc_token = _secret_or_env(
+            settings,
+            "pdf_deepdoc_token",
+            "ZHIHENG_PDF_DEEPDOC_TOKEN",
+        )
     timeout_seconds = _positive_float(
         _setting_or_env(
             settings,

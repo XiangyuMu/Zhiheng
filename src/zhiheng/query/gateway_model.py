@@ -73,6 +73,8 @@ class GatewayAnswerModel:
                 for claim in result.claims
             ),
             model_audit_id=response.audit_id,
+            model_provider_id=self._provider_id,
+            model_id=self._model_id,
         )
 
 

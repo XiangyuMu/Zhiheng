@@ -201,6 +201,24 @@ def _collect_diagnostics(compose: list[str]) -> dict[str, object]:
     return diagnostics
 
 
+def _diagnostics_complete(value: object) -> bool:
+    """Require every real Docker probe to preserve an exit/status record."""
+    if not isinstance(value, dict) or value.get("status") == "unavailable":
+        return False
+    required = (
+        "docker_compose_images",
+        "docker_compose_ps",
+        "docker_inspect",
+        "docker_stats",
+        "mineru_model_cache",
+    )
+    for key in required:
+        item = value.get(key)
+        if not isinstance(item, dict) or item.get("status") != "captured":
+            return False
+    return True
+
+
 def warmup(compose_file: Path, diagnostics: Path, timeout: float) -> int:
     diagnostics.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
@@ -242,6 +260,8 @@ def warmup(compose_file: Path, diagnostics: Path, timeout: float) -> int:
         report["git_sha"] = None
     compose = ["docker", "compose", "-f", str(compose_file), "--profile", "pdf"]
     submitted = False
+    completed = False
+    result_code = 1
     ready: dict[str, object] = {}
     try:
         while time.monotonic() - started < timeout:
@@ -272,7 +292,8 @@ def warmup(compose_file: Path, diagnostics: Path, timeout: float) -> int:
                     report["readiness"] = ready
                     if ready.get("status") == "ready" and ready.get("model") == "ready":
                         report["status"] = "ready"
-                        return 0
+                        completed = True
+                        break
             except urllib.error.HTTPError as exc:
                 report["readiness_http_status"] = exc.code
                 try:
@@ -282,8 +303,10 @@ def warmup(compose_file: Path, diagnostics: Path, timeout: float) -> int:
             except (OSError, ValueError, subprocess.TimeoutExpired):
                 report["readiness_error"] = "probe_unavailable"
             time.sleep(max(0, min(2, timeout - (time.monotonic() - started))))
-        report["status"] = "timeout"
-        return 1
+        if not completed:
+            report["status"] = "timeout"
+        else:
+            result_code = 0
     except BaseException:
         report["status"] = "failed"
         report["failure_code"] = "warmup_interrupted"
@@ -299,7 +322,12 @@ def warmup(compose_file: Path, diagnostics: Path, timeout: float) -> int:
                 "error": "diagnostic_failure",
                 "error_type": type(exc).__name__,
             }
-        (diagnostics / "warmup.json").write_text(json.dumps(report, indent=2) + "\n")
+        if (
+            completed
+            and compose_file.is_file()
+            and not _diagnostics_complete(report["diagnostics"])
+        ):
+            report["status"] = "diagnostics_incomplete"
         if report["status"] != "ready":
             # Bounded log capture cannot prevent the failure report being saved.
             try:
@@ -316,6 +344,7 @@ def warmup(compose_file: Path, diagnostics: Path, timeout: float) -> int:
                 (diagnostics / "warmup-timeout.log").write_text("log_capture_unavailable\n")
                 report["log_capture"] = {"status": "unavailable"}
         (diagnostics / "warmup.json").write_text(json.dumps(report, indent=2) + "\n")
+    return result_code if report["status"] == "ready" else 1
 
 
 def main() -> int:

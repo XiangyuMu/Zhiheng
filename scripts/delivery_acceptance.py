@@ -41,6 +41,8 @@ def clean_environment() -> dict[str, str]:
         "ZHIHENG_REAL_FILE_B",
         "ZHIHENG_RESTART_WORKER_COMMAND",
         "ZHIHENG_RESTART_GATEWAY_COMMAND",
+        "ZHIHENG_RESTART_WORKER_IDENTITY_COMMAND",
+        "ZHIHENG_RESTART_GATEWAY_IDENTITY_COMMAND",
         "ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID",
         "ZHIHENG_EXPECTED_ANSWER_MODEL_ID",
         "MINERU_PARSER_PROFILE",
@@ -62,6 +64,8 @@ def real_pdf_preflight() -> list[str]:
         "ZHIHENG_REAL_FILE_B",
         "ZHIHENG_RESTART_WORKER_COMMAND",
         "ZHIHENG_RESTART_GATEWAY_COMMAND",
+        "ZHIHENG_RESTART_WORKER_IDENTITY_COMMAND",
+        "ZHIHENG_RESTART_GATEWAY_IDENTITY_COMMAND",
         "ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID",
         "ZHIHENG_EXPECTED_ANSWER_MODEL_ID",
     ]
@@ -98,6 +102,8 @@ def execute(
             )
         except OSError as error:
             result["error"] = str(error)
+            result["exit_code"] = None
+            result["seconds"] = round(time.monotonic() - started, 3)
             return result
         try:
             process.wait(timeout=timeout)
@@ -123,7 +129,7 @@ def execute(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--timeout", type=float, default=7200)
+    parser.add_argument("--timeout", type=float, default=900)
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("timeout must be finite and positive")
@@ -145,6 +151,7 @@ def main() -> int:
     env["ZHIHENG_EXPECTED_SHA"] = sha
     env["ZHIHENG_EVIDENCE_DIR"] = str(output)
     env["MINERU_DIAGNOSTIC_DIR"] = str(output / "mineru-warmup")
+    env["ZHIHENG_PDF_PARSER_BACKEND"] = env.get("MINERU_PARSER_PROFILE", "pdf")
     report: dict[str, Any] = {
         "sha": sha,
         "status": "running",

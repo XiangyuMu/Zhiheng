@@ -41,6 +41,7 @@ const evidence = initializeEvidence("check-pdf-search-issue53", output, report);
     const localPdfCheck = validateExpectationAgainstPdf(file, expectation);
     report.expectation = sanitizedExpectation(expectation, localPdfCheck);
     report.sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    if (process.env.ZHIHENG_EXPECTED_SHA) assert.equal(report.sha, process.env.ZHIHENG_EXPECTED_SHA, 'Acceptance must bind to expected SHA');
     report.dirty = Boolean(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim());
     assert.equal(report.dirty, false, 'final browser evidence requires a clean worktree');
     browser = await chromium.launch({ headless: true });

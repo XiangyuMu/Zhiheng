@@ -464,13 +464,8 @@ def answer_question(
     )
     response = _answer_response(result, reason=decision.reason_code)
     if response.route.route != "structured":
-        selected_answer_route = model_defaults(session).get("text")
-        if isinstance(selected_answer_route, dict):
-            response.answer_provider_id = str(selected_answer_route["provider_id"])
-            response.answer_model_id = str(selected_answer_route["model_id"])
-        elif request.app.state.retrieval_settings.answer_provider_id is not None:
-            response.answer_provider_id = request.app.state.retrieval_settings.answer_provider_id
-            response.answer_model_id = request.app.state.retrieval_settings.answer_model_id
+        response.answer_provider_id = getattr(result, "model_provider_id", None)
+        response.answer_model_id = getattr(result, "model_id", None)
         response.answer_audit_id = getattr(result, "model_audit_id", None)
     response.context_prompts = _contextual_prompts(
         session, query=payload.query, user_id=user_id, result=result

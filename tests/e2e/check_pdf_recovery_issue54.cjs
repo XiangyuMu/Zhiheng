@@ -45,12 +45,22 @@ function restart(kind, command) {
   const commandDigest = crypto.createHash('sha256').update(command).digest('hex');
   const stdoutPath = path.join(output, `${safeName}.stdout.log`);
   const stderrPath = path.join(output, `${safeName}.stderr.log`);
+  const identityCommand = kind === 'worker'
+    ? process.env.ZHIHENG_RESTART_WORKER_IDENTITY_COMMAND
+    : process.env.ZHIHENG_RESTART_GATEWAY_IDENTITY_COMMAND;
+  const identity = () => execFileSync('bash', ['-lc', identityCommand], {
+    encoding: 'utf8', stdio: 'pipe', timeout: 30_000,
+  }).trim();
+  const beforeIdentity = identity();
+  assert(beforeIdentity, `${kind} identity probe returned empty output`);
   const writeLog = (file, value) => fs.writeFileSync(file, String(value || '').replace(/(token|key|secret|password)=\S+/gi, '$1=[REDACTED]'), { mode: 0o600 });
   try {
     const stdout = execFileSync('bash', ['-lc', command], { encoding: 'utf8', stdio: 'pipe', timeout: 120_000 });
     writeLog(stdoutPath, stdout);
     writeLog(stderrPath, '');
-    report.restarts.push({ kind, status: 'succeeded', exit_code: 0, command_sha256: commandDigest, elapsed_ms: Date.now() - started, stdout_path: stdoutPath, stderr_path: stderrPath });
+    const afterIdentity = identity();
+    assert(afterIdentity && afterIdentity !== beforeIdentity, `${kind} identity did not change after restart`);
+    report.restarts.push({ kind, status: 'succeeded', exit_code: 0, command_sha256: commandDigest, before_identity_sha256: crypto.createHash('sha256').update(beforeIdentity).digest('hex'), after_identity_sha256: crypto.createHash('sha256').update(afterIdentity).digest('hex'), elapsed_ms: Date.now() - started, stdout_path: stdoutPath, stderr_path: stderrPath });
   } catch (error) {
     writeLog(stdoutPath, error.stdout);
     writeLog(stderrPath, error.stderr || error.message);
@@ -67,6 +77,8 @@ function restart(kind, command) {
     assert(process.env.ZHIHENG_TEST_USERNAME && process.env.ZHIHENG_TEST_PASSWORD, 'Missing credentials');
     assert(process.env.ZHIHENG_RESTART_WORKER_COMMAND, 'Missing Worker restart command');
     assert(process.env.ZHIHENG_RESTART_GATEWAY_COMMAND, 'Missing gateway restart command');
+    assert(process.env.ZHIHENG_RESTART_WORKER_IDENTITY_COMMAND, 'Missing Worker identity command');
+    assert(process.env.ZHIHENG_RESTART_GATEWAY_IDENTITY_COMMAND, 'Missing gateway identity command');
     assert.equal(report.dirty, false, 'Recovery evidence requires a clean checkout');
     if (process.env.ZHIHENG_EXPECTED_SHA) assert.equal(report.sha, process.env.ZHIHENG_EXPECTED_SHA);
     browser = await chromium.launch({ headless: true });

@@ -254,7 +254,7 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--timeout", type=float, default=7200, help="Full-suite seconds (default 7200)"
+        "--timeout", type=float, default=900, help="Full-suite seconds (default 900)"
     )
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
