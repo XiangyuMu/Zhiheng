@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import subprocess
 import time
@@ -68,32 +69,7 @@ def _safe_json_loads(value: str) -> object:
         return values
 
 
-def _capture_json_command(
-    command: list[str], *, timeout: float = 10
-) -> dict[str, object]:
-    try:
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return {"status": "unavailable", "error": "timeout"}
-    except OSError:
-        return {"status": "unavailable", "error": "command_unavailable"}
-    if result.returncode != 0:
-        return {"status": "unavailable", "exit_code": result.returncode}
-    try:
-        return {"status": "captured", "data": _safe_json_loads(result.stdout)}
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return {"status": "unavailable", "error": "invalid_json"}
-
-
-def _capture_text_command(
-    command: list[str], *, timeout: float = 10
-) -> dict[str, object]:
+def _capture_command(command: list[str], *, timeout: float = 10) -> dict[str, object]:
     try:
         result = subprocess.run(
             command,
@@ -109,6 +85,24 @@ def _capture_text_command(
     if result.returncode != 0:
         return {"status": "unavailable", "exit_code": result.returncode}
     return {"status": "captured", "data": result.stdout}
+
+
+def _capture_json_command(
+    command: list[str], *, timeout: float = 10
+) -> dict[str, object]:
+    result = _capture_command(command, timeout=timeout)
+    if result["status"] != "captured":
+        return result
+    try:
+        return {"status": "captured", "data": _safe_json_loads(str(result["data"]))}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {"status": "unavailable", "error": "invalid_json"}
+
+
+def _capture_text_command(
+    command: list[str], *, timeout: float = 10
+) -> dict[str, object]:
+    return _capture_command(command, timeout=timeout)
 
 
 def _container_ids(compose: list[str]) -> dict[str, str]:
@@ -165,7 +159,9 @@ def _collect_diagnostics(compose: list[str]) -> dict[str, object]:
     # provide a placeholder compose path.  There is no useful Docker evidence
     # to collect in that case, and attempting commands would obscure the
     # original warmup result.  Real deployments always pass an existing file.
-    compose_file = Path(compose[2]) if len(compose) > 2 else None
+    compose_file = None
+    with contextlib.suppress(ValueError, IndexError):
+        compose_file = Path(compose[compose.index("-f") + 1])
     if compose_file is None or not compose_file.is_file():
         return {"status": "unavailable", "error": "compose_file_unavailable"}
     diagnostics: dict[str, object] = {
@@ -252,8 +248,12 @@ def warmup(compose_file: Path, diagnostics: Path, timeout: float) -> int:
         report["elapsed_seconds"] = time.monotonic() - started
         try:
             report["diagnostics"] = _collect_diagnostics(compose)
-        except BaseException:
-            report["diagnostics"] = {"status": "unavailable", "error": "diagnostic_failure"}
+        except (OSError, ValueError, TypeError, subprocess.SubprocessError) as exc:
+            report["diagnostics"] = {
+                "status": "unavailable",
+                "error": "diagnostic_failure",
+                "error_type": type(exc).__name__,
+            }
         (diagnostics / "warmup.json").write_text(json.dumps(report, indent=2) + "\n")
         if report["status"] != "ready":
             # Bounded log capture cannot prevent the failure report being saved.

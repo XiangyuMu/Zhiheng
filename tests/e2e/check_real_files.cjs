@@ -82,12 +82,22 @@ const saveReport = () => fs.writeFileSync(
     ];
     for (const question of questions) {
       await page.locator('#question').fill(question.value);
-      const answerResponses=[];
-      const onResponse=r=>{if(new URL(r.url()).pathname==='/v1/answers' && r.request().method()==='POST') answerResponses.push(r.status());};
-      page.on('response',onResponse);
+      const previousAnswer = await page.locator('#answer').innerText().catch(() => '');
+      const answerResponse = page.waitForResponse(
+        r => new URL(r.url()).pathname === '/v1/answers' && r.request().method() === 'POST',
+        { timeout: 240000 },
+      );
       await page.locator('#answer-form button[type=submit]').click();
-      await page.locator('#answer-result').waitFor({state:'visible',timeout:240000});
-      const answer={question: question.value, kind: question.kind, status:answerResponses.at(-1)||null,answer:await page.locator('#answer').innerText(),route:await page.locator('#route').innerText(),citations:await page.locator('#citations .source-card').count()};
+      const answerHttp = await answerResponse;
+      await page.waitForFunction(
+        previous => {
+          const value = document.querySelector('#answer')?.textContent?.trim() || '';
+          return value.length > 0 && value !== previous;
+        },
+        previousAnswer,
+        { timeout: 240000 },
+      );
+      const answer={question: question.value, kind: question.kind, status:answerHttp.status(),answer:await page.locator('#answer').innerText(),route:await page.locator('#route').innerText(),citations:await page.locator('#citations .source-card').count()};
       if (answer.status !== 200) throw Error(`answer request failed with HTTP ${answer.status}`);
       if (!answer.answer.trim()) throw Error(`empty answer for ${question.kind}`);
       if (question.kind !== 'negative' && answer.citations < 1) {
@@ -102,7 +112,6 @@ const saveReport = () => fs.writeFileSync(
         }
       }
       report.answers.push(answer);
-      page.off('response',onResponse);
       await page.screenshot({path:path.join(output,`answer-${report.answers.length}.png`),fullPage:true});
       if(answer.citations) {
         await page.locator('#citations .source-card').first().click();

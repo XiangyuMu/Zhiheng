@@ -944,17 +944,8 @@ def search_knowledge(
     }[sort_key]
     where = " AND ".join(conditions)
     # Keep one row per knowledge object even when a document has multiple chunks.
-    fts_join = (
-        """
-        JOIN (
-          SELECT c.source_id,
-                 0 AS rank,
-                 min(c.raw_text) AS match_text
-          FROM fts_chunks
-          JOIN chunks c ON c.rowid = fts_chunks.rowid
-          JOIN serving_chunks eligible_chunk ON eligible_chunk.id = c.id
-          WHERE fts_chunks MATCH :fts_query
-            AND EXISTS (
+    completed_index_qualification = """
+            EXISTS (
               SELECT 1
               FROM jobs completed_index
               WHERE completed_index.job_type = 'knowledge.index'
@@ -966,27 +957,28 @@ def search_knowledge(
                     = c.source_id
                 )
             )
+    """
+    fts_join = (
+        f"""
+        JOIN (
+          SELECT c.source_id,
+                 0 AS rank,
+                 min(c.raw_text) AS match_text
+          FROM fts_chunks
+          JOIN chunks c ON c.rowid = fts_chunks.rowid
+          JOIN serving_chunks eligible_chunk ON eligible_chunk.id = c.id
+          WHERE fts_chunks MATCH :fts_query
+            AND {completed_index_qualification}
           GROUP BY c.source_id
         ) hit ON hit.source_id = ko.id
         """
         if has_query
-        else """
+        else f"""
         LEFT JOIN (
           SELECT c.source_id, min(c.rowid) AS rowid
           FROM chunks c
           JOIN serving_chunks eligible_chunk ON eligible_chunk.id = c.id
-          WHERE EXISTS (
-            SELECT 1
-            FROM jobs completed_index
-            WHERE completed_index.job_type = 'knowledge.index'
-              AND completed_index.status = 'completed'
-              AND (
-                json_extract(completed_index.payload_json, '$.knowledge_object_id')
-                  = c.source_id
-                OR json_extract(completed_index.payload_json, '$.aggregate_id')
-                  = c.source_id
-              )
-          )
+          WHERE {completed_index_qualification}
           GROUP BY c.source_id
         ) hit ON hit.source_id = ko.id
         """
