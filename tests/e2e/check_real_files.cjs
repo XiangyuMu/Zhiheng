@@ -75,17 +75,26 @@ const saveReport = () => fs.writeFileSync(
       const response = await responsePromise;
       item.http_status = response.status();
       if (!response.ok()) throw new Error(`import ${path.basename(file)} failed with HTTP ${response.status()}`);
-      await page.waitForFunction(() => !document.querySelector('#import-dialog').open);
-      await page.locator('#processing-section').waitFor({state:'visible',timeout:30000});
-      await page.waitForFunction(({title, pdf}) => {
-        const text = document.querySelector('#processing-section')?.innerText || '';
-        if (!text.includes(title)) return false;
-        return pdf ? /(succeeded|parsed|unsupported|failed|partial|dead|不支持|失败)/i.test(text)
-                   : /(已可检索|处理失败|unsupported|failed|部分)/i.test(text);
-      }, {title, pdf}, {timeout: pdf ? 180000 : 120000});
-      item.processing_text = await page.locator('#processing-section').innerText();
-      item.searchable = !pdf && item.processing_text.includes('已可检索');
-      item.terminal = /(已可检索|unsupported|failed|partial|dead|不支持|失败)/i.test(item.processing_text);
+      const receiptBody = await response.json();
+      item.task_id = receiptBody.task_id || receiptBody.knowledge_object_id || null;
+      const statusPath = pdf
+        ? `/v1/knowledge/pdf-imports/${encodeURIComponent(receiptBody.task_id)}`
+        : `/v1/knowledge/${encodeURIComponent(receiptBody.result?.knowledge_object_id)}/processing`;
+      let finalState;
+      await page.waitForFunction(async ({statusPath, pdf}) => {
+        const result = await fetch(statusPath);
+        if (!result.ok) return false;
+        const state = await result.json();
+        const terminal = pdf
+          ? ['parsed', 'succeeded', 'failed', 'partial', 'unsupported', 'dead'].includes(state.state)
+          : ['succeeded', 'failed', 'unsupported', 'partial', 'dead_letter'].includes(state.public_status);
+        return terminal;
+      }, {statusPath, pdf}, {timeout: pdf ? 300000 : 180000});
+      finalState = await page.evaluate(async path => (await fetch(path)).json(), statusPath);
+      item.final_state = finalState.state || finalState.public_status;
+      item.processing_text = JSON.stringify(finalState);
+      item.searchable = pdf ? Boolean(finalState.index_searchable) : finalState.searchable === true;
+      item.terminal = true;
       if (!item.terminal) throw Error(`${path.basename(file)} did not reach a terminal UI state`);
       if (pdf && !/(parsed|succeeded|已可检索)/i.test(item.processing_text)) {
         throw Error(`${path.basename(file)} did not complete successfully`);
