@@ -315,6 +315,22 @@ function recordRegressionReferences() {
     if (process.env.ZHIHENG_EXPECTED_SHA) assert.equal(report.sha, process.env.ZHIHENG_EXPECTED_SHA);
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    await page.addInitScript(() => {
+      const originalFetch = window.fetch;
+      window.__issue54Receipt = null;
+      window.fetch = async (...args) => {
+        const response = await originalFetch.apply(window, args);
+        const request = args[0];
+        const url = new URL(request instanceof Request ? request.url : String(request), location.href);
+        const method = args[1]?.method || (request instanceof Request ? request.method : 'GET');
+        if (url.pathname === '/v1/knowledge/pdf-imports' && method.toUpperCase() === 'POST') {
+          try {
+            window.__issue54Receipt = { http: response.status, body: await response.clone().json() };
+          } catch { window.__issue54Receipt = { http: response.status, body: null }; }
+        }
+        return response;
+      };
+    });
     await page.goto(`${base}/login?next=${encodeURIComponent('/knowledge-agent#library')}`);
     await page.locator('#username').fill(process.env.ZHIHENG_TEST_USERNAME);
     await page.locator('#password').fill(process.env.ZHIHENG_TEST_PASSWORD);
@@ -324,16 +340,14 @@ function recordRegressionReferences() {
     await page.locator('[data-open-import]:visible').first().click();
     await page.locator('#import-file').setInputFiles(file);
     await page.locator('#import-title').fill(`Issue 54 recovery ${crypto.randomUUID()}`);
-    const receiptPromise = page.waitForResponse(
-      response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/knowledge/pdf-imports',
+    await page.locator('#import-submit').click();
+    const receipt = await page.waitForFunction(
+      () => window.__issue54Receipt,
       { timeout: 60_000 },
     );
-    await page.locator('#import-submit').click();
-    const receipt = await receiptPromise;
-    assert.equal(receipt.status(), 202);
-    // Read the body before any other browser polling can evict it from the
-    // DevTools response cache.
-    const receiptBody = JSON.parse((await receipt.body()).toString('utf8'));
+    const receiptPayload = await receipt.jsonValue();
+    assert.equal(receiptPayload.http, 202);
+    const receiptBody = receiptPayload.body;
     assert(receiptBody.task_id && receiptBody.evidence_object_id);
     assert.equal(receiptBody.source_sha256, report.input.sha256);
     report.receipt = {
