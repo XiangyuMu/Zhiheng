@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from logging.config import fileConfig
 from pathlib import Path
 
@@ -11,6 +12,10 @@ from sqlalchemy.engine.url import make_url
 from zhiheng.db.base import metadata
 
 config = context.config
+database_url = os.environ.get("ZHIHENG_DATABASE_URL")
+configured_url = config.get_main_option("sqlalchemy.url")
+if database_url and configured_url == "sqlite:///./var/zhiheng.db":
+    config.set_main_option("sqlalchemy.url", database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
