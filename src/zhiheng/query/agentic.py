@@ -542,6 +542,9 @@ class BoundedAgenticRagService:
             personalization_refs=generated.personalization_refs,
             memory_context_digest=memory_context.digest if memory_context is not None else None,
             memory_impacts=_memory_impacts(memory_context, generated.personalization_refs),
+            model_audit_id=generated.model_audit_id,
+            model_provider_id=generated.model_provider_id,
+            model_id=generated.model_id,
         )
 
 

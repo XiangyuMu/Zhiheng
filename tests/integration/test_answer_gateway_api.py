@@ -134,6 +134,13 @@ def test_answer_api_uses_configured_model_gateway_and_counting_transport(
     assert {ref["formal_memory_id"] for ref in payload["personalization_refs"]} == {ids["goal_id"]}
     with session_scope(session_factory) as session:
         assert session.execute(text("SELECT count(*) FROM model_call_audits")).scalar_one() == 1
+        audit = session.execute(
+            text("SELECT id, provider_id, model_id, status FROM model_call_audits")
+        ).mappings().one()
+        assert payload["answer_audit_id"] == audit["id"]
+        assert payload["answer_provider_id"] == audit["provider_id"]
+        assert payload["answer_model_id"] == audit["model_id"]
+        assert audit["status"] == "succeeded"
 
 
 def test_answer_api_external_model_disabled_returns_privacy_denied_zero_send(
@@ -159,6 +166,9 @@ def test_answer_api_external_model_disabled_returns_privacy_denied_zero_send(
     assert response.status_code == 200
     assert response.json()["stop_reason"] == "privacy_denied"
     assert transport.calls == []
+    assert "answer_audit_id" not in response.json()
+    assert "answer_provider_id" not in response.json()
+    assert "answer_model_id" not in response.json()
     with session_scope(session_factory) as session:
         assert session.execute(text("SELECT count(*) FROM model_call_audits")).scalar_one() == 0
 

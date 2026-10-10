@@ -109,6 +109,9 @@ class AnswerEnvelope:
     personalization_refs: tuple[PersonalizationRef, ...] = ()
     memory_context_digest: str | None = None
     memory_impacts: tuple[MemoryImpact, ...] = ()
+    model_audit_id: str | None = None
+    model_provider_id: str | None = None
+    model_id: str | None = None
 
 
 @dataclass(frozen=True)
