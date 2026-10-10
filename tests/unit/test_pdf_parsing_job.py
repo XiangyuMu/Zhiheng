@@ -93,6 +93,9 @@ def test_parse_job_submits_polls_loads_and_publishes(monkeypatch: pytest.MonkeyP
     assert sleeps == [0.25]
     parser.load_manifest.assert_called_once()
     repository.persist_manifest.assert_called_once()
+    persisted_kwargs = repository.persist_manifest.call_args.kwargs
+    assert persisted_kwargs["manifest_uri"] == "file:///objects/manifest.json"
+    assert persisted_kwargs["manifest_sha256"] == "c" * 64
 
 
 def test_parser_attempt_id_survives_job_lease_reclaim() -> None:

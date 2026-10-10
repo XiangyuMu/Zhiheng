@@ -120,7 +120,13 @@ class PdfParseJobExecutor:
         repository = self._repository or PdfRepository()
         with session_scope(session_factory) as session:
             _assert_current_lease(session, job)
-            publication = publish_parse_result(session, repository, manifest)
+            publication = publish_parse_result(
+                session,
+                repository,
+                manifest,
+                manifest_uri=parser_status.manifest.uri,
+                manifest_sha256=parser_status.manifest.sha256,
+            )
         return PdfParseJobResult(publication=publication, parser_state=parser_status.state)
 
     def _client_for_request(self, request: ParserParseRequest) -> ParserWorkerClient:

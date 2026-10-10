@@ -303,6 +303,9 @@ def publish_parse_result(
     session: Session,
     repository: PdfManifestRepository,
     manifest: dict[str, Any],
+    *,
+    manifest_uri: str | None = None,
+    manifest_sha256: str | None = None,
 ) -> PdfPublicationResult:
     """Persist a validated parse result and atomically enqueue indexing.
 
@@ -316,8 +319,14 @@ def publish_parse_result(
         attempt_id = repository.persist_manifest(
             session,
             manifest,
-            manifest_uri=str(manifest.get("manifest_uri") or ""),
-            manifest_sha256=str(manifest.get("manifest_sha256") or ""),
+            # The parser reference is transport metadata, not part of the
+            # versioned manifest schema. Callers must pass the verified URI
+            # and digest returned by the parser protocol; the manifest fields
+            # remain a compatibility fallback for local fixtures.
+            manifest_uri=str(manifest_uri or manifest.get("manifest_uri") or ""),
+            manifest_sha256=str(
+                manifest_sha256 or manifest.get("manifest_sha256") or ""
+            ),
         )
         formal_block_count = sum(
             1 for block in manifest.get("blocks", ()) if block.get("status") == "formal"
