@@ -482,12 +482,15 @@ def test_pdf_search_rejects_incomplete_page_states(tmp_path: Path, page_status: 
     _assert_not_searchable(client, knowledge_id)
 
 
-def test_pdf_search_rejects_nonformal_table_and_image_resources(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "resource_failure",
+    ["table", "image_pending", "image_failed", "image_empty_uri", "image_empty_sha"],
+)
+def test_pdf_search_rejects_incomplete_resources(tmp_path: Path, resource_failure: str) -> None:
     client, factory = _client(tmp_path)
     _login(client)
     knowledge_id = _pdf_knowledge(factory, tmp_path)
-    generation_id = _complete_retrieval_generation(factory, knowledge_id)
-    del generation_id
+    _complete_retrieval_generation(factory, knowledge_id)
     with session_scope(factory) as session:
         attempt_id = str(
             session.execute(
@@ -513,14 +516,43 @@ def test_pdf_search_rejects_nonformal_table_and_image_resources(tmp_path: Path) 
                 {"attempt_id": attempt_id},
             ).scalar_one()
         )
-        session.execute(
-            text(
-                "INSERT INTO pdf_tables (id,attempt_id,block_id,page_id,row_count,column_count,"
-                "linear_text,structure_sha256,status) VALUES (:id,:attempt_id,:block_id,:page_id,"
-                "1,1,'incomplete','x','candidate')"
-            ),
-            {"id": new_id(), "attempt_id": attempt_id, "block_id": block_id, "page_id": page_id},
-        )
+        params = {
+            "id": new_id(),
+            "attempt_id": attempt_id,
+            "block_id": block_id,
+            "page_id": page_id,
+        }
+        if resource_failure == "table":
+            session.execute(
+                text(
+                    "INSERT INTO pdf_tables (id,attempt_id,block_id,page_id,row_count,column_count,"
+                    "linear_text,structure_sha256,status) VALUES "
+                    "(:id,:attempt_id,:block_id,:page_id,"
+                    "1,1,'incomplete','x','candidate')"
+                ),
+                params,
+            )
+        else:
+            # Begin with a complete image to prove the qualification query accepts it.
+            session.execute(
+                text(
+                    "INSERT INTO pdf_images (id,attempt_id,block_id,page_id,artifact_uri,sha256,"
+                    "media_type,bbox_json,description_status) VALUES "
+                    "(:id,:attempt_id,:block_id,:page_id,'artifact://fixture/image.png',:sha,"
+                    "'image/png','[0,0,10,10]','formal')"
+                ),
+                {**params, "sha": "a" * 64},
+            )
+    if resource_failure != "table":
+        assert client.get(f"/v1/knowledge/{knowledge_id}").json()["searchable"] is True
+        mutations = {
+            "image_pending": "description_status='pending'",
+            "image_failed": "description_status='failed'",
+            "image_empty_uri": "artifact_uri=''",
+            "image_empty_sha": "sha256=''",
+        }
+        with session_scope(factory) as session:
+            session.execute(text(f"UPDATE pdf_images SET {mutations[resource_failure]}"))
     _assert_not_searchable(client, knowledge_id)
 
 
@@ -588,8 +620,32 @@ def test_database_rejects_removing_formal_chunk_lineage(tmp_path: Path) -> None:
     _login(client)
     knowledge_id = _pdf_knowledge(factory, tmp_path)
     _complete_retrieval_generation(factory, knowledge_id)
-    with session_scope(factory) as session, pytest.raises(
-        IntegrityError, match="requires exact content lineage"
-    ), session.begin_nested():
+    with (
+        session_scope(factory) as session,
+        pytest.raises(IntegrityError, match="requires exact content lineage"),
+        session.begin_nested(),
+    ):
         session.execute(text("UPDATE chunks SET content_span_id=NULL"))
     assert client.get(f"/v1/knowledge/{knowledge_id}").json()["searchable"] is True
+
+
+def test_one_unlinked_block_cannot_hide_among_current_pdf_blocks(tmp_path: Path) -> None:
+    client, factory = _client(tmp_path)
+    _login(client)
+    knowledge_id = _pdf_knowledge(factory, tmp_path)
+    _complete_retrieval_generation(factory, knowledge_id)
+    assert client.get(f"/v1/knowledge/{knowledge_id}").json()["searchable"] is True
+    with session_scope(factory) as session:
+        session.execute(
+            text(
+                "INSERT INTO evidence_blocks (id,attempt_id,page_id,content_version_id,block_key,"
+                "region_type,reading_order,bbox_json,transform_version,text,text_sha256,status) "
+                "SELECT :id,attempt_id,page_id,NULL,'unlinked-block',region_type,2,bbox_json,"
+                "transform_version,text,text_sha256,'formal' FROM evidence_blocks LIMIT 1"
+            ),
+            {"id": new_id()},
+        )
+        assert session.execute(
+            text("SELECT count(*) FROM evidence_blocks WHERE content_version_id IS NOT NULL")
+        ).scalar_one() == 1
+    _assert_not_searchable(client, knowledge_id)

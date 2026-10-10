@@ -55,8 +55,8 @@ def pdf_source_qualified_sql(
               AND (
                 stale_pdf_chunk.source_version_id IS NULL
                 OR stale_pdf_chunk.source_version_id <> (
-                  SELECT current_kv.id FROM knowledge_versions current_kv
-                  WHERE current_kv.content_version_id = {content_alias}.id
+                  SELECT owning_pdf.current_version_id FROM knowledge_objects owning_pdf
+                  WHERE owning_pdf.id = {source_object_sql}
                 )
                 OR stale_pdf_chunk.content_version_id IS NULL
                 OR stale_pdf_chunk.content_version_id <> {content_alias}.id
@@ -76,11 +76,6 @@ def pdf_source_qualified_sql(
         WHERE parsed_pdf_task.evidence_object_id = {evidence_alias}.id
           AND parsed_pdf_task.state = 'parsed'
           AND NOT EXISTS (
-            SELECT 1 FROM evidence_blocks incomplete_pdf_block
-            WHERE incomplete_pdf_block.attempt_id = succeeded_pdf_attempt.id
-              AND incomplete_pdf_block.status <> 'formal'
-          )
-          AND NOT EXISTS (
             SELECT 1 FROM pdf_pages incomplete_pdf_page
             WHERE incomplete_pdf_page.attempt_id = succeeded_pdf_attempt.id
               AND incomplete_pdf_page.status NOT IN ('parsed', 'empty')
@@ -94,7 +89,7 @@ def pdf_source_qualified_sql(
             SELECT 1 FROM pdf_images incomplete_pdf_image
             WHERE incomplete_pdf_image.attempt_id = succeeded_pdf_attempt.id
               AND (
-                incomplete_pdf_image.description_status NOT IN ('formal', 'not_requested')
+                incomplete_pdf_image.description_status <> 'formal'
                 OR incomplete_pdf_image.artifact_uri = ''
                 OR incomplete_pdf_image.sha256 = ''
               )

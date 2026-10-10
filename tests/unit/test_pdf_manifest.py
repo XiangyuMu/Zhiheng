@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -55,7 +56,7 @@ def test_semantic_manifest_corruption_rejected(failure: str) -> None:
 def test_incomplete_manifest_blocks_and_cells_prevent_publication(status: str) -> None:
     from zhiheng.knowledge.pdf_manifest import manifest_is_complete
 
-    manifest = {
+    manifest: dict[str, Any] = {
         "pages": [{"status": "parsed"}],
         "blocks": [{"status": "formal", "text": "complete"}],
         "tables": [{"cells": [{"status": "formal"}]}],
@@ -73,7 +74,7 @@ def test_incomplete_manifest_blocks_and_cells_prevent_publication(status: str) -
 def test_explicit_empty_page_and_image_without_caption_are_complete() -> None:
     from zhiheng.knowledge.pdf_manifest import manifest_is_complete
 
-    manifest = {
+    manifest: dict[str, Any] = {
         "pages": [{"status": "parsed"}, {"status": "empty"}],
         "blocks": [
             {"status": "formal", "text": "complete"},

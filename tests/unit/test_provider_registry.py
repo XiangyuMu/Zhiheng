@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import httpx
+import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
@@ -65,7 +66,9 @@ def test_registered_but_unsupported_provider_can_be_saved_as_disabled_draft(
     assert response.json()["enabled"] is False
 
 
-def test_siliconflow_discovery_uses_embedding_catalog_filter(monkeypatch) -> None:
+def test_siliconflow_discovery_uses_embedding_catalog_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     requested: list[str] = []
 
     class Response:
