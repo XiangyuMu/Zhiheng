@@ -108,9 +108,12 @@ def _capture_json_command(
     if result["status"] != "captured":
         return result
     try:
-        return {"status": "captured", "data": _safe_json_loads(str(result["data"]))}
+        return {**result, "data": _safe_json_loads(str(result["data"]))}
     except (TypeError, ValueError, json.JSONDecodeError):
-        return {"status": "unavailable", "error": "invalid_json"}
+        return {
+            **{key: value for key, value in result.items() if key != "data"},
+            "status": "unavailable", "error": "invalid_json",
+        }
 
 
 def _capture_text_command(

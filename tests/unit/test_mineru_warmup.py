@@ -20,6 +20,21 @@ warmup_module = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(warmup_module)
 
 
+def test_json_diagnostic_preserves_command_and_exit_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command = ["docker", "version", "--format", "json"]
+    monkeypatch.setattr(
+        warmup_module.subprocess, "run",
+        Mock(return_value=subprocess.CompletedProcess(command, 0, '{"version":"test"}', "")),
+    )
+    result = warmup_module._capture_json_command(command)
+    assert result["command"] == command
+    assert result["exit_code"] == 0
+    assert len(result["stdout_sha256"]) == 64
+    assert result["data"] == {"version": "test"}
+
+
 def test_warmup_submits_authenticated_probe_before_accepting_readiness(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
