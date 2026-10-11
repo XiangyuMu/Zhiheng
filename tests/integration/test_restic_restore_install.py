@@ -731,6 +731,7 @@ def test_restic_restore_real_api_worker_starts_and_serves_knowledge_without_keyr
                                     "content": json.dumps(
                                         {
                                             "answer": "restored provider answer",
+                                            "answerability": "supported",
                                             "claims": [],
                                             "conflicts": [],
                                             "assumptions": [],

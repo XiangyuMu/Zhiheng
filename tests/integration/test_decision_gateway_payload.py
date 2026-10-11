@@ -42,6 +42,7 @@ class _DecisionJsonTransport:
         ]
         response = {
             "answer": "网关决策建议已基于授权证据和目标上下文生成。",
+            "answerability": "supported",
             "claims": [{"text": "授权证据支持继续学习", "citation_ids": [citation_id]}],
             "conflicts": [],
             "assumptions": ["仅提供建议"],

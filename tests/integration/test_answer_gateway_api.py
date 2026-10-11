@@ -45,6 +45,7 @@ class _AnswerJsonTransport:
         ]
         response = {
             "answer": "网关模型基于授权证据生成回答。",
+            "answerability": "supported",
             "claims": [{"text": "授权证据可用于回答", "citation_ids": [citation_id]}],
             "conflicts": [],
             "assumptions": [],
@@ -55,6 +56,7 @@ class _AnswerJsonTransport:
         if self.evidence_insufficient:
             response.update(
                 answer="材料未提供答案，证据不足。",
+                answerability="insufficient",
                 claims=[],
                 insufficiencies=["检索到的材料不支持当前问题。"],
                 personalization_refs=[],
