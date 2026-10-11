@@ -136,3 +136,18 @@ def test_mineru_rejects_unknown_content_type_instead_of_downgrading_it() -> None
             source_sha256=hashlib.sha256(b"doc").hexdigest(),
             attempt_id="attempt",
         )
+
+
+def test_mineru_preserves_blank_page_without_manufacturing_a_block() -> None:
+    manifest = content_list_to_manifest(
+        [{"type": "text", "text": "", "page_idx": 0}],
+        task_id="task",
+        evidence_object_id="doc",
+        source_uri="artifact://doc.pdf",
+        source_sha256=hashlib.sha256(b"doc").hexdigest(),
+        attempt_id="attempt",
+        page_count=1,
+    )
+    assert manifest["pages"][0]["status"] == "parsed"
+    assert manifest["blocks"] == []
+    validate_manifest(manifest)

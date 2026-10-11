@@ -186,8 +186,11 @@ def content_list_to_manifest(
             continue
         if typ == "table":
             text = " | ".join(_tag_text(str(item.get("table_body") or "")))
+        # MinerU emits an empty text item for a successfully parsed blank page.
+        # Preserve the page in the manifest, but do not manufacture a formal
+        # knowledge block from empty parser output.
         if typ not in _IMAGE_CONTENT_TYPES and not text:
-            raise ValueError(f"empty content for type: {typ}")
+            continue
         level = int(item.get("text_level") or 0)
         region = (
             "heading"

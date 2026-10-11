@@ -717,7 +717,10 @@ def create_app(
                     manifest = json.loads(
                         gateway._path_for_uri(probe["manifest"]["uri"]).read_bytes()
                     )
-                    model_ready = bool(manifest.get("blocks"))
+                    # A valid parsed page is enough to prove the model is
+                    # loaded.  Empty probe text must not be promoted into a
+                    # formal block; publication still requires formal blocks.
+                    model_ready = bool(manifest.get("pages"))
             except (GatewayError, OSError, ValueError):
                 model_ready = False
         body = {
