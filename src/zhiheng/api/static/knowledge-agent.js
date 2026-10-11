@@ -26,7 +26,7 @@ const stopNames = {
 const processingNames = {
   pending: "等待处理", accepted: "已接收，等待处理", processing: "正在处理资料", queued: "等待处理",
   ready: "已可检索", searchable: "已可检索", completed: "处理完成", retrying: "正在重试",
-  parsed: "解析完成", succeeded: "处理完成", partial: "部分完成，可检索已成功页面",
+  parsed: "解析完成", succeeded: "处理完成", partial: "部分完成，尚不可检索",
   retryable_failed: "处理失败，可以重试", failed: "处理失败", dead: "处理失败", dead_letter: "处理失败，可以重试",
   parse_failed: "解析失败，可以重试", unsupported: "当前服务版本不支持处理", cancelled: "处理已取消",
 };

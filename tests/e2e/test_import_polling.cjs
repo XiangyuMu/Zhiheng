@@ -4,7 +4,8 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const source = fs.readFileSync('src/zhiheng/api/static/knowledge-agent.js', 'utf8');
 const polling = source.slice(source.indexOf('async function pollProcessing(id)'), source.indexOf('function renderProcessing()'));
-async function run(responses) {
+const pdfPolling = source.slice(source.indexOf('async function pollPdfTask(id)'), source.indexOf('async function pollProcessing(id)'));
+async function run(responses, pdf = false) {
   const entry = {};
   let calls = 0, reloads = 0;
   const context = { state: { processing: new Map([['fixture', entry]]) }, processingNames: {},
@@ -13,7 +14,7 @@ async function run(responses) {
     setTimeout: (callback) => callback(),
   };
   vm.createContext(context);
-  await vm.runInContext(polling + '\npollProcessing("fixture")', context);
+  await vm.runInContext(pdf ? pdfPolling + '\npollPdfTask("fixture")' : polling + '\npollProcessing("fixture")', context);
   return { entry, calls, reloads, retained: context.state.processing.has('fixture') };
 }
 test('404 stops after one request without granting readiness', async () => {
@@ -34,4 +35,23 @@ for (const status of ['unsupported', 'failed', 'partial']) test(status + ' remai
 test('only succeeded with searchable removes task and refreshes library', async () => {
   const result = await run([{ public_status: 'succeeded', searchable: true }]);
   assert.equal(result.reloads, 1); assert.equal(result.retained, false);
+});
+
+for (const state of ['unsupported', 'failed', 'partial']) test('PDF ' + state + ' stops polling without refreshing searchable library', async () => {
+  const result = await run([{ state, searchable: true, error_code: 'fixture_pdf_failure' }], true);
+  assert.equal(result.calls, 1);
+  assert.equal(result.reloads, 0);
+  assert.equal(result.entry.terminal, true);
+  assert.equal(result.entry.polling, false);
+});
+test('PDF continues observing automatic retries until qualified completion', async () => {
+  const result = await run([
+    { state: 'processing' },
+    { state: 'queued', error_code: 'parser_unavailable' },
+    { state: 'processing' },
+    { state: 'parsed', searchable: true },
+  ], true);
+  assert.equal(result.calls, 4);
+  assert.equal(result.reloads, 1);
+  assert.equal(result.entry.polling, false);
 });
