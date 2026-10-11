@@ -282,7 +282,19 @@ async function uploadPdfTask(page, file, title) {
   assert(payload.body.task_id && payload.body.evidence_object_id);
   assert.equal(payload.body.source_sha256, report.input.sha256);
   await page.evaluate(() => { window.__issue54Receipt = null; });
-  return payload.body;
+  return { ...payload.body, title };
+}
+
+async function assertFailureUi(page, task, expectedErrorCode, expectRetry) {
+  await page.goto(`${base}/knowledge-agent#library`);
+  const item = page.locator('.processing-item').filter({ hasText: task.title }).first();
+  await item.waitFor({ state: 'visible', timeout: 30_000 });
+  const text = await item.innerText();
+  assert(text.includes(expectedErrorCode), `failure UI omitted stable error code ${expectedErrorCode}`);
+  assert.match(text, /补充资料/, 'failure UI omitted the supplement-material action');
+  if (expectRetry) {
+    await item.getByRole('button', { name: '重试', exact: true }).waitFor({ state: 'visible' });
+  }
 }
 
 async function runFaultInjections(page, file) {
@@ -290,8 +302,24 @@ async function runFaultInjections(page, file) {
   for (const scenario of scenarios) {
     const name = String(scenario.name || '').trim();
     assert(name, 'fault injection scenario requires name');
+    const preparation = execFileSync('bash', ['-lc', scenario.command], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+      timeout: Number(scenario.timeout_ms || 120_000),
+      env: commandEnv({}, {
+        ZHIHENG_ISSUE54_PHASE: 'prepare',
+        ZHIHENG_ISSUE54_FAULT_CATEGORY: scenario.category,
+        ZHIHENG_ISSUE54_EXPECTED_STATE: scenario.expected_state,
+        ZHIHENG_ISSUE54_EXPECTED_ERROR_CODE: scenario.expected_error_code,
+      }),
+    });
     const taskReceipt = await uploadPdfTask(page, file, `Issue 54 fault ${name} ${crypto.randomUUID()}`);
-    const initialScenarioSnapshot = dbSnapshot(taskReceipt.task_id, `fault-${name}-receipt`);
+    const initialScenarioSnapshot = await waitForActiveLease(
+      page,
+      taskReceipt.task_id,
+      `fault-${name}-active-lease`,
+      30_000,
+    );
     const scenarioIdentity = {
       task_id: taskReceipt.task_id,
       attempt_id: parserAttemptFrom(initialScenarioSnapshot),
@@ -308,6 +336,7 @@ async function runFaultInjections(page, file) {
       expected_state: scenario.expected_state || null,
       expected_error_code: scenario.expected_error_code,
       task_id: taskReceipt.task_id,
+      title: taskReceipt.title,
       evidence_object_id: taskReceipt.evidence_object_id,
       source_sha256: taskReceipt.source_sha256,
     };
@@ -323,12 +352,13 @@ async function runFaultInjections(page, file) {
             stdio: 'pipe',
             timeout: Number(scenario.timeout_ms || 120_000),
             env: commandEnv(scenarioIdentity, {
+              ZHIHENG_ISSUE54_PHASE: 'proof',
               ZHIHENG_ISSUE54_FAULT_CATEGORY: scenario.category,
               ZHIHENG_ISSUE54_EXPECTED_STATE: scenario.expected_state,
               ZHIHENG_ISSUE54_EXPECTED_ERROR_CODE: scenario.expected_error_code,
             }),
           });
-          fs.writeFileSync(stdoutPath, redact(stdout), { mode: 0o600 });
+          fs.writeFileSync(stdoutPath, redact(`${preparation}\n${stdout}`), { mode: 0o600 });
           fs.writeFileSync(stderrPath, '', { mode: 0o600 });
           record.command_proof = validateFaultCommandProof(stdout, scenario, scenarioIdentity);
         } catch (error) {
@@ -367,6 +397,12 @@ async function runFaultInjections(page, file) {
             `fault-${name}`,
           );
         }
+        await assertFailureUi(
+          page,
+          taskReceipt,
+          scenario.expected_error_code,
+          Boolean(scenario.expect_ui_retry),
+        );
         if (scenario.expect_ui_retry) {
           const item = page.locator('.processing-item').filter({ hasText: name }).first();
           await item.getByRole('button', { name: '重试', exact: true }).click();
@@ -434,10 +470,22 @@ function recordRegressionReferences() {
     } catch (error) {
       const outputText = `${error.stdout || ''}\n${error.stderr || error.message || ''}`;
       fs.writeFileSync(logPath, redact(outputText), { mode: 0o600 });
-      throw Error(`regression command failed: ${item.command.join(' ')}; log=${logPath}`);
+      return {
+        ...item,
+        command: item.command.join(' '),
+        status: 'failed',
+        exit_code: typeof error.status === 'number' ? error.status : null,
+        elapsed_ms: Date.now() - started,
+        log_path: logPath,
+        output_sha256: crypto.createHash('sha256').update(redact(outputText)).digest('hex'),
+      };
     }
   });
   save();
+  assert(
+    report.regression_references.every((item) => item.status === 'passed'),
+    'recovery regression command failed; see retained logs',
+  );
 }
 
 (async () => {

@@ -42,6 +42,14 @@ const saveReport = () => fs.writeFileSync(
     for (const kind of requiredKinds) {
       if (!declaredKinds.has(kind)) throw Error(`expectation file is missing ${kind} answer contract`);
     }
+    for (const expectation of declaredExpectations) {
+      if (expectation?.kind === 'negative') continue;
+      const facts = expectation?.contains || expectation?.answer_contains || expectation?.facts || [];
+      const declaredFacts = Array.isArray(facts) ? facts : [facts];
+      if (!declaredFacts.some((fact) => String(fact || '').trim())) {
+        throw Error(`positive expectation ${expectation?.kind || 'unknown'} must declare supporting facts`);
+      }
+    }
     if (declaredExpectations.filter(item => item?.kind === 'negative').some(item => item.unanswerable !== true)) {
       throw Error('negative expectation must explicitly declare unanswerable=true');
     }
@@ -173,7 +181,6 @@ const saveReport = () => fs.writeFileSync(
       imported[kind] = item;
       await page.screenshot({path:path.join(output,pdf?'pdf-import.png':'text-import.png'),fullPage:true});
     }
-    await page.waitForTimeout(30000);
     await page.goto(base+'/knowledge-agent#research');
     const questions = [
       { kind: 'text', value: `资料《${imported.text.title}》：引起我注意干嘛？请原样保留这句话并引用原文回答。` },
