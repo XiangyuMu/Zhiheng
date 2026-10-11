@@ -217,9 +217,8 @@ class HybridRetriever:
             # Add its remaining serving chunks so a title-only hit (for example
             # a PDF cover block) cannot hide the substantive pages.
             template = candidates[0] if candidates else None
-            if template is not None:
-                known = {candidate.chunk_id for candidate in candidates}
-                rows = session.execute(
+            known = {candidate.chunk_id for candidate in candidates}
+            rows = session.execute(
                     text(
                         "SELECT id, source_type, source_id, source_version_id, "
                         "confirmation_generation FROM chunks WHERE title = :title "
@@ -227,18 +226,18 @@ class HybridRetriever:
                     ),
                     {"title": filters.title},
                 ).mappings()
-                for index, row in enumerate(rows, start=1):
-                    chunk_id = str(row["id"])
-                    if chunk_id in known:
-                        continue
-                    candidates.append(
+            for index, row in enumerate(rows, start=1):
+                chunk_id = str(row["id"])
+                if chunk_id in known:
+                    continue
+                candidates.append(
                         RetrievalCandidate(
                             source_type=str(row["source_type"]),
                             source_id=str(row["source_id"]),
                             source_version_id=str(row["source_version_id"]),
                             chunk_id=chunk_id,
                             confirmation_generation=int(row["confirmation_generation"]),
-                            generation=template.generation,
+                        generation=None if template is None else template.generation,
                             rank=index,
                             score=0.0,
                             retriever=RetrievalSource.LEXICAL,
