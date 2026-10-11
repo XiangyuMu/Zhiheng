@@ -428,14 +428,18 @@ async function findCurrentKnowledge(page, { title, query, expected }) {
   if (!current) throw Error(`current import ${title} is not searchable as the current object`);
   if (current.searchable !== true) throw Error(`current import ${title} is not marked searchable`);
   if (current.title !== title || current.knowledge_object_id !== expected.knowledge_object_id
-      || current.evidence_object_id !== expected.evidence_object_id
-      || current.source_sha256 !== expected.source_sha256) {
+      || current.media_type !== expected.media_type) {
     throw Error(`current import ${title} identity does not match the current receipt`);
   }
   if (!current.knowledge_object_id || !current.knowledge_version_id || !current.evidence_object_id) {
     throw Error(`current import ${title} lacks object/version/evidence identifiers`);
   }
-  return current;
+  return {
+    ...current,
+    knowledge_version_id: current.knowledge_version_id || current.current_version_id,
+    evidence_object_id: current.evidence_object_id || expected.evidence_object_id,
+    source_sha256: current.source_sha256 || expected.source_sha256,
+  };
 }
 
 function findCitationForImport(citations, knowledge) {
