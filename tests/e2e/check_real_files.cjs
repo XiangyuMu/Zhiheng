@@ -122,7 +122,7 @@ const saveReport = () => fs.writeFileSync(
       report.imports.push(item);
       await page.locator('[data-open-import]:visible').first().click();
       await page.locator('#import-file').setInputFiles(file);
-      const title = '真实验收-' + path.basename(file) + '-' + Date.now();
+      const title = '真实验收-' + path.basename(file) + '-' + crypto.randomUUID().replaceAll('-', '').slice(0, 12);
       item.title = title;
       await page.locator('#import-title').fill(title);
       const importPath = pdf ? '/v1/knowledge/pdf-imports' : '/v1/knowledge/imports';
