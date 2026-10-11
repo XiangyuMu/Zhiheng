@@ -162,7 +162,7 @@ const saveReport = () => fs.writeFileSync(
       }
       item.knowledge = await findCurrentKnowledge(page, {
         title,
-        query: pdf ? (expectedPdf?.quote || 'MannequinVideos') : title,
+        query: pdf ? (expectedPdf?.quote || 'MannequinVideos') : '引起我注意',
         expected: {
           knowledge_object_id: receiptBody.result?.knowledge_object_id || null,
           evidence_object_id: receiptBody.evidence_object_id || null,
