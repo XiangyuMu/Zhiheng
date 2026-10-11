@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, replace
 from typing import Any
@@ -68,6 +69,7 @@ class GatewayAnswerModel:
             memory_context=memory_context,
             max_output_tokens=max_output_tokens,
         )
+        result = _guard_negative_existence_response(query, result)
         return replace(
             result,
             claims=tuple(
@@ -310,6 +312,36 @@ def _parse_generated_answer(
         insufficiencies=tuple(_string_list(data["insufficiencies"], "insufficiencies")),
         output_tokens=output_tokens,
         personalization_refs=personalization_refs,
+    )
+
+
+_NEGATIVE_EXISTENCE_QUERY = re.compile(r"是否|有没有|有无|是否存在")
+_NEGATIVE_EVIDENCE_ANSWER = re.compile(
+    r"没有(?:给出|提供|发现|证据)|未(?:出现|发现)|无法(?:确认|证明)|不存在"
+)
+
+
+def _guard_negative_existence_response(query: str, result: GeneratedAnswer) -> GeneratedAnswer:
+    """Prevent unrelated citations when a model denies an existence question.
+
+    Models occasionally answer a yes/no existence question correctly in prose
+    but attach a retrieved, unrelated claim.  The claim would make the answer
+    look supported by that unrelated source.  The guard is deliberately narrow:
+    it requires an explicit existence query and an explicit negative evidence
+    phrase in the answer, then downgrades the response to insufficient evidence.
+    """
+    if not result.claims:
+        return result
+    if not _NEGATIVE_EXISTENCE_QUERY.search(query):
+        return result
+    if not _NEGATIVE_EVIDENCE_ANSWER.search(result.answer):
+        return result
+    insufficiencies = result.insufficiencies or ("证据中没有找到该事实，无法确认其存在。",)
+    return replace(
+        result,
+        answerability="insufficient",
+        claims=(),
+        insufficiencies=insufficiencies,
     )
 
 

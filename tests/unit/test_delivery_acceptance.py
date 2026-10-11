@@ -99,7 +99,7 @@ def test_stage_evidence_requires_passed_same_sha_reports(tmp_path: Path) -> None
         {"issue": 56, "artifact": "report.json"},
     ]
     for item in matrix[:-1]:
-        path = tmp_path / item["artifact"]
+        path = tmp_path / str(item["artifact"])
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('{"status":"passed","sha":"same-sha"}')
     module.validate_stage_evidence(tmp_path, matrix, "same-sha")

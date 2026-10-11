@@ -21,6 +21,7 @@ from zhiheng.privacy.gateway import DeterministicPatternAnalyzer, PiiFinding, Pr
 from zhiheng.query.contracts import PersonalizationRef
 from zhiheng.query.gateway_model import (
     GatewayAnswerModel,
+    _guard_negative_existence_response,
     _parse_generated_answer,
     _wire_citation_id,
     _wire_memory_ref,
@@ -622,6 +623,29 @@ def test_gateway_answer_parser_requires_answerability_and_consistent_claims() ->
         )
 
 
+def test_gateway_negative_existence_guard_removes_unrelated_claims() -> None:
+    citation = _citation_for(_chunk())
+    result = _parse_generated_answer(
+        json.dumps(
+            {
+                "answer": "没有给出作者的银行账户号码，现有证据未出现该信息。",
+                "answerability": "supported",
+                "claims": [{"text": "无关审稿意见", "citation_ids": [citation.citation_id]}],
+                "conflicts": [],
+                "assumptions": [],
+                "insufficiencies": [],
+                "output_tokens": 3,
+                "personalization_refs": [],
+            }
+        ),
+        citations=(citation,),
+        memory_context=None,
+        max_output_tokens=None,
+    )
+    guarded = _guard_negative_existence_response("这些材料是否给出作者的银行账户号码？", result)
+    assert guarded.answerability == "insufficient"
+    assert guarded.claims == ()
+    assert guarded.insufficiencies
 def _legacy_prompt_length(
     *,
     query: str,
