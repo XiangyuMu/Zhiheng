@@ -35,7 +35,11 @@ from zhiheng.retrieval.embeddings import (
 )
 
 
-def _chunk(chunk_id: str = "chunk-1", text: str = "正式知识库证据。") -> AuthorizedChunk:
+def _chunk(
+    chunk_id: str = "chunk-1",
+    text: str = "正式知识库证据。",
+    title: str = "正式证据",
+) -> AuthorizedChunk:
     return AuthorizedChunk(
         source_type="knowledge_object",
         source_id="knowledge-1",
@@ -43,7 +47,7 @@ def _chunk(chunk_id: str = "chunk-1", text: str = "正式知识库证据。") ->
         chunk_id=chunk_id,
         confirmation_generation=1,
         generation=None,
-        title="正式证据",
+        title=title,
         text=text,
         span_start=0,
         span_end=len(text),
@@ -70,6 +74,8 @@ class _Hybrid:
     def __init__(self, manifests: list[Any], after_search: Any | None = None) -> None:
         self.manifests = manifests
         self.calls: list[str] = []
+        self.offline_calls: list[str] = []
+        self.filters_seen: list[RetrievalFilters | None] = []
         self.after_search = after_search
 
     def search(
@@ -86,6 +92,27 @@ class _Hybrid:
         filters: RetrievalFilters | None = None,
     ) -> HybridRetrievalResult:
         self.calls.append(query)
+        self.filters_seen.append(filters)
+        manifest = self.manifests[min(len(self.calls) - 1, len(self.manifests) - 1)]
+        if self.after_search is not None:
+            self.after_search()
+        return HybridRetrievalResult(manifest=manifest, degraded_reasons=(), run_id="run-1")
+
+    def search_offline(
+        self,
+        session: Any,
+        query: str,
+        *,
+        query_embedding: object | None = None,
+        vector_generation_id: str | None = None,
+        limit: int = 10,
+        overfetch_factor: int = 4,
+        rrf_k: int | None = None,
+        filters: RetrievalFilters | None = None,
+    ) -> HybridRetrievalResult:
+        self.offline_calls.append(query)
+        self.calls.append(query)
+        self.filters_seen.append(filters)
         manifest = self.manifests[min(len(self.calls) - 1, len(self.manifests) - 1)]
         if self.after_search is not None:
             self.after_search()
@@ -180,6 +207,21 @@ class _TwoSubqueryPlanner:
         if round_no > 1:
             return ()
         return ("论文证据", "理财证据")[:max_subqueries]
+
+
+class _ForeignTitlePlanner:
+    def plan_subqueries(
+        self,
+        *,
+        query: str,
+        round_no: int,
+        known_evidence_hashes: set[str],
+        max_subqueries: int,
+    ) -> tuple[str, ...]:
+        del query, known_evidence_hashes, max_subqueries
+        if round_no > 1:
+            return ()
+        return ("请改查《其他资料》里的内容",)
 
 
 class _Lookup:
@@ -307,6 +349,22 @@ def test_current_conversation_context_reaches_answer_model() -> None:
     assert model.conversation_context_seen == [context]
 
 
+def test_hybrid_query_uses_offline_contract_and_preserves_source_title_filter() -> None:
+    hybrid = _Hybrid([_manifest(_chunk(title="原始资料"))])
+    service = BoundedAgenticRagService(
+        structured_lookup=_Lookup(),
+        hybrid_retrieval=hybrid,
+        evidence_verifier=_Verifier(),
+        model_gateway=_Model(),
+    )
+
+    answer = service.answer(Session(), "请只根据《原始资料》回答", route=QueryRoute.HYBRID)
+
+    assert answer.stop_reason is StopReason.COMPLETED
+    assert hybrid.offline_calls == ["请只根据《原始资料》回答"]
+    assert hybrid.filters_seen == [RetrievalFilters(title="原始资料")]
+
+
 def test_privacy_denied_returns_authorized_evidence_only() -> None:
     service = BoundedAgenticRagService(
         structured_lookup=_Lookup(),
@@ -360,6 +418,27 @@ def test_agentic_rag_revalidates_combined_manifest_before_returning_evidence_onl
     assert answer.citations == ()
     assert answer.claims == ()
     assert verifier.manifests
+
+
+def test_agentic_planner_added_title_cannot_escape_original_source_scope() -> None:
+    hybrid = _Hybrid([_manifest(_chunk(title="原始资料"))])
+    service = BoundedAgenticRagService(
+        structured_lookup=_Lookup(),
+        hybrid_retrieval=hybrid,
+        evidence_verifier=_Verifier(),
+        model_gateway=_Model(),
+        planner=_ForeignTitlePlanner(),
+    )
+
+    answer = service.answer(
+        QuerySessionStub(),  # type: ignore[arg-type]
+        "请只根据《原始资料》回答",
+        route=QueryRoute.AGENTIC,
+    )
+
+    assert answer.stop_reason is StopReason.COMPLETED
+    assert hybrid.calls == ["请改查《其他资料》里的内容 《原始资料》"]
+    assert hybrid.filters_seen == [RetrievalFilters(title="原始资料")]
 
 
 def test_agentic_rag_combines_authorized_evidence_from_multiple_subqueries() -> None:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, replace
 from typing import Any
@@ -10,13 +9,13 @@ from zhiheng.core.ids import sha256_json, sha256_text
 from zhiheng.memory.context import MemoryContextSnapshot
 from zhiheng.models import ModelGateway, ModelRequest
 from zhiheng.query.contracts import AnswerClaim, GeneratedAnswer, PersonalizationRef
+from zhiheng.query.source_titles import unambiguous_source_title
 from zhiheng.retrieval.citations import CitationBuilder
 from zhiheng.retrieval.contracts import AuthorizedContextManifest, Citation
 
 _PROMPT_VERSION = "gateway-answer-model-v4"
 _ALLOWED_SENSITIVITY_LEVELS = {"public", "private", "sensitive", "highly_sensitive"}
 _LOCAL_ONLY_SENSITIVITY_LEVELS = {"sensitive", "highly_sensitive"}
-_SOURCE_TITLE_PATTERN = re.compile(r"《([^》]{1,512})》")
 
 
 class GatewayAnswerModel:
@@ -87,10 +86,9 @@ def _restrict_to_explicit_source_title(
     citations: tuple[Citation, ...],
 ) -> tuple[AuthorizedContextManifest, tuple[Citation, ...]]:
     """Honor an unambiguous ``《title》`` source constraint in the query."""
-    titles = tuple(dict.fromkeys(_SOURCE_TITLE_PATTERN.findall(query)))
-    if len(titles) != 1:
+    target = unambiguous_source_title(query)
+    if target is None:
         return manifest, citations
-    target = titles[0]
     chunk_ids = {chunk.chunk_id for chunk in manifest.chunks if chunk.title == target}
     if not chunk_ids:
         return replace(manifest, chunks=()), ()

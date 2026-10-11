@@ -124,6 +124,22 @@ class _Hybrid:
         manifest = self._manifests[min(len(self.calls) - 1, len(self._manifests) - 1)]
         return HybridRetrievalResult(manifest=manifest, degraded_reasons=(), run_id="run-1")
 
+    def search_offline(
+        self,
+        session: Any,
+        query: str,
+        *,
+        query_embedding: object | None = None,
+        vector_generation_id: str | None = None,
+        limit: int = 10,
+        overfetch_factor: int = 4,
+        rrf_k: int | None = None,
+        filters: RetrievalFilters | None = None,
+    ) -> HybridRetrievalResult:
+        self.calls.append((query, limit))
+        manifest = self._manifests[min(len(self.calls) - 1, len(self._manifests) - 1)]
+        return HybridRetrievalResult(manifest=manifest, degraded_reasons=(), run_id="run-1")
+
 
 class _BudgetMaxPlanner:
     def plan_subqueries(

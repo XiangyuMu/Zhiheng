@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from inspect import Parameter, signature
-from typing import Protocol, TypedDict, cast
+from typing import Protocol, TypedDict
 
 from sqlalchemy.orm import Session
 
@@ -21,11 +20,13 @@ from zhiheng.query.contracts import (
     GeneratedAnswer,
     HybridRetrievalPort,
     MemoryImpact,
+    OfflineHybridRetrievalPort,
     PersonalizationRef,
     ReleaseBehaviorConfig,
     StopReason,
     StructuredLookupPort,
 )
+from zhiheng.query.source_titles import explicit_source_titles, unambiguous_source_title
 from zhiheng.retrieval import CitationBuilder, QueryRoute, RetrievalAuthorizer
 from zhiheng.retrieval.contracts import (
     AuthorizedChunk,
@@ -144,6 +145,7 @@ class BoundedAgenticRagService:
         if route is QueryRoute.STRUCTURED:
             raise ValueError("structured queries must use direct lookup, not agentic RAG")
         behavior = behavior or ReleaseBehaviorConfig()
+        source_title = unambiguous_source_title(query)
         if route is QueryRoute.HYBRID:
             result = _search_hybrid(
                 self._hybrid_retrieval,
@@ -153,6 +155,7 @@ class BoundedAgenticRagService:
                 limit=self._budget.max_context_chunks,
                 overfetch_factor=behavior.overfetch_factor,
                 rrf_k=behavior.rrf_k,
+                source_title=source_title,
             )
             usage = BudgetUsage(
                 retrieval_calls=1,
@@ -204,10 +207,13 @@ class BoundedAgenticRagService:
                 break
 
             round_added = False
-            source_titles = tuple(dict.fromkeys(re.findall(r"《([^》]{1,512})》", query)))
-            source_suffix = f" 《{source_titles[0]}》" if len(source_titles) == 1 else ""
+            source_suffix = f" 《{source_title}》" if source_title is not None else ""
             for subquery in subqueries[:remaining_subqueries]:
-                scoped_subquery = subquery if not source_suffix else subquery + source_suffix
+                scoped_subquery = (
+                    subquery
+                    if source_title is None or source_title in explicit_source_titles(subquery)
+                    else subquery + source_suffix
+                )
                 subquery_hash = sha256_text(scoped_subquery)
                 if subquery_hash in seen_queries:
                     stop_reason = StopReason.REPEATED_QUERY
@@ -238,6 +244,7 @@ class BoundedAgenticRagService:
                     limit=max(1, self._budget.max_context_chunks - usage.context_chunks),
                     overfetch_factor=behavior.overfetch_factor,
                     rrf_k=behavior.rrf_k,
+                    source_title=source_title,
                 )
                 session.commit()
                 retrieval_run_ids.append(result.run_id)
@@ -673,24 +680,31 @@ def _search_hybrid(
     limit: int,
     overfetch_factor: int,
     rrf_k: int | None,
+    source_title: str | None,
 ) -> HybridRetrievalResult:
-    parameters = signature(hybrid_retrieval.search).parameters
-    kwargs: dict[str, object] = {"limit": limit}
-    if "release_context" in parameters or _accepts_var_keyword(parameters):
-        kwargs["release_context"] = release_context
-    if "overfetch_factor" in parameters or _accepts_var_keyword(parameters):
-        kwargs["overfetch_factor"] = overfetch_factor
-    if "rrf_k" in parameters or _accepts_var_keyword(parameters):
-        kwargs["rrf_k"] = rrf_k
-    titles = tuple(dict.fromkeys(re.findall(r"《([^》]{1,512})》", query)))
-    if len(titles) == 1 and ("filters" in parameters or _accepts_var_keyword(parameters)):
-        kwargs["filters"] = RetrievalFilters(title=titles[0])
-    search = cast(Callable[..., HybridRetrievalResult], hybrid_retrieval.search)
-    return search(session, query, **kwargs)
-
-
-def _accepts_var_keyword(parameters: Mapping[str, Parameter]) -> bool:
-    return any(parameter.kind is Parameter.VAR_KEYWORD for parameter in parameters.values())
+    filters = RetrievalFilters(title=source_title) if source_title is not None else None
+    if release_context is None:
+        if not isinstance(hybrid_retrieval, OfflineHybridRetrievalPort):
+            raise ValueError(
+                "hybrid retrieval adapter must implement search_offline for offline evaluation"
+            )
+        return hybrid_retrieval.search_offline(
+            session,
+            query,
+            limit=limit,
+            overfetch_factor=overfetch_factor,
+            rrf_k=rrf_k,
+            filters=filters,
+        )
+    return hybrid_retrieval.search(
+        session,
+        query,
+        release_context=release_context,
+        limit=limit,
+        overfetch_factor=overfetch_factor,
+        rrf_k=rrf_k,
+        filters=filters,
+    )
 
 
 def _evidence_only(

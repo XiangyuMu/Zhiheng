@@ -165,6 +165,30 @@ class _EmbeddingHybridPort:
             filters=filters,
         )
 
+    def search_offline(
+        self,
+        session: Session,
+        query: str,
+        *,
+        query_embedding: Sequence[float] | None = None,
+        vector_generation_id: str | None = None,
+        limit: int = 10,
+        overfetch_factor: int = 4,
+        rrf_k: int | None = None,
+        filters: RetrievalFilters | None = None,
+    ) -> HybridRetrievalResult:
+        embedding = query_embedding or self._embeddings_by_query.get(query)
+        return self._hybrid.search_offline(
+            session,
+            query,
+            query_embedding=embedding,
+            vector_generation_id=vector_generation_id or self._generation_id,
+            limit=limit,
+            overfetch_factor=overfetch_factor,
+            rrf_k=rrf_k,
+            filters=filters,
+        )
+
 
 def evaluate_g005_retrieval_runtime(
     tmp_path: Path,

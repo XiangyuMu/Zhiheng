@@ -249,6 +249,26 @@ def test_pdf_parser_failure_is_projected_to_retryable_task_status(tmp_path: Path
         == 0
     )
     body = client.get(task["status_url"]).json()
+    # A transient parser outage remains active while the durable job retry
+    # budget is available; the UI must keep polling instead of projecting a
+    # terminal failure after the first attempt.
+    assert body["state"] == "queued"
+    assert body["error_code"] == "parser_unavailable"
+    assert body["retryable"] is True
+    executor = KnowledgeIndexJobExecutor(Settings(environment="test"))
+    for retry_no in range(2):
+        with session_scope(session_factory) as session:
+            session.execute(text("UPDATE jobs SET available_at=CURRENT_TIMESTAMP"))
+        assert (
+            process_knowledge_jobs_once(
+                session_factory,
+                executor,
+                worker_id=f"pdf-parser-failure-retry-{retry_no}",
+                pdf_executor=FailingParser(),
+            )
+            == 0
+        )
+    body = client.get(task["status_url"]).json()
     assert body["state"] == "failed"
     assert body["error_code"] == "parser_unavailable"
     assert body["retryable"] is True

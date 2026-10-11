@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from sqlalchemy.orm import Session
 
@@ -136,6 +136,22 @@ class HybridRetrievalPort(Protocol):
         query: str,
         *,
         release_context: ReleaseContext,
+        query_embedding: Sequence[float] | None = None,
+        vector_generation_id: str | None = None,
+        limit: int = 10,
+        overfetch_factor: int = 4,
+        rrf_k: int | None = None,
+        filters: RetrievalFilters | None = None,
+    ) -> HybridRetrievalResult: ...
+
+
+@runtime_checkable
+class OfflineHybridRetrievalPort(Protocol):
+    def search_offline(
+        self,
+        session: Session,
+        query: str,
+        *,
         query_embedding: Sequence[float] | None = None,
         vector_generation_id: str | None = None,
         limit: int = 10,
