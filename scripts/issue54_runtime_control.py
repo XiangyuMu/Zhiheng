@@ -40,18 +40,21 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
         "category": "lost_parser_attempt",
         "expected_state": "failed",
         "expected_error_code": "mineru_task_not_found",
+        "assert_polling_stopped": True,
     },
     {
         "name": "parser-failure",
         "category": "parser_failure",
         "expected_state": "failed",
         "expected_error_code": "mineru_failed",
+        "assert_polling_stopped": True,
     },
     {
         "name": "partial-or-unsupported",
         "category": "partial_or_unsupported",
         "expected_state": "failed",
         "expected_error_code": "mineru_result_invalid",
+        "assert_polling_stopped": True,
     },
     {
         "name": "auto-retry-exhausted",
@@ -59,6 +62,7 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
         "expected_state": "failed",
         "expected_error_code": "parser_unavailable",
         "expected_retry_count": 3,
+        "assert_polling_stopped": True,
     },
     {
         "name": "manual-ui-retry",
@@ -66,6 +70,7 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
         "expected_state": "failed",
         "expected_error_code": "parser_unavailable",
         "expect_ui_retry": True,
+        "assert_polling_stopped": True,
     },
 )
 

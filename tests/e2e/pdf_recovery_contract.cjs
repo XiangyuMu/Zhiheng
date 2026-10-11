@@ -40,6 +40,7 @@ function validateFaultScenarios(scenarios) {
     categories.add(category);
     assert.equal(scenario.injected, true, `fault scenario ${name} must be explicitly marked injected=true`);
     assert.equal(scenario.boundary, "external_parser", `fault scenario ${name} must inject at external_parser boundary`);
+    assert.equal(scenario.assert_polling_stopped, true, `fault scenario ${name} must prove polling stops after terminal state`);
     assert(typeof scenario.command === "string" && scenario.command.trim(), `fault scenario ${name} requires command`);
     assert(!scenario.task_id, `fault scenario ${name} must not pre-bind task_id; the harness creates a unique browser task`);
     const expectedState = String(scenario.expected_state || "").trim();

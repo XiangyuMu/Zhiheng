@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -98,10 +99,54 @@ def test_stage_evidence_requires_passed_same_sha_reports(tmp_path: Path) -> None
         {"issue": 55, "artifact": "real-files/browser-report.json"},
         {"issue": 56, "artifact": "report.json"},
     ]
+    payloads = {
+        52: {
+            "status": "passed",
+            "sha": "same-sha",
+            "parsed": {"state": "parsed"},
+            "manifest": {"manifest_sha256": "digest"},
+        },
+        53: {"status": "passed", "sha": "same-sha", "search": {"hit": True}},
+        54: {
+            "status": "passed",
+            "sha": "same-sha",
+            "restarts": [
+                {"kind": "worker", "status": "succeeded"},
+                {"kind": "gateway", "status": "succeeded"},
+            ],
+            "fault_injections": [
+                {
+                    "category": category,
+                    "status": "passed",
+                    "observed": {"polling": {"polling_stopped": True}},
+                }
+                for category in (
+                    "lost_parser_attempt",
+                    "parser_failure",
+                    "partial_or_unsupported",
+                    "auto_retry_exhausted",
+                    "manual_ui_retry",
+                )
+            ],
+        },
+        55: {
+            "status": "passed",
+            "sha": "same-sha",
+            "answers": [{"kind": "negative", "citations": 0, "claims_count": 0}],
+        },
+        56: {
+            "status": "passed",
+            "sha": "same-sha",
+            "clean_before": True,
+            "clean_after": True,
+            "same_sha": True,
+            "steps": [{"status": "passed", "exit_code": 0}],
+        },
+    }
     for item in matrix:
         path = tmp_path / str(item["artifact"])
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('{"status":"passed","sha":"same-sha"}')
+        path.write_text(json.dumps(payloads[int(str(item["issue"]))]))
     module.validate_stage_evidence(tmp_path, matrix, "same-sha")
     (tmp_path / "pdf-search/report.json").write_text('{"status":"failed","sha":"same-sha"}')
     with pytest.raises(ValueError, match="Issue 53"):

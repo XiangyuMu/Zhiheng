@@ -184,6 +184,77 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
             raise ValueError(f"Issue {issue} evidence report did not pass")
         if payload.get("sha") != sha:
             raise ValueError(f"Issue {issue} evidence report is not bound to {sha}")
+        if issue == 52:
+            parsed = payload.get("parsed")
+            manifest = payload.get("manifest")
+            if not isinstance(parsed, dict) or parsed.get("state") not in {"parsed", "succeeded"}:
+                raise ValueError("Issue 52 evidence does not prove a parsed terminal state")
+            if not isinstance(manifest, dict) or not manifest.get("manifest_sha256"):
+                raise ValueError("Issue 52 evidence is missing manifest digest")
+        elif issue == 53:
+            search = payload.get("search")
+            if not isinstance(search, dict) or not search.get("hit"):
+                raise ValueError("Issue 53 evidence does not prove a library hit")
+        elif issue == 54:
+            restarts = payload.get("restarts")
+            if not isinstance(restarts, list) or {
+                item.get("kind")
+                for item in restarts
+                if isinstance(item, dict) and item.get("status") == "succeeded"
+            } != {"worker", "gateway"}:
+                raise ValueError("Issue 54 evidence does not prove both process restarts")
+            faults = payload.get("fault_injections")
+            required = {
+                "lost_parser_attempt",
+                "parser_failure",
+                "partial_or_unsupported",
+                "auto_retry_exhausted",
+                "manual_ui_retry",
+            }
+            observed = (
+                {
+                    item.get("category")
+                    for item in faults
+                    if isinstance(item, dict) and item.get("status") == "passed"
+                }
+                if isinstance(faults, list)
+                else set()
+            )
+            if observed != required:
+                raise ValueError("Issue 54 evidence does not prove all five fault categories")
+            if any(
+                not item.get("observed", {}).get("polling", {}).get("polling_stopped")
+                for item in faults
+            ):
+                raise ValueError("Issue 54 evidence is missing polling-stop proof")
+        elif issue == 55:
+            answers = payload.get("answers")
+            if not isinstance(answers, list) or not any(
+                item.get("kind") == "negative"
+                and item.get("citations") == 0
+                and item.get("claims_count") == 0
+                for item in answers
+                if isinstance(item, dict)
+            ):
+                raise ValueError("Issue 55 evidence does not prove a citation-free negative answer")
+        elif issue == 56:
+            steps = payload.get("steps")
+            if (
+                not payload.get("clean_before")
+                or not payload.get("clean_after")
+                or payload.get("same_sha") is not True
+            ):
+                raise ValueError("Issue 56 evidence is not clean and same-SHA bound")
+            if (
+                not isinstance(steps, list)
+                or not steps
+                or any(
+                    item.get("status") != "passed" or item.get("exit_code") != 0
+                    for item in steps
+                    if isinstance(item, dict)
+                )
+            ):
+                raise ValueError("Issue 56 evidence contains incomplete quality-gate steps")
 
 
 def main() -> int:
