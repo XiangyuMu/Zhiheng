@@ -135,7 +135,10 @@ def _canonical_prompt(
             {
                 "citation_ids": citation_ids_by_chunk.get(chunk.chunk_id, []),
                 "rank": chunk.rank,
-                "text": chunk.text,
+                # Keep the outbound prompt within the privacy gateway limit
+                # while retaining every citation identity. Full source text is
+                # still available through the citation context endpoint.
+                "text": chunk.text[:800],
                 "title": chunk.title,
             }
             for chunk in manifest.chunks
