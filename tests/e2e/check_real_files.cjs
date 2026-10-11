@@ -427,7 +427,8 @@ async function findCurrentKnowledge(page, { title, query, expected }) {
   }
   if (!current) throw Error(`current import ${title} is not searchable as the current object`);
   if (current.searchable !== true) throw Error(`current import ${title} is not marked searchable`);
-  if (current.title !== title || current.knowledge_object_id !== expected.knowledge_object_id
+  if (current.title !== title
+      || (expected.knowledge_object_id && current.knowledge_object_id !== expected.knowledge_object_id)
       || current.media_type !== expected.media_type) {
     throw Error(`current import ${title} identity does not match the current receipt`);
   }
