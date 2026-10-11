@@ -122,7 +122,7 @@ def test_decision_api_gateway_payload_uses_opaque_memory_aliases(
     prompt = json.loads(transport.calls[0])
     outbound = transport.calls[0]
     assert len(transport.calls) == 1
-    assert prompt["prompt_version"] == "gateway-answer-model-v3"
+    assert prompt["prompt_version"] == "gateway-answer-model-v4"
     assert "goal.finance" in prompt["user_query"]
     assert ids["goal_id"] not in prompt["user_query"]
     assert ids["goal_version_id"] not in prompt["user_query"]
@@ -134,6 +134,8 @@ def test_decision_api_gateway_payload_uses_opaque_memory_aliases(
         for entry in prompt["USER_CONFIRMED_CONTEXT"]["entries"]
     ]
     assert memory_aliases and all(alias.startswith("memory-") for alias in memory_aliases)
+    assert ids["goal_id"] not in memory_aliases
+    assert ids["goal_version_id"] not in memory_aliases
     assert body["personalization_refs"][0]["formal_memory_id"] == ids["goal_id"]
     assert body["claims"][0]["citation_ids"] == [body["citations"][0]["citation_id"]]
 

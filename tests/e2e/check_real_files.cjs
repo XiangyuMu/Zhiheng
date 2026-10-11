@@ -52,14 +52,68 @@ const saveReport = () => fs.writeFileSync(
     browser = await chromium.launch({headless:true});
     page = await browser.newPage({viewport:{width:1440,height:1000}});
     page.on('pageerror', error => report.errors.push(error.message));
+    await page.addInitScript(() => {
+      const originalFetch = window.fetch;
+      window.__zhihengObserved = { imports: [], answers: [] };
+      const parseJson = (value) => {
+        if (typeof value !== "string") return null;
+        try { return JSON.parse(value); } catch { return null; }
+      };
+      const requestBody = async (input, init) => {
+        if (init && typeof init.body === "string") return parseJson(init.body);
+        if (input instanceof Request) {
+          try { return await input.clone().json(); } catch { return null; }
+        }
+        return null;
+      };
+      window.fetch = async (...args) => {
+        const input = args[0];
+        const init = args[1] || {};
+        const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+        const method = String(init.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
+        const answerRequest = url.pathname === "/v1/answers" && method === "POST"
+          ? await requestBody(input, init)
+          : null;
+        const response = await originalFetch.apply(window, args);
+        if (
+          (url.pathname === "/v1/knowledge/imports" || url.pathname === "/v1/knowledge/pdf-imports")
+          && method === "POST"
+        ) {
+          try {
+            window.__zhihengObserved.imports.push({
+              path: url.pathname,
+              http: response.status,
+              body: await response.clone().json(),
+            });
+          } catch {
+            window.__zhihengObserved.imports.push({ path: url.pathname, http: response.status, error: "invalid import JSON" });
+          }
+        }
+        if (url.pathname === "/v1/answers" && method === "POST") {
+          try {
+            window.__zhihengObserved.answers.push({
+              path: url.pathname,
+              http: response.status,
+              request: answerRequest,
+              body: await response.clone().json(),
+            });
+          } catch {
+            window.__zhihengObserved.answers.push({ path: url.pathname, http: response.status, request: answerRequest, error: "invalid answer JSON" });
+          }
+        }
+        return response;
+      };
+    });
     await page.goto(base + '/login?next=' + encodeURIComponent('/knowledge-agent#library'));
     await page.locator('#username').fill(process.env.ZHIHENG_TEST_USERNAME);
     await page.locator('#password').fill(process.env.ZHIHENG_TEST_PASSWORD);
     await page.locator('#form button').click();
     await page.waitForURL('**/knowledge-agent*');
     report.login = true;
+    const imported = {};
     for (const file of files) {
       const pdf = file.toLowerCase().endsWith('.pdf');
+      const kind = pdf ? 'pdf' : 'text';
       const item = {
         file: path.basename(file),
         sha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
@@ -69,58 +123,73 @@ const saveReport = () => fs.writeFileSync(
       await page.locator('[data-open-import]:visible').first().click();
       await page.locator('#import-file').setInputFiles(file);
       const title = '真实验收-' + path.basename(file) + '-' + Date.now();
+      item.title = title;
       await page.locator('#import-title').fill(title);
-      const responsePromise = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === (pdf ? '/v1/knowledge/pdf-imports' : '/v1/knowledge/imports'), {timeout:60000});
+      const importPath = pdf ? '/v1/knowledge/pdf-imports' : '/v1/knowledge/imports';
+      const observedIndex = await observedCount(page, 'imports');
       await page.locator('#import-submit').click();
-      const response = await responsePromise;
-      item.http_status = response.status();
-      if (!response.ok()) throw new Error(`import ${path.basename(file)} failed with HTTP ${response.status()}`);
-      const receiptBody = await response.json();
-      item.task_id = receiptBody.task_id || receiptBody.knowledge_object_id || null;
+      const observedImport = await nextObserved(page, 'imports', observedIndex, { path: importPath }, 60000);
+      await page.waitForFunction(() => !document.querySelector('#import-dialog')?.open, { timeout: 60000 });
+      item.http_status = observedImport.http;
+      item.import_receipt = observedImport.body || null;
+      if (observedImport.http < 200 || observedImport.http >= 300) {
+        throw new Error(`import ${path.basename(file)} failed with HTTP ${observedImport.http}`);
+      }
+      const receiptBody = observedImport.body;
+      item.task_id = receiptBody.task_id || receiptBody.knowledge_object_id || receiptBody.result?.knowledge_object_id || null;
       const statusPath = pdf
         ? `/v1/knowledge/pdf-imports/${encodeURIComponent(receiptBody.task_id)}`
         : `/v1/knowledge/${encodeURIComponent(receiptBody.result?.knowledge_object_id)}/processing`;
-      let finalState;
-      await page.waitForFunction(async ({statusPath, pdf}) => {
-        const result = await fetch(statusPath);
-        if (!result.ok) return false;
-        const state = await result.json();
-        const terminal = pdf
-          ? ['parsed', 'succeeded', 'failed', 'partial', 'unsupported', 'dead'].includes(state.state)
-          : ['succeeded', 'failed', 'unsupported', 'partial', 'dead_letter'].includes(state.public_status);
-        return terminal;
-      }, {statusPath, pdf}, {timeout: pdf ? 300000 : 180000});
-      finalState = await page.evaluate(async path => (await fetch(path)).json(), statusPath);
+      if (!item.task_id) throw Error(`${path.basename(file)} receipt did not identify the current import`);
+      const finalSnapshot = await pollTerminalStatus(page, statusPath, { pdf, timeoutMs: pdf ? 300000 : 180000 });
+      const finalState = finalSnapshot.body;
+      item.states = finalSnapshot.states;
       item.final_state = finalState.state || finalState.public_status;
       item.processing_text = JSON.stringify(finalState);
       item.searchable = pdf ? Boolean(finalState.index_searchable) : finalState.searchable === true;
       item.terminal = true;
-      if (!item.terminal) throw Error(`${path.basename(file)} did not reach a terminal UI state`);
-      if (pdf && !/(parsed|succeeded|已可检索)/i.test(item.processing_text)) {
-        throw Error(`${path.basename(file)} did not complete successfully`);
+      if (pdf) {
+        if (finalState.task_id !== receiptBody.task_id) throw Error('PDF terminal snapshot is not bound to the current task');
+        if (finalState.evidence_object_id !== receiptBody.evidence_object_id) throw Error('PDF terminal snapshot is not bound to the current evidence object');
+        if (finalState.source_sha256 !== item.sha256) throw Error('PDF terminal snapshot source digest mismatch');
+        if (finalState.state !== 'parsed' || finalState.index_searchable !== true) {
+          throw Error(`${path.basename(file)} did not become parsed and searchable`);
+        }
+      } else {
+        if (finalState.public_status !== 'succeeded' || finalState.searchable !== true) {
+          throw Error(`${path.basename(file)} did not become succeeded and searchable`);
+        }
       }
+      item.knowledge = await findCurrentKnowledge(page, {
+        title,
+        query: pdf ? (expectedPdf?.quote || 'MannequinVideos') : title,
+        expected: {
+          knowledge_object_id: receiptBody.result?.knowledge_object_id || null,
+          evidence_object_id: receiptBody.evidence_object_id || null,
+          source_sha256: item.sha256,
+          media_type: pdf ? 'application/pdf' : 'text/markdown',
+        },
+      });
+      imported[kind] = item;
       await page.screenshot({path:path.join(output,pdf?'pdf-import.png':'text-import.png'),fullPage:true});
     }
     await page.goto(base+'/knowledge-agent#research');
     const questions = [
-      { kind: 'text', value: '聊天案例开场白一中，对方问“引起我注意干嘛”之后，建议如何回答？请引用原文。' },
-      { kind: 'pdf', value: 'Comments 文档的主要审稿意见是什么？请引用原文。' },
-      { kind: 'negative', value: '这些材料是否给出了作者的银行账户号码？没有证据请明确说明。' },
+      { kind: 'text', value: `只根据资料《${imported.text.title}》回答：对方问“引起我注意干嘛”之后，建议如何回答？请引用原文。` },
+      { kind: 'pdf', value: `只根据资料《${imported.pdf.title}》回答：Comments 文档的主要审稿意见是什么？请引用原文。` },
+      { kind: 'negative', value: `只根据刚导入的资料《${imported.text.title}》和《${imported.pdf.title}》回答：这些材料是否给出了作者的银行账户号码？没有证据请明确说明。` },
     ];
     for (const question of questions) {
       await page.locator('#question').fill(question.value);
       const previousAnswer = await page.locator('#answer').innerText().catch(() => '');
-      const answerResponse = page.waitForResponse(
-        r => new URL(r.url()).pathname === '/v1/answers' && r.request().method() === 'POST',
-        { timeout: 240000 },
-      );
+      const answerIndex = await observedCount(page, 'answers');
       await page.locator('#answer-form button[type=submit]').click();
-      const answerHttp = await answerResponse;
-      const requestPayload = answerHttp.request().postDataJSON();
+      const observedAnswer = await nextObserved(page, 'answers', answerIndex, {}, 240000);
+      const requestPayload = observedAnswer.request;
       if (!requestPayload || requestPayload.query !== question.value) {
         throw Error(`answer response was not bound to the current question: ${question.kind}`);
       }
-      const answerBody = await answerHttp.json();
+      const answerBody = observedAnswer.body;
       await page.waitForFunction(
         previous => {
           const value = document.querySelector('#answer')?.textContent?.trim() || '';
@@ -129,10 +198,15 @@ const saveReport = () => fs.writeFileSync(
         previousAnswer,
         { timeout: 240000 },
       );
+      const targetImport = imported[question.kind] || null;
+      const targetCitation = targetImport
+        ? findCitationForImport(answerBody.citations || [], targetImport.knowledge)
+        : null;
       const answer={
         question: question.value,
         kind: question.kind,
-        status:answerHttp.status(),
+        status:observedAnswer.http,
+        request_query: requestPayload.query,
         answer:await page.locator('#answer').innerText(),
         route:await page.locator('#route').innerText(),
         stop_reason: answerBody.stop_reason || null,
@@ -144,17 +218,39 @@ const saveReport = () => fs.writeFileSync(
       answer.answer_provider_id = answerBody.answer_provider_id || null;
       answer.answer_model_id = answerBody.answer_model_id || null;
       answer.answer_audit_id = answerBody.answer_audit_id || null;
+      answer.bound_source = targetImport ? {
+        knowledge_object_id: targetImport.knowledge.knowledge_object_id,
+        knowledge_version_id: targetImport.knowledge.knowledge_version_id,
+        evidence_object_id: targetImport.knowledge.evidence_object_id,
+        source_sha256: targetImport.knowledge.source_sha256,
+      } : null;
+      answer.bound_citation = targetCitation ? {
+        citation_id: targetCitation.citation_id,
+        source_id: targetCitation.source_id,
+        source_version_id: targetCitation.source_version_id,
+        evidence_object_id: targetCitation.evidence_object_id,
+        content_version_id: targetCitation.content_version_id,
+        content_span_id: targetCitation.content_span_id,
+        page_no: targetCitation.page_no,
+      } : null;
       report.answers.push(answer);
       saveReport();
       if (answer.status !== 200) throw Error(`answer request failed with HTTP ${answer.status}`);
       if (!answer.answer.trim()) throw Error(`empty answer for ${question.kind}`);
       if (question.kind !== 'negative') {
+        if (answer.stop_reason !== 'completed') {
+          throw Error(`answer for ${question.kind} did not complete: ${answer.stop_reason || 'unset'}`);
+        }
+        if (!targetCitation) {
+          throw Error(`answer for ${question.kind} did not cite the current imported object/version`);
+        }
         if (answer.citations < 1 || answer.citation_payload_count < 1) {
           throw Error(`answer for ${question.kind} has no supporting citation`);
         }
         if (answer.claims_count < 1) {
           throw Error(`answer for ${question.kind} has no cited claim in the answer payload`);
         }
+        assertClaimsBoundToCitations(answerBody.claims || [], answerBody.citations || [], targetCitation, question.kind);
       }
       const expectedAnswer = expectedPdf?.answers?.find(item => item.kind === question.kind)
         || expectedPdf?.questions?.find(item => item.kind === question.kind);
@@ -201,17 +297,33 @@ const saveReport = () => fs.writeFileSync(
         }
       }
       await page.screenshot({path:path.join(output,`answer-${report.answers.length}.png`),fullPage:true});
-      if(answer.citations) {
-        await page.locator('#citations .source-card').first().click();
+      if(answer.citations && question.kind !== 'negative') {
+        const sourceContext = await citationContext(page, targetCitation);
+        report.answers.at(-1).source_text = sourceContext.quote || sourceContext.context || '';
+        report.answers.at(-1).source_title = sourceContext.title || '';
+        report.answers.at(-1).source_page_no = sourceContext.page_no || targetCitation.page_no || null;
+        if (!report.answers.at(-1).source_text.trim()) throw Error('citation source text is empty');
+        const expectedAnswer = expectedPdf?.answers?.find(item => item.kind === question.kind)
+          || expectedPdf?.questions?.find(item => item.kind === question.kind);
+        const expectedFacts = expectedAnswer?.contains || expectedAnswer?.answer_contains || expectedAnswer?.facts || [];
+        for (const fact of (Array.isArray(expectedFacts) ? expectedFacts : [expectedFacts])) {
+          if (fact && !report.answers.at(-1).source_text.includes(String(fact))) {
+            throw Error(`citation source text for ${question.kind} is missing expected supporting fact`);
+          }
+        }
+        const sourceCard = page.locator('#citations .source-card').filter({ hasText: targetImport.title }).first();
+        await sourceCard.waitFor({ state: 'visible', timeout: 20000 });
+        await sourceCard.click();
         const context = page.locator('#citation-context-text');
         await page.waitForFunction(() => {
           const value = document.querySelector('#citation-context-text')?.textContent?.trim() || '';
           const title = document.querySelector('#citation-title')?.textContent?.trim() || '';
           return value && !/^(正在|暂无可显示|暂时无法)/.test(value) && title && !/^(正在|暂时无法)/.test(title);
         }, { timeout: 20000 });
-        report.answers.at(-1).source_text=await context.innerText();
-        report.answers.at(-1).source_title=await page.locator('#citation-title').innerText();
-        if (!report.answers.at(-1).source_text.trim()) throw Error('citation source text is empty');
+        const uiSourceText = await context.innerText();
+        const uiSourceTitle = await page.locator('#citation-title').innerText();
+        if (uiSourceTitle !== targetImport.title) throw Error(`UI citation title is not the current ${question.kind} import`);
+        if (!uiSourceText.trim()) throw Error('citation source text is empty');
         if (question.kind === 'pdf') {
           const link = page.locator('#citation-page-link');
           await link.waitFor({state:'visible', timeout:10000});
@@ -220,13 +332,13 @@ const saveReport = () => fs.writeFileSync(
           const original = await page.request.get(new URL(href, base).href);
           if (original.status() !== 200) throw Error(`PDF citation source returned HTTP ${original.status()}`);
           const returnedSha = crypto.createHash('sha256').update(await original.body()).digest('hex');
-          if (returnedSha !== itemForPdfSha(report.imports, files)) throw Error('PDF citation source digest does not match imported PDF');
+          if (returnedSha !== imported.pdf.sha256) throw Error('PDF citation source digest does not match imported PDF');
           if (expectedPdf) {
             const expectedSha = expectedPdf.sha256 || expectedPdf.source_sha256 || expectedPdf.pdf_sha256;
             const expectedPage = Number(expectedPdf.page_no ?? expectedPdf.page ?? expectedPdf.expected_page_no);
             const expectedQuote = String(expectedPdf.quote || expectedPdf.expected_quote || '').replace(/\s+/g, ' ').trim();
             if (expectedSha !== returnedSha) throw Error('PDF expectation is bound to a different source digest');
-            if (!Number.isInteger(expectedPage) || !href.endsWith(`#page=${expectedPage}`)) throw Error('PDF citation page does not match the bound expectation');
+            if (!Number.isInteger(expectedPage) || targetCitation.page_no !== expectedPage || !href.endsWith(`#page=${expectedPage}`)) throw Error('PDF citation page does not match the bound expectation');
             if (!expectedQuote || !report.answers.at(-1).source_text.replace(/\s+/g, ' ').includes(expectedQuote)) throw Error('PDF citation quote does not match the bound expectation');
           }
           report.answers.at(-1).source_pdf_sha256 = returnedSha;
@@ -250,9 +362,99 @@ const saveReport = () => fs.writeFileSync(
   }
 })();
 
-function itemForPdfSha(imports, inputFiles) {
-  const pdf = inputFiles.find(file => file.toLowerCase().endsWith('.pdf'));
-  const item = imports.find(entry => entry.file === path.basename(pdf));
-  if (!item) throw Error('PDF import record is missing');
-  return item.sha256;
+async function observedCount(page, bucket) {
+  return page.evaluate(name => window.__zhihengObserved?.[name]?.length || 0, bucket);
+}
+
+async function nextObserved(page, bucket, startIndex, match, timeoutMs) {
+  const handle = await page.waitForFunction(
+    ({ bucket, startIndex, match }) => {
+      const entries = window.__zhihengObserved?.[bucket] || [];
+      return entries.slice(startIndex).find(entry => {
+        if (match.path && entry.path !== match.path) return false;
+        return true;
+      }) || null;
+    },
+    { bucket, startIndex, match },
+    { timeout: timeoutMs },
+  );
+  const value = await handle.jsonValue();
+  if (!value) throw Error(`no observed ${bucket} response`);
+  return value;
+}
+
+async function pollTerminalStatus(page, statusPath, { pdf, timeoutMs }) {
+  const states = [];
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const snapshot = await page.evaluate(async target => {
+      const response = await fetch(target, { signal: AbortSignal.timeout(10000) });
+      let body = null;
+      try { body = await response.json(); } catch { body = null; }
+      return { http: response.status, body };
+    }, statusPath);
+    states.push({ at: new Date().toISOString(), ...snapshot });
+    if (snapshot.http !== 200) throw Error(`status ${statusPath} returned HTTP ${snapshot.http}`);
+    const state = snapshot.body || {};
+    const terminal = pdf
+      ? ['parsed', 'succeeded', 'failed', 'partial', 'unsupported', 'dead'].includes(state.state)
+      : ['succeeded', 'failed', 'unsupported', 'partial', 'dead_letter'].includes(state.public_status);
+    if (terminal) return { ...snapshot, states };
+    await page.waitForTimeout(1000);
+  }
+  throw Error(`${statusPath} did not reach terminal state within ${timeoutMs}ms`);
+}
+
+async function findCurrentKnowledge(page, { title, query, expected }) {
+  const result = await page.evaluate(async ({ query }) => {
+    const response = await fetch(`/v1/knowledge/search?q=${encodeURIComponent(query)}&limit=100`, { signal: AbortSignal.timeout(10000) });
+    return { http: response.status, body: await response.json() };
+  }, { query });
+  if (result.http !== 200) throw Error(`knowledge search failed with HTTP ${result.http}`);
+  const item = (result.body.items || []).find(candidate => {
+    if (candidate.title !== title) return false;
+    if (expected.knowledge_object_id && candidate.knowledge_object_id !== expected.knowledge_object_id) return false;
+    if (expected.evidence_object_id && candidate.evidence_object_id !== expected.evidence_object_id) return false;
+    return candidate.source_sha256 === expected.source_sha256 && candidate.media_type === expected.media_type;
+  });
+  if (!item) throw Error(`current import ${title} is not searchable as the current object`);
+  if (item.searchable !== true) throw Error(`current import ${title} is not marked searchable`);
+  if (!item.knowledge_object_id || !item.knowledge_version_id || !item.evidence_object_id) {
+    throw Error(`current import ${title} lacks object/version/evidence identifiers`);
+  }
+  return item;
+}
+
+function findCitationForImport(citations, knowledge) {
+  return citations.find(citation => (
+    citation.source_id === knowledge.knowledge_object_id
+    && citation.source_version_id === knowledge.knowledge_version_id
+    && citation.evidence_object_id === knowledge.evidence_object_id
+  )) || null;
+}
+
+function assertClaimsBoundToCitations(claims, citations, targetCitation, kind) {
+  const known = new Set(citations.map(citation => citation.citation_id));
+  let targetClaim = false;
+  for (const claim of claims) {
+    for (const id of claim.citation_ids || []) {
+      if (!known.has(id)) throw Error(`answer for ${kind} includes claim citation outside payload citations`);
+      if (id === targetCitation.citation_id) targetClaim = true;
+    }
+  }
+  if (!targetClaim) throw Error(`answer for ${kind} has no claim bound to the current imported citation`);
+}
+
+async function citationContext(page, citation) {
+  const response = await page.evaluate(async payload => {
+    const r = await fetch('/v1/citations/context', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10000),
+    });
+    return { http: r.status, body: await r.json() };
+  }, citation);
+  if (response.http !== 200) throw Error(`citation context returned HTTP ${response.http}`);
+  return response.body;
 }

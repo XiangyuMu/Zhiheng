@@ -16,6 +16,13 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { chromium } = require('playwright');
+const {
+  snapshotHasActiveLease,
+  validateFaultCommandProof,
+  validateFaultScenarios,
+  validateParserActiveProof,
+  validateRestartCommandProof,
+} = require('./pdf_recovery_contract.cjs');
 
 const [base, output, file] = process.argv.slice(2);
 assert(base && output && file, 'Expected URL, output directory and PDF');
@@ -44,7 +51,18 @@ const save = () => fs.writeFileSync(
   path.join(output, 'report.json'), JSON.stringify(report, null, 2), { mode: 0o600 },
 );
 
-function restart(kind, command) {
+function commandEnv(identity, extra = {}) {
+  return {
+    ...process.env,
+    ZHIHENG_ISSUE54_TASK_ID: identity.task_id || '',
+    ZHIHENG_ISSUE54_ATTEMPT_ID: identity.attempt_id || '',
+    ZHIHENG_ISSUE54_EVIDENCE_OBJECT_ID: identity.evidence_object_id || '',
+    ZHIHENG_ISSUE54_SOURCE_SHA256: identity.source_sha256 || report.input.sha256,
+    ...extra,
+  };
+}
+
+function restart(kind, command, identity) {
   const started = Date.now();
   const safeName = `${kind}-${report.restarts.length + 1}`;
   const commandDigest = crypto.createHash('sha256').update(command).digest('hex');
@@ -53,19 +71,22 @@ function restart(kind, command) {
   const identityCommand = kind === 'worker'
     ? process.env.ZHIHENG_RESTART_WORKER_IDENTITY_COMMAND
     : process.env.ZHIHENG_RESTART_GATEWAY_IDENTITY_COMMAND;
-  const identity = () => execFileSync('bash', ['-lc', identityCommand], {
-    encoding: 'utf8', stdio: 'pipe', timeout: 30_000,
+  const identityProbe = () => execFileSync('bash', ['-lc', identityCommand], {
+    encoding: 'utf8', stdio: 'pipe', timeout: 30_000, env: commandEnv(identity),
   }).trim();
-  const beforeIdentity = identity();
+  const beforeIdentity = identityProbe();
   assert(beforeIdentity, `${kind} identity probe returned empty output`);
   const writeLog = (file, value) => fs.writeFileSync(file, redact(value), { mode: 0o600 });
   try {
-    const stdout = execFileSync('bash', ['-lc', command], { encoding: 'utf8', stdio: 'pipe', timeout: 120_000 });
+    const stdout = execFileSync('bash', ['-lc', command], {
+      encoding: 'utf8', stdio: 'pipe', timeout: 120_000, env: commandEnv(identity),
+    });
     writeLog(stdoutPath, stdout);
     writeLog(stderrPath, '');
-    const afterIdentity = identity();
+    const proof = validateRestartCommandProof(stdout, kind, identity);
+    const afterIdentity = identityProbe();
     assert(afterIdentity && afterIdentity !== beforeIdentity, `${kind} identity did not change after restart`);
-    report.restarts.push({ kind, status: 'succeeded', exit_code: 0, command_sha256: commandDigest, before_identity_sha256: crypto.createHash('sha256').update(beforeIdentity).digest('hex'), after_identity_sha256: crypto.createHash('sha256').update(afterIdentity).digest('hex'), elapsed_ms: Date.now() - started, stdout_path: stdoutPath, stderr_path: stderrPath });
+    report.restarts.push({ kind, status: 'succeeded', exit_code: 0, command_sha256: commandDigest, before_identity_sha256: crypto.createHash('sha256').update(beforeIdentity).digest('hex'), after_identity_sha256: crypto.createHash('sha256').update(afterIdentity).digest('hex'), proof, elapsed_ms: Date.now() - started, stdout_path: stdoutPath, stderr_path: stderrPath });
   } catch (error) {
     writeLog(stdoutPath, error.stdout);
     writeLog(stderrPath, error.stderr || error.message);
@@ -115,7 +136,7 @@ def payload(value):
 task = conn.execute('SELECT id, state, backend, evidence_object_id FROM pdf_tasks WHERE id=?', (task_id,)).fetchone()
 jobs = []
 for row in conn.execute("""
-    SELECT id, job_type, status, attempts, max_attempts, lease_owner, payload_json
+    SELECT id, job_type, status, attempts, max_attempts, lease_owner, lease_expires_at, payload_json
     FROM jobs
     WHERE json_extract(payload_json, '$.task_id') = ?
     ORDER BY updated_at, id
@@ -128,6 +149,7 @@ for row in conn.execute("""
         'attempts': row['attempts'],
         'max_attempts': row['max_attempts'],
         'lease_owner_sha256': __import__('hashlib').sha256(str(row['lease_owner'] or '').encode()).hexdigest() if row['lease_owner'] else None,
+        'lease_expires_at': row['lease_expires_at'],
         'parser_attempt_id': body.get('parser_attempt_id') or body.get('attempt_id'),
         'knowledge_object_id': body.get('knowledge_object_id'),
         'failure_code': body.get('failure_code'),
@@ -206,6 +228,33 @@ async function waitForTask(page, taskId, predicate, label, timeoutMs) {
   throw Error(`${label} timed out; last state was ${JSON.stringify(last)}`);
 }
 
+async function waitForActiveLease(page, taskId, label, timeoutMs) {
+  const started = Date.now();
+  let snapshot = null;
+  while (Date.now() - started < timeoutMs) {
+    snapshot = dbSnapshot(taskId, label);
+    if (snapshotHasActiveLease(snapshot)) return snapshot;
+    await page.waitForTimeout(500);
+  }
+  throw Error(`${label} did not observe an active processing lease: ${JSON.stringify(snapshot)}`);
+}
+
+async function parserStatusProof(identity) {
+  const command = process.env.ZHIHENG_PARSER_ACTIVE_PROBE_COMMAND;
+  assert(command, 'Missing parser active probe command');
+  const output = execFileSync('bash', ['-lc', command], {
+    encoding: 'utf8',
+    stdio: 'pipe',
+    timeout: 30_000,
+    env: commandEnv(identity),
+  });
+  const proof = validateParserActiveProof(output, identity);
+  report.parser_probes = report.parser_probes || [];
+  report.parser_probes.push(proof);
+  save();
+  return proof;
+}
+
 async function assertPollingStopped(page, taskId, label) {
   const key = `/v1/knowledge/pdf-imports/${encodeURIComponent(taskId)}`;
   const before = await page.evaluate((path) => (
@@ -219,25 +268,48 @@ async function assertPollingStopped(page, taskId, label) {
   return { before, after, polling_stopped: true };
 }
 
-async function runFaultInjections(page, taskId) {
-  const scenarios = jsonEnv('ZHIHENG_ISSUE54_FAULTS_JSON', null);
-  assert(Array.isArray(scenarios), 'ZHIHENG_ISSUE54_FAULTS_JSON must be an array');
-  assert(scenarios.length >= 5, 'Issue 54 requires lost-task, failure, partial/unsupported and retry fault scenarios');
-  for (const scenario of scenarios) {
-    assert(scenario.command, `fault scenario ${scenario.name || '<unnamed>'} requires a command`);
-    assert(scenario.expected_state, `fault scenario ${scenario.name || '<unnamed>'} requires expected_state`);
-  }
+async function uploadPdfTask(page, file, title) {
+  await page.locator('[data-open-import]:visible').first().click();
+  await page.locator('#import-file').setInputFiles(file);
+  await page.locator('#import-title').fill(title);
+  await page.locator('#import-submit').click();
+  const receipt = await page.waitForFunction(
+    () => window.__issue54Receipt,
+    { timeout: 60_000 },
+  );
+  const payload = await receipt.jsonValue();
+  assert.equal(payload.http, 202);
+  assert(payload.body.task_id && payload.body.evidence_object_id);
+  assert.equal(payload.body.source_sha256, report.input.sha256);
+  await page.evaluate(() => { window.__issue54Receipt = null; });
+  return payload.body;
+}
+
+async function runFaultInjections(page, file) {
+  const scenarios = validateFaultScenarios(jsonEnv('ZHIHENG_ISSUE54_FAULTS_JSON', null));
   for (const scenario of scenarios) {
     const name = String(scenario.name || '').trim();
     assert(name, 'fault injection scenario requires name');
+    const taskReceipt = await uploadPdfTask(page, file, `Issue 54 fault ${name} ${crypto.randomUUID()}`);
+    const initialScenarioSnapshot = dbSnapshot(taskReceipt.task_id, `fault-${name}-receipt`);
+    const scenarioIdentity = {
+      task_id: taskReceipt.task_id,
+      attempt_id: parserAttemptFrom(initialScenarioSnapshot),
+      evidence_object_id: taskReceipt.evidence_object_id,
+      source_sha256: taskReceipt.source_sha256,
+    };
     const started = Date.now();
     const record = {
       name,
+      category: scenario.category,
       type: String(scenario.type || 'external-command'),
       label: 'fault-injection',
       status: 'running',
       expected_state: scenario.expected_state || null,
-      task_id: scenario.task_id || taskId,
+      expected_error_code: scenario.expected_error_code,
+      task_id: taskReceipt.task_id,
+      evidence_object_id: taskReceipt.evidence_object_id,
+      source_sha256: taskReceipt.source_sha256,
     };
     report.fault_injections.push(record);
     save();
@@ -247,10 +319,18 @@ async function runFaultInjections(page, taskId) {
         const stderrPath = path.join(output, `fault-${name}.stderr.log`);
         try {
           const stdout = execFileSync('bash', ['-lc', scenario.command], {
-            encoding: 'utf8', stdio: 'pipe', timeout: Number(scenario.timeout_ms || 120_000),
+            encoding: 'utf8',
+            stdio: 'pipe',
+            timeout: Number(scenario.timeout_ms || 120_000),
+            env: commandEnv(scenarioIdentity, {
+              ZHIHENG_ISSUE54_FAULT_CATEGORY: scenario.category,
+              ZHIHENG_ISSUE54_EXPECTED_STATE: scenario.expected_state,
+              ZHIHENG_ISSUE54_EXPECTED_ERROR_CODE: scenario.expected_error_code,
+            }),
           });
           fs.writeFileSync(stdoutPath, redact(stdout), { mode: 0o600 });
           fs.writeFileSync(stderrPath, '', { mode: 0o600 });
+          record.command_proof = validateFaultCommandProof(stdout, scenario, scenarioIdentity);
         } catch (error) {
           fs.writeFileSync(stdoutPath, redact(error.stdout), { mode: 0o600 });
           fs.writeFileSync(stderrPath, redact(error.stderr || error.message), { mode: 0o600 });
@@ -267,12 +347,19 @@ async function runFaultInjections(page, taskId) {
           `fault-${name}`,
           Number(scenario.wait_ms || 120_000),
         );
+        assert.equal(terminal.error_code, scenario.expected_error_code);
         record.observed = {
           state: terminal.state,
           error_code: terminal.error_code || null,
           retryable: Boolean(terminal.retryable),
           redacted_summary_present: Boolean(terminal.redacted_summary),
         };
+        if (scenario.expected_retry_count !== undefined) {
+          const snapshot = dbSnapshot(record.task_id, `fault-${name}-terminal`);
+          const attempts = (snapshot?.jobs || []).map((job) => Number(job.attempts || 0));
+          assert(attempts.some((value) => value >= Number(scenario.expected_retry_count)), `${name} did not observe expected retry count`);
+          record.observed.retry_count = Math.max(...attempts);
+        }
         if (scenario.assert_polling_stopped) {
           record.observed.polling = await assertPollingStopped(
             page,
@@ -280,13 +367,18 @@ async function runFaultInjections(page, taskId) {
             `fault-${name}`,
           );
         }
-        if (scenario.expect_retry_endpoint) {
+        if (scenario.expect_ui_retry) {
+          const item = page.locator('.processing-item').filter({ hasText: name }).first();
+          await item.getByRole('button', { name: '重试', exact: true }).click();
+          record.ui_retry_clicked = true;
+          await page.waitForTimeout(1_000);
+        } else if (scenario.expect_retry_endpoint) {
           const retry = await api(page, `/v1/knowledge/pdf-imports/${encodeURIComponent(record.task_id)}/retry`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'X-CSRF-Token': await csrfToken(page),
-              'If-Match': terminal.etag,
+              'If-Match': terminal.etag || '',
               'Idempotency-Key': crypto.randomUUID(),
             },
             body: '{}',
@@ -357,6 +449,8 @@ function recordRegressionReferences() {
     assert(process.env.ZHIHENG_RESTART_GATEWAY_COMMAND, 'Missing gateway restart command');
     assert(process.env.ZHIHENG_RESTART_WORKER_IDENTITY_COMMAND, 'Missing Worker identity command');
     assert(process.env.ZHIHENG_RESTART_GATEWAY_IDENTITY_COMMAND, 'Missing gateway identity command');
+    assert(process.env.ZHIHENG_PARSER_ACTIVE_PROBE_COMMAND, 'Missing parser active probe command');
+    assert(process.env.ZHIHENG_ISSUE54_FAULTS_JSON, 'Missing Issue 54 fault scenarios');
     assert.equal(report.dirty, false, 'Recovery evidence requires a clean checkout');
     if (process.env.ZHIHENG_EXPECTED_SHA) assert.equal(report.sha, process.env.ZHIHENG_EXPECTED_SHA);
     browser = await chromium.launch({ headless: true });
@@ -419,14 +513,21 @@ function recordRegressionReferences() {
     const preWorker = await waitForTask(
       page,
       taskId,
-      state => ['queued', 'processing'].includes(state.state),
+      state => state.state === 'processing',
       'before-worker-restart',
       30_000,
     );
     assert.equal(preWorker.task_id, taskId);
     assert.equal(preWorker.evidence_object_id, receiptBody.evidence_object_id);
     assert.equal(preWorker.source_sha256, report.input.sha256);
-    restart('worker', process.env.ZHIHENG_RESTART_WORKER_COMMAND);
+    const activeLease = await waitForActiveLease(page, taskId, 'before-worker-restart-active-lease', 30_000);
+    report.active_lease_before_worker_restart = activeLease;
+    restart('worker', process.env.ZHIHENG_RESTART_WORKER_COMMAND, {
+      task_id: taskId,
+      attempt_id: persistedParserAttempt,
+      evidence_object_id: receiptBody.evidence_object_id,
+      source_sha256: report.input.sha256,
+    });
     dbSnapshot(taskId, 'after-worker-restart');
     await page.screenshot({path: path.join(output, 'after-worker-restart.png'), fullPage: true});
 
@@ -440,7 +541,19 @@ function recordRegressionReferences() {
     assert.equal(preGateway.state, 'processing', 'gateway restart must occur while parsing is active');
     if (preGateway.attempt_id) firstAttempt = preGateway.attempt_id;
     if (firstAttempt) assert.equal(firstAttempt, persistedParserAttempt);
-    restart('gateway', process.env.ZHIHENG_RESTART_GATEWAY_COMMAND);
+    const parserProof = await parserStatusProof({
+      task_id: taskId,
+      attempt_id: persistedParserAttempt,
+      evidence_object_id: receiptBody.evidence_object_id,
+      source_sha256: report.input.sha256,
+    });
+    report.active_parser_before_gateway_restart = parserProof;
+    restart('gateway', process.env.ZHIHENG_RESTART_GATEWAY_COMMAND, {
+      task_id: taskId,
+      attempt_id: persistedParserAttempt,
+      evidence_object_id: receiptBody.evidence_object_id,
+      source_sha256: report.input.sha256,
+    });
     dbSnapshot(taskId, 'after-gateway-restart');
     await page.screenshot({path: path.join(output, 'after-gateway-restart.png'), fullPage: true});
 
@@ -464,7 +577,7 @@ function recordRegressionReferences() {
     assert.equal(parseAttempts[0].manifest_sha256, parsed.manifest_sha256);
     report.timings.parse_and_recovery_ms = Date.now() - receiptAt;
     assert(report.timings.parse_and_recovery_ms <= 300_000, 'parse plus recovery exceeded the 5 minute budget');
-    await runFaultInjections(page, taskId);
+    await runFaultInjections(page, file);
     recordRegressionReferences();
     report.status = 'passed';
   } catch (error) {
