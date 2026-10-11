@@ -43,6 +43,10 @@ class ParserProtocolError(ParserWorkerError):
     """The worker returned a response outside the versioned contract."""
 
 
+class ParserAttemptNotFoundError(ParserProtocolError):
+    """The parser has no durable record for the requested attempt."""
+
+
 class ParserTerminalFailure(ParserProtocolError):
     """The parser reached a controlled terminal failure with a stable code."""
 
@@ -304,6 +308,8 @@ class ParserWorkerClient:
             raise ParserAuthenticationError("parser service authentication failed")
         if response.status_code >= 500:
             raise ParserUnavailableError("parser service unavailable")
+        if response.status_code == 404 and method == "GET" and path.startswith("/v1/parse/"):
+            raise ParserAttemptNotFoundError("parser attempt not found")
         if response.status_code >= 400:
             raise ParserProtocolError(f"parser request rejected with HTTP {response.status_code}")
         try:
@@ -409,6 +415,7 @@ def _required_string(payload: Mapping[str, Any], field: str) -> str:
 
 __all__ = [
     "ParserAuthenticationError",
+    "ParserAttemptNotFoundError",
     "ParserManifestError",
     "ParserManifestReference",
     "ParserParseRequest",

@@ -25,6 +25,7 @@ from zhiheng.knowledge.pdf_publication import (
 )
 from zhiheng.knowledge.pdf_repository import PdfRepository
 from zhiheng.knowledge.pdf_worker import (
+    ParserAttemptNotFoundError,
     ParserManifestReference,
     ParserParseRequest,
     ParserProtocolError,
@@ -164,8 +165,17 @@ class PdfParseJobExecutor:
         parser_client: ParserWorkerClient,
         request: ParserParseRequest,
     ) -> ParserStatus:
-        receipt = parser_client.submit(request)
-        return self._poll(parser_client, receipt.attempt_id)
+        # A reclaimed worker must resume the durable parser attempt before
+        # submitting. Only an explicit "attempt not found" permits a new
+        # submission; transport and protocol failures remain visible.
+        try:
+            existing = parser_client.status(request.attempt_id)
+        except ParserAttemptNotFoundError:
+            receipt = parser_client.submit(request)
+            return self._poll(parser_client, receipt.attempt_id)
+        if existing.state in {"succeeded", "partial", "failed"}:
+            return existing
+        return self._poll(parser_client, existing.attempt_id)
 
     def _run_fallback(
         self,

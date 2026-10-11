@@ -22,6 +22,7 @@ from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
 from zhiheng.knowledge.pdf_repository import PdfRepository
 from zhiheng.knowledge.pdf_worker import (
     LoadedParserManifest,
+    ParserAttemptNotFoundError,
     ParserManifestReference,
     ParserReceipt,
     ParserStatus,
@@ -111,6 +112,8 @@ class _ParserFixture:
         return ParserReceipt(request.attempt_id, "accepted")
 
     def status(self, attempt_id: str) -> ParserStatus:
+        if attempt_id not in self.submitted:
+            raise ParserAttemptNotFoundError("parser attempt not found")
         if self.terminal_state == "failed":
             return ParserStatus(attempt_id, "failed", None, "whole_task_parse_failed")
         return ParserStatus(

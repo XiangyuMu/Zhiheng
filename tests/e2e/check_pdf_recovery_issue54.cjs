@@ -58,7 +58,7 @@ function restart(kind, command) {
   }).trim();
   const beforeIdentity = identity();
   assert(beforeIdentity, `${kind} identity probe returned empty output`);
-  const writeLog = (file, value) => fs.writeFileSync(file, String(value || '').replace(/(token|key|secret|password)=\S+/gi, '$1=[REDACTED]'), { mode: 0o600 });
+  const writeLog = (file, value) => fs.writeFileSync(file, redact(value), { mode: 0o600 });
   try {
     const stdout = execFileSync('bash', ['-lc', command], { encoding: 'utf8', stdio: 'pipe', timeout: 120_000 });
     writeLog(stdoutPath, stdout);
@@ -84,7 +84,10 @@ function jsonEnv(name, fallback) {
 }
 
 function redact(value) {
-  return String(value || '').replace(/(token|key|secret|password)=\S+/gi, '$1=[REDACTED]');
+  return String(value || '')
+    .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s"',}]+/gi, '$1[REDACTED]')
+    .replace(/((?:api[_-]?key|token|secret|password|authorization)\s*[=:]\s*["']?)[^\s,"'}]+/gi, '$1[REDACTED]')
+    .replace(/(Bearer\s+)[^\s"',}]+/gi, '$1[REDACTED]');
 }
 
 function dbSnapshot(taskId, label) {
@@ -203,9 +206,27 @@ async function waitForTask(page, taskId, predicate, label, timeoutMs) {
   throw Error(`${label} timed out; last state was ${JSON.stringify(last)}`);
 }
 
+async function assertPollingStopped(page, taskId, label) {
+  const key = `/v1/knowledge/pdf-imports/${encodeURIComponent(taskId)}`;
+  const before = await page.evaluate((path) => (
+    (window.__issue54StatusRequests || []).filter((item) => item === path).length
+  ), key);
+  await page.waitForTimeout(2_500);
+  const after = await page.evaluate((path) => (
+    (window.__issue54StatusRequests || []).filter((item) => item === path).length
+  ), key);
+  assert.equal(after, before, `${label} continued polling after terminal state`);
+  return { before, after, polling_stopped: true };
+}
+
 async function runFaultInjections(page, taskId) {
-  const scenarios = jsonEnv('ZHIHENG_ISSUE54_FAULTS_JSON', []);
+  const scenarios = jsonEnv('ZHIHENG_ISSUE54_FAULTS_JSON', null);
   assert(Array.isArray(scenarios), 'ZHIHENG_ISSUE54_FAULTS_JSON must be an array');
+  assert(scenarios.length >= 5, 'Issue 54 requires lost-task, failure, partial/unsupported and retry fault scenarios');
+  for (const scenario of scenarios) {
+    assert(scenario.command, `fault scenario ${scenario.name || '<unnamed>'} requires a command`);
+    assert(scenario.expected_state, `fault scenario ${scenario.name || '<unnamed>'} requires expected_state`);
+  }
   for (const scenario of scenarios) {
     const name = String(scenario.name || '').trim();
     assert(name, 'fault injection scenario requires name');
@@ -252,6 +273,13 @@ async function runFaultInjections(page, taskId) {
           retryable: Boolean(terminal.retryable),
           redacted_summary_present: Boolean(terminal.redacted_summary),
         };
+        if (scenario.assert_polling_stopped) {
+          record.observed.polling = await assertPollingStopped(
+            page,
+            record.task_id,
+            `fault-${name}`,
+          );
+        }
         if (scenario.expect_retry_endpoint) {
           const retry = await api(page, `/v1/knowledge/pdf-imports/${encodeURIComponent(record.task_id)}/retry`, {
             method: 'POST',
@@ -278,27 +306,45 @@ async function runFaultInjections(page, taskId) {
     }
     save();
   }
-  if (scenarios.length === 0) {
-    report.fault_injections.push({
-      status: 'not_run',
-      label: 'fault-injection',
-      reason: 'Set ZHIHENG_ISSUE54_FAULTS_JSON to run lost-task, failure, partial, unsupported, and retry scenarios.',
-    });
-    save();
-  }
 }
 
 function recordRegressionReferences() {
-  report.regression_references = [
+  const commands = [
     {
       claim: 'stale lease writeback is rejected and duplicate completion does not publish twice',
-      command: 'uv run pytest -q tests/integration/test_pdf_parser_lease.py tests/integration/test_knowledge_job_claim_authority.py',
+      command: ['uv', 'run', 'pytest', '-q', 'tests/integration/test_pdf_parser_lease.py', 'tests/integration/test_knowledge_job_claim_authority.py'],
     },
     {
       claim: 'terminal failed/partial/unsupported browser states stop polling and expose recovery actions',
-      command: 'node --test tests/e2e/test_import_polling.cjs && node tests/e2e/check_delivery_contracts.cjs ...',
+      command: ['node', '--test', 'tests/e2e/test_import_polling.cjs'],
     },
-  ];
+  ].map((item, index) => {
+    const started = Date.now();
+    const logPath = path.join(output, `regression-${index + 1}.log`);
+    try {
+      const stdout = execFileSync(item.command[0], item.command.slice(1), {
+        encoding: 'utf8',
+        stdio: 'pipe',
+        timeout: 120_000,
+        cwd: process.cwd(),
+      });
+      const safeOutput = redact(stdout);
+      fs.writeFileSync(logPath, safeOutput, { mode: 0o600 });
+      return {
+        ...item,
+        command: item.command.join(' '),
+        status: 'passed',
+        exit_code: 0,
+        elapsed_ms: Date.now() - started,
+        log_path: logPath,
+        output_sha256: crypto.createHash('sha256').update(safeOutput).digest('hex'),
+      };
+    } catch (error) {
+      const outputText = `${error.stdout || ''}\n${error.stderr || error.message || ''}`;
+      fs.writeFileSync(logPath, redact(outputText), { mode: 0o600 });
+      throw Error(`regression command failed: ${item.command.join(' ')}; log=${logPath}`);
+    }
+  });
   save();
 }
 
@@ -318,11 +364,18 @@ function recordRegressionReferences() {
     await page.addInitScript(() => {
       const originalFetch = window.fetch;
       window.__issue54Receipt = null;
+      window.__issue54StatusRequests = [];
       window.fetch = async (...args) => {
         const response = await originalFetch.apply(window, args);
         const request = args[0];
         const url = new URL(request instanceof Request ? request.url : String(request), location.href);
         const method = args[1]?.method || (request instanceof Request ? request.method : 'GET');
+        if (
+          method.toUpperCase() === 'GET'
+          && url.pathname.startsWith('/v1/knowledge/pdf-imports/')
+        ) {
+          window.__issue54StatusRequests.push(url.pathname);
+        }
         if (url.pathname === '/v1/knowledge/pdf-imports' && method.toUpperCase() === 'POST') {
           try {
             window.__issue54Receipt = { http: response.status, body: await response.clone().json() };
@@ -380,10 +433,11 @@ function recordRegressionReferences() {
     const preGateway = await waitForTask(
       page,
       taskId,
-      state => state.state === 'processing' || state.attempt_id || state.manifest_sha256,
+      state => state.state === 'processing',
       'before-gateway-restart',
       Math.max(1_000, deadline - Date.now()),
     );
+    assert.equal(preGateway.state, 'processing', 'gateway restart must occur while parsing is active');
     if (preGateway.attempt_id) firstAttempt = preGateway.attempt_id;
     if (firstAttempt) assert.equal(firstAttempt, persistedParserAttempt);
     restart('gateway', process.env.ZHIHENG_RESTART_GATEWAY_COMMAND);

@@ -11,6 +11,7 @@ from zhiheng.jobs.knowledge_indexing import ClaimedKnowledgeJob
 from zhiheng.jobs.pdf_parsing import PdfParseJobExecutor
 from zhiheng.knowledge.pdf_worker import (
     LoadedParserManifest,
+    ParserAttemptNotFoundError,
     ParserManifestReference,
     ParserParseRequest,
     ParserReceipt,
@@ -50,6 +51,7 @@ def test_parse_job_submits_polls_loads_and_publishes(monkeypatch: pytest.MonkeyP
     parser = Mock()
     parser.submit.return_value.attempt_id = "attempt-1"
     parser.status.side_effect = [
+        ParserAttemptNotFoundError("missing"),
         ParserStatus("attempt-1", "running", None, None),
         ParserStatus(
             "attempt-1",
@@ -94,7 +96,7 @@ def test_parse_job_submits_polls_loads_and_publishes(monkeypatch: pytest.MonkeyP
     assert result.parser_state == "partial"
     assert result.publication.formal_block_count == 1
     parser.submit.assert_called_once()
-    assert parser.status.call_count == 2
+    assert parser.status.call_count == 3
     assert sleeps == [0.25]
     parser.load_manifest_with_reference.assert_called_once()
     repository.persist_manifest.assert_called_once()
@@ -113,6 +115,52 @@ def test_parser_attempt_id_survives_job_lease_reclaim() -> None:
     assert first.output_prefix == second.output_prefix
 
 
+def test_parse_job_resumes_existing_parser_attempt_without_resubmitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pdf_parsing, "_assert_current_lease", lambda *_: None)
+    parser = Mock()
+    parser.status.return_value = ParserStatus(
+        "attempt-1",
+        "succeeded",
+        ParserManifestReference("file:///objects/manifest.json", "c" * 64),
+        None,
+    )
+    manifest = {
+        "schema_version": "pdf-parser.manifest.v1",
+        "task_id": "task-1",
+        "source": {"evidence_object_id": "evidence-1"},
+        "parser": {"backend": "deepdoc", "attempt_id": "attempt-1"},
+        "pages": [{"page_no": 1, "status": "parsed"}],
+        "blocks": [{"key": "body-1", "status": "formal"}],
+        "manifest_uri": "file:///objects/manifest.json",
+        "manifest_sha256": "c" * 64,
+    }
+    parser.load_manifest_with_reference.return_value = LoadedParserManifest(
+        manifest,
+        ParserManifestReference("file:///objects/manifest.json", "c" * 64),
+    )
+    repository = Mock()
+    repository.persist_manifest.return_value = "attempt-1"
+    session = Mock()
+    savepoint = Mock()
+    savepoint.__enter__ = Mock(return_value=savepoint)
+    savepoint.__exit__ = Mock(return_value=False)
+    session.begin_nested.return_value = savepoint
+    monkeypatch.setattr(pdf_parsing, "session_scope", lambda _factory: nullcontext(session))
+    result = PdfParseJobExecutor(
+        parser,
+        repository=repository,
+        object_store=Mock(),
+        poll_interval_seconds=0,
+        sleep=lambda _: None,
+    ).execute(Mock(return_value=session), _job())
+
+    assert result.parser_state == "succeeded"
+    parser.submit.assert_not_called()
+    parser.status.assert_called_once_with("attempt-1")
+
+
 def test_parse_job_rejects_other_job_types_before_network() -> None:
     parser = Mock()
     with pytest.raises(ValueError, match="unsupported knowledge job type"):
@@ -123,17 +171,16 @@ def test_parse_job_rejects_other_job_types_before_network() -> None:
 def test_parse_job_falls_back_to_mineru_after_deepdoc_whole_task_failure() -> None:
     deepdoc = Mock()
     deepdoc.submit.return_value = ParserReceipt("attempt-1", "accepted")
-    deepdoc.status.return_value = ParserStatus(
-        "attempt-1", "failed", None, "whole_task_parse_failed"
-    )
+    deepdoc.status.side_effect = [
+        ParserAttemptNotFoundError("missing"),
+        ParserStatus("attempt-1", "failed", None, "whole_task_parse_failed"),
+    ]
     mineru = Mock()
     mineru.submit.return_value = ParserReceipt("attempt-1:mineru", "accepted")
-    mineru.status.return_value = ParserStatus(
-        "attempt-1:mineru",
-        "failed",
-        None,
-        "whole_task_parse_failed",
-    )
+    mineru.status.side_effect = [
+        ParserAttemptNotFoundError("missing"),
+        ParserStatus("attempt-1:mineru", "failed", None, "whole_task_parse_failed"),
+    ]
 
     executor = PdfParseJobExecutor(
         deepdoc,
@@ -160,12 +207,15 @@ def test_explicit_deepdoc_failure_falls_back_to_mineru_when_mineru_is_primary(
 ) -> None:
     mineru = Mock()
     mineru.submit.return_value = ParserReceipt("attempt-1:mineru", "accepted")
-    mineru.status.return_value = ParserStatus(
-        "attempt-1:mineru",
-        "succeeded",
-        ParserManifestReference("file:///objects/mineru-manifest.json", "d" * 64),
-        None,
-    )
+    mineru.status.side_effect = [
+        ParserAttemptNotFoundError("missing"),
+        ParserStatus(
+            "attempt-1:mineru",
+            "succeeded",
+            ParserManifestReference("file:///objects/mineru-manifest.json", "d" * 64),
+            None,
+        ),
+    ]
     manifest = {
         "schema_version": "pdf-parser.manifest.v1",
         "task_id": "task-1",
@@ -182,9 +232,10 @@ def test_explicit_deepdoc_failure_falls_back_to_mineru_when_mineru_is_primary(
     )
     deepdoc = Mock()
     deepdoc.submit.return_value = ParserReceipt("attempt-1", "accepted")
-    deepdoc.status.return_value = ParserStatus(
-        "attempt-1", "failed", None, "whole_task_parse_failed"
-    )
+    deepdoc.status.side_effect = [
+        ParserAttemptNotFoundError("missing"),
+        ParserStatus("attempt-1", "failed", None, "whole_task_parse_failed"),
+    ]
     repository = Mock()
     repository.persist_manifest.return_value = "attempt-1:mineru"
     session = Mock()
@@ -235,9 +286,10 @@ def test_parse_job_attempts_mineru_at_most_once(monkeypatch: pytest.MonkeyPatch)
     )
     mineru = Mock()
     mineru.submit.return_value = ParserReceipt("attempt-1:mineru", "accepted")
-    mineru.status.return_value = ParserStatus(
-        "attempt-1:mineru", "failed", None, "whole_task_parse_failed"
-    )
+    mineru.status.side_effect = [
+        ParserAttemptNotFoundError("missing"),
+        ParserStatus("attempt-1:mineru", "failed", None, "whole_task_parse_failed"),
+    ]
     monkeypatch.setattr(pdf_parsing, "_assert_current_lease", lambda *_: None)
     monkeypatch.setattr(pdf_parsing, "session_scope", lambda _factory: nullcontext(Mock()))
 
@@ -255,6 +307,7 @@ def test_parse_job_attempts_mineru_at_most_once(monkeypatch: pytest.MonkeyPatch)
 
 def test_parse_job_does_not_fallback_partial_or_authentication_failures() -> None:
     deepdoc = Mock()
+    deepdoc.status.side_effect = ParserAttemptNotFoundError("missing")
     deepdoc.submit.side_effect = ParserUnavailableError("down")
     mineru = Mock()
     executor = PdfParseJobExecutor(
