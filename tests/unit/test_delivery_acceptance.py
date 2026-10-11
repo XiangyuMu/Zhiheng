@@ -103,10 +103,25 @@ def test_stage_evidence_requires_passed_same_sha_reports(tmp_path: Path) -> None
         52: {
             "status": "passed",
             "sha": "same-sha",
-            "parsed": {"state": "parsed"},
-            "manifest": {"manifest_sha256": "digest"},
+            "input": {"sha256": "source"},
+            "receipt": {"body": {"task_id": "task", "evidence_object_id": "evidence"}},
+            "parsed": {
+                "state": "parsed", "attempt_id": "attempt", "source_sha256": "source",
+                "manifest_uri": "object://manifest", "manifest_sha256": "digest",
+            },
+            "manifest": {
+                "uri": "object://manifest", "sha256": "digest", "page_count": 1, "block_count": 1
+            },
+            "artifacts": {"manifest": {}, "pages": [], "images": []},
         },
-        53: {"status": "passed", "sha": "same-sha", "search": {"hit": True}},
+        53: {
+            "status": "passed", "sha": "same-sha",
+            "search": [{"hit_found": True}],
+            "detail": {
+                "searchable": True,
+                "retrieval_generation": {"model_id": "embed", "physical_index_ref": "sqlite_vec:1"},
+            },
+        },
         54: {
             "status": "passed",
             "sha": "same-sha",
@@ -132,7 +147,11 @@ def test_stage_evidence_requires_passed_same_sha_reports(tmp_path: Path) -> None
         55: {
             "status": "passed",
             "sha": "same-sha",
-            "answers": [{"kind": "negative", "citations": 0, "claims_count": 0}],
+            "answers": [
+                {"kind": "negative", "citations": 0, "claims_count": 0},
+                {"kind": "text", "citations": 1, "claims_count": 1},
+                {"kind": "pdf", "citations": 1, "claims_count": 1},
+            ],
         },
         56: {
             "status": "passed",
@@ -140,7 +159,15 @@ def test_stage_evidence_requires_passed_same_sha_reports(tmp_path: Path) -> None
             "clean_before": True,
             "clean_after": True,
             "same_sha": True,
-            "steps": [{"status": "passed", "exit_code": 0}],
+            "steps": [
+                {"name": name, "status": "passed", "exit_code": 0, "seconds": 1.0, "command": name}
+                for name in (
+                    "dependencies", "versions", "compile", "ruff", "mypy", "pytest", "browser",
+                    "real-pdf-preflight", "mineru-warmup", "parser-health", "pdf-parse",
+                    "pdf-search",
+                    "pdf-recovery", "real-files", "extraction",
+                )
+            ],
         },
     }
     for item in matrix:

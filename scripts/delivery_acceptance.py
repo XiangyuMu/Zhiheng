@@ -171,6 +171,16 @@ def execute(
 
 def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str) -> None:
     """Require each real PDF stage to leave a passed report bound to this SHA."""
+    def require_dict(value: Any, label: str) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            raise ValueError(f"{label} must be an object")
+        return value
+
+    def require_nonempty(value: Any, label: str) -> str:
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"{label} is missing")
+        return value
+
     for item in matrix:
         issue = int(item["issue"])
         report_path = output / str(item["artifact"])
@@ -185,23 +195,64 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
         if payload.get("sha") != sha:
             raise ValueError(f"Issue {issue} evidence report is not bound to {sha}")
         if issue == 52:
-            parsed = payload.get("parsed")
-            manifest = payload.get("manifest")
-            if not isinstance(parsed, dict) or parsed.get("state") not in {"parsed", "succeeded"}:
+            source = require_dict(payload.get("input"), "Issue 52 input")
+            source_sha = require_nonempty(source.get("sha256"), "Issue 52 input.sha256")
+            receipt = require_dict(payload.get("receipt"), "Issue 52 receipt")
+            receipt_body = require_dict(receipt.get("body"), "Issue 52 receipt.body")
+            require_nonempty(receipt_body.get("task_id"), "Issue 52 receipt task_id")
+            require_nonempty(
+                receipt_body.get("evidence_object_id"), "Issue 52 receipt evidence_object_id"
+            )
+            parsed = require_dict(payload.get("parsed"), "Issue 52 parsed")
+            if parsed.get("state") not in {"parsed", "succeeded"}:
                 raise ValueError("Issue 52 evidence does not prove a parsed terminal state")
-            if not isinstance(manifest, dict) or not manifest.get("manifest_sha256"):
-                raise ValueError("Issue 52 evidence is missing manifest digest")
+            require_nonempty(parsed.get("attempt_id"), "Issue 52 parsed.attempt_id")
+            if parsed.get("source_sha256") != source_sha:
+                raise ValueError("Issue 52 parsed source digest is not bound to input")
+            require_nonempty(parsed.get("manifest_uri"), "Issue 52 parsed.manifest_uri")
+            require_nonempty(parsed.get("manifest_sha256"), "Issue 52 parsed.manifest_sha256")
+            manifest = require_dict(payload.get("manifest"), "Issue 52 manifest")
+            require_nonempty(manifest.get("uri"), "Issue 52 manifest.uri")
+            require_nonempty(manifest.get("sha256"), "Issue 52 manifest.sha256")
+            if manifest.get("sha256") != parsed.get("manifest_sha256"):
+                raise ValueError("Issue 52 manifest digest is not bound to parsed output")
+            for field in ("page_count", "block_count"):
+                if not isinstance(manifest.get(field), int) or manifest[field] < 1:
+                    raise ValueError(f"Issue 52 manifest.{field} is invalid")
+            artifacts = require_dict(payload.get("artifacts"), "Issue 52 artifacts")
+            for key in ("manifest", "pages", "images"):
+                if key not in artifacts:
+                    raise ValueError(f"Issue 52 artifacts.{key} is missing")
         elif issue == 53:
             search = payload.get("search")
-            if not isinstance(search, dict) or not search.get("hit"):
+            if (
+                not isinstance(search, list)
+                or not search
+                or any(not isinstance(row, dict) for row in search)
+            ):
+                raise ValueError("Issue 53 search evidence must be a non-empty list")
+            if not any(row.get("hit_found") is True for row in search):
                 raise ValueError("Issue 53 evidence does not prove a library hit")
+            detail = require_dict(payload.get("detail"), "Issue 53 detail")
+            if detail.get("searchable") is not True:
+                raise ValueError("Issue 53 detail is not searchable")
+            generation = require_dict(
+                detail.get("retrieval_generation"), "Issue 53 retrieval_generation"
+            )
+            require_nonempty(generation.get("model_id"), "Issue 53 retrieval model_id")
+            require_nonempty(generation.get("physical_index_ref"), "Issue 53 physical_index_ref")
         elif issue == 54:
             restarts = payload.get("restarts")
-            if not isinstance(restarts, list) or {
+            if (
+                not isinstance(restarts, list)
+                or any(not isinstance(item, dict) for item in restarts)
+                or {
                 item.get("kind")
                 for item in restarts
                 if isinstance(item, dict) and item.get("status") == "succeeded"
-            } != {"worker", "gateway"}:
+                }
+                != {"worker", "gateway"}
+            ):
                 raise ValueError("Issue 54 evidence does not prove both process restarts")
             faults = payload.get("fault_injections")
             required = {
@@ -222,6 +273,8 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
             )
             if observed != required:
                 raise ValueError("Issue 54 evidence does not prove all five fault categories")
+            if not isinstance(faults, list) or any(not isinstance(item, dict) for item in faults):
+                raise ValueError("Issue 54 fault evidence must be a list of objects")
             if any(
                 not item.get("observed", {}).get("polling", {}).get("polling_stopped")
                 for item in faults
@@ -229,14 +282,23 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                 raise ValueError("Issue 54 evidence is missing polling-stop proof")
         elif issue == 55:
             answers = payload.get("answers")
-            if not isinstance(answers, list) or not any(
-                item.get("kind") == "negative"
-                and item.get("citations") == 0
-                and item.get("claims_count") == 0
-                for item in answers
-                if isinstance(item, dict)
+            if (
+                not isinstance(answers, list)
+                or any(not isinstance(item, dict) for item in answers)
+                or not any(
+                    item.get("kind") == "negative"
+                    and item.get("citations") == 0
+                    and item.get("claims_count") == 0
+                    for item in answers
+                )
             ):
                 raise ValueError("Issue 55 evidence does not prove a citation-free negative answer")
+            positive = [item for item in answers if item.get("kind") in {"text", "pdf"}]
+            if not positive or any(
+                item.get("citations", 0) < 1 or item.get("claims_count", 0) < 1
+                for item in positive
+            ):
+                raise ValueError("Issue 55 evidence does not prove cited positive answers")
         elif issue == 56:
             steps = payload.get("steps")
             if (
@@ -248,13 +310,25 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
             if (
                 not isinstance(steps, list)
                 or not steps
+                or any(not isinstance(item, dict) for item in steps)
                 or any(
                     item.get("status") != "passed" or item.get("exit_code") != 0
                     for item in steps
-                    if isinstance(item, dict)
                 )
             ):
                 raise ValueError("Issue 56 evidence contains incomplete quality-gate steps")
+            required_steps = {
+                "dependencies", "versions", "compile", "ruff", "mypy", "pytest", "browser",
+                "real-pdf-preflight", "mineru-warmup", "parser-health", "pdf-parse", "pdf-search",
+                "pdf-recovery", "real-files", "extraction",
+            }
+            if {item.get("name") for item in steps} != required_steps:
+                raise ValueError("Issue 56 evidence is missing required quality-gate steps")
+            if any(
+                not isinstance(item.get("seconds"), (int, float)) or not item.get("command")
+                for item in steps
+            ):
+                raise ValueError("Issue 56 evidence steps lack timing or command details")
 
 
 def main() -> int:

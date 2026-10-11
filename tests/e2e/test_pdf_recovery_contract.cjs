@@ -17,6 +17,7 @@ function completeScenarios(overrides = {}) {
     injected: true,
     boundary: "external_parser",
     command: `issue54-fault-${category}`,
+    assert_polling_stopped: true,
     expected_state: category === "partial_or_unsupported" ? "unsupported" : "failed",
     expected_error_code: `${category}_code`,
     expected_retry_count: category === "auto_retry_exhausted" ? 3 : undefined,
