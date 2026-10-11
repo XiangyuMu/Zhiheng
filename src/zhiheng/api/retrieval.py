@@ -1109,6 +1109,7 @@ class VectorAwareHybridRetriever:
             limit=limit,
             overfetch_factor=overfetch_factor,
             rrf_k=rrf_k,
+            filters=filters,
         )
 
     def _query_embedder(self) -> QueryEmbeddingPort:
