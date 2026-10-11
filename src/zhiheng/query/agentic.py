@@ -204,8 +204,11 @@ class BoundedAgenticRagService:
                 break
 
             round_added = False
+            source_titles = tuple(dict.fromkeys(re.findall(r"《([^》]{1,512})》", query)))
+            source_suffix = f" 《{source_titles[0]}》" if len(source_titles) == 1 else ""
             for subquery in subqueries[:remaining_subqueries]:
-                subquery_hash = sha256_text(subquery)
+                scoped_subquery = subquery if not source_suffix else subquery + source_suffix
+                subquery_hash = sha256_text(scoped_subquery)
                 if subquery_hash in seen_queries:
                     stop_reason = StopReason.REPEATED_QUERY
                     return self._final_evidence_only(
