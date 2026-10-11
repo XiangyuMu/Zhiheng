@@ -123,6 +123,14 @@ def test_privacy_pipeline_refuses_first_person_sensitive_semantics() -> None:
     assert "first-person" in result.reason
 
 
+def test_privacy_pipeline_does_not_join_distant_document_segments() -> None:
+    pipeline = PrivacyPipeline(analyzer=DeterministicPatternAnalyzer())
+
+    result = pipeline.prepare_for_model("我介绍这段对话。\n文档另处提到感情话题。")
+
+    assert result.status == "clear"
+
+
 def test_privacy_pipeline_fails_closed_when_default_presidio_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

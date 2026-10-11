@@ -382,7 +382,16 @@ def _deduplicate_findings(findings: list[PiiFinding]) -> list[PiiFinding]:
 
 
 def _contains_sensitive_personal_semantics(text: str) -> bool:
-    return bool(_FIRST_PERSON_PATTERN.search(text) and _SENSITIVE_CONTEXT_PATTERN.search(text))
+    # Do not combine unrelated words from an entire document. Retrieved
+    # evidence can contain first-person dialogue and a separate sensitive
+    # topic elsewhere; only a single sentence/line establishes the semantic
+    # relationship that requires local handling.
+    segments = re.split(r"[\n。！？!?;；]", text)
+    return any(
+        _FIRST_PERSON_PATTERN.search(segment)
+        and _SENSITIVE_CONTEXT_PATTERN.search(segment)
+        for segment in segments
+    )
 
 
 def _is_card_like(value: str) -> bool:
