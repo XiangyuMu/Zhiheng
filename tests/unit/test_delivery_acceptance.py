@@ -80,3 +80,29 @@ def test_parser_profile_maps_to_supported_application_backend(profile: str, back
 def test_unknown_parser_profile_is_rejected() -> None:
     with pytest.raises(ValueError, match="parser profile"):
         collector().parser_backend("unknown")
+
+
+def test_pdf_evidence_matrix_requires_all_issue_rows() -> None:
+    module = collector()
+    matrix = module.load_pdf_evidence_matrix(Path(__file__).resolve().parents[2])
+    assert [item["issue"] for item in matrix] == [52, 53, 54, 55, 56]
+    assert all(item["requirements"] for item in matrix)
+
+
+def test_stage_evidence_requires_passed_same_sha_reports(tmp_path: Path) -> None:
+    module = collector()
+    matrix = [
+        {"issue": 52, "artifact": "pdf-parse/report.json"},
+        {"issue": 53, "artifact": "pdf-search/report.json"},
+        {"issue": 54, "artifact": "pdf-recovery/report.json"},
+        {"issue": 55, "artifact": "real-files/browser-report.json"},
+        {"issue": 56, "artifact": "report.json"},
+    ]
+    for item in matrix[:-1]:
+        path = tmp_path / item["artifact"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"status":"passed","sha":"same-sha"}')
+    module.validate_stage_evidence(tmp_path, matrix, "same-sha")
+    (tmp_path / "pdf-search/report.json").write_text('{"status":"failed","sha":"same-sha"}')
+    with pytest.raises(ValueError, match="Issue 53"):
+        module.validate_stage_evidence(tmp_path, matrix, "same-sha")

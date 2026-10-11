@@ -28,6 +28,33 @@ def parser_backend(profile: str) -> str:
     return backends[profile]
 
 
+def load_pdf_evidence_matrix(repo: Path) -> list[dict[str, Any]]:
+    matrix_path = repo / "docs/testing/issue-52-56-evidence-matrix.json"
+    try:
+        matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot load PDF evidence matrix: {matrix_path}") from error
+    issues = matrix.get("issues") if isinstance(matrix, dict) else None
+    if not isinstance(issues, list):
+        raise ValueError("PDF evidence matrix must contain an issues list")
+    by_issue = {item.get("issue"): item for item in issues if isinstance(item, dict)}
+    expected = set(range(52, 57))
+    if set(by_issue) != expected:
+        raise ValueError("PDF evidence matrix must contain exactly issues 52, 53, 54, 55 and 56")
+    for issue in sorted(expected):
+        item = by_issue[issue]
+        if not item.get("stage") or not item.get("artifact"):
+            raise ValueError(f"PDF evidence matrix issue {issue} lacks stage or artifact")
+        requirements = item.get("requirements")
+        if (
+            not isinstance(requirements, list)
+            or not requirements
+            or not all(isinstance(value, str) and value.strip() for value in requirements)
+        ):
+            raise ValueError(f"PDF evidence matrix issue {issue} lacks requirements")
+    return [by_issue[issue] for issue in sorted(expected)]
+
+
 def clean_environment() -> dict[str, str]:
     # Never inherit production storage, credentials, pytest selectors or local import paths.
     cleaned = {
@@ -141,6 +168,25 @@ def execute(
     return result
 
 
+def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str) -> None:
+    """Require each real PDF stage to leave a passed report bound to this SHA."""
+    for item in matrix:
+        issue = int(item["issue"])
+        if issue == 56:
+            continue
+        report_path = output / str(item["artifact"])
+        if not report_path.is_file():
+            raise ValueError(f"Issue {issue} evidence report is missing: {report_path}")
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"Issue {issue} evidence report is not valid JSON") from error
+        if payload.get("status") != "passed":
+            raise ValueError(f"Issue {issue} evidence report did not pass")
+        if payload.get("sha") != sha:
+            raise ValueError(f"Issue {issue} evidence report is not bound to {sha}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
@@ -159,6 +205,7 @@ def main() -> int:
         parser.error("use an isolated checkout without .env")
     output.mkdir(parents=True, exist_ok=False)
     sha = git(repo, "rev-parse", "HEAD")
+    evidence_matrix = load_pdf_evidence_matrix(repo)
     env = clean_environment()
     env["ZHIHENG_ACCEPTANCE_OUTPUT"] = str(output / "browser")
     env["ZHIHENG_DELIVERY_EVIDENCE"] = str(output / "recovery")
@@ -173,7 +220,8 @@ def main() -> int:
         "clean_before": True,
         "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "steps": [],
-        "requirements": "docs/testing/issue-17-delivery-matrix.md",
+        "requirements": "docs/testing/issue-52-56-evidence-matrix.json",
+        "evidence_matrix": evidence_matrix,
     }
     steps = [
         ("dependencies", ["uv", "sync", "--frozen", "--extra", "dev"]),
@@ -294,6 +342,12 @@ def main() -> int:
             or name in {"pdf-parse", "pdf-search", "pdf-recovery"}
         ) and result["status"] != "passed":
             break
+    try:
+        validate_stage_evidence(output, evidence_matrix, sha)
+        report["stage_evidence"] = "passed"
+    except ValueError as error:
+        report["stage_evidence"] = "failed"
+        report["stage_evidence_error"] = str(error)
     report["clean_after"] = not bool(git(repo, "status", "--porcelain", "--untracked-files=all"))
     report["same_sha"] = sha == git(repo, "rev-parse", "HEAD")
     report["status"] = (
@@ -303,6 +357,7 @@ def main() -> int:
             and all(step["status"] == "passed" for step in report["steps"])
             and report["clean_after"]
             and report["same_sha"]
+            and report.get("stage_evidence") == "passed"
         )
         else "failed"
     )

@@ -1,0 +1,55 @@
+{
+  "schema": "zhiheng.delivery-evidence-matrix.v1",
+  "issues": [
+    {
+      "issue": 52,
+      "stage": "pdf-parse",
+      "requirements": [
+        "real browser upload and independent Worker consumption",
+        "MinerU manifest source digest, parser attempt, pages, blocks and readable artifacts"
+      ],
+      "artifact": "pdf-parse/report.json",
+      "status": "required"
+    },
+    {
+      "issue": 53,
+      "stage": "pdf-search",
+      "requirements": [
+        "embedding generation and physical index qualify the imported PDF",
+        "library search returns this evidence object and opens the source-linked page"
+      ],
+      "artifact": "pdf-search/report.json",
+      "status": "required"
+    },
+    {
+      "issue": 54,
+      "stage": "pdf-recovery",
+      "requirements": [
+        "Worker and gateway restart while parsing is active and the durable upstream task is queried",
+        "all five externally injected failure categories, retry bounds, polling stop and UI recovery"
+      ],
+      "artifact": "pdf-recovery/report.json",
+      "status": "required"
+    },
+    {
+      "issue": 55,
+      "stage": "real-files",
+      "requirements": [
+        "positive text and PDF answers cite the imported source",
+        "negative question returns explicit insufficiency without unrelated claims or citations"
+      ],
+      "artifact": "real-files/browser-report.json",
+      "status": "required"
+    },
+    {
+      "issue": 56,
+      "stage": "delivery",
+      "requirements": [
+        "same clean SHA binds migration, startup, quality gates, natural pytest and browser reports",
+        "each report preserves commands, exit codes, input digests and stage timings"
+      ],
+      "artifact": "report.json",
+      "status": "required"
+    }
+  ]
+}
