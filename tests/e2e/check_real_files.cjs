@@ -407,7 +407,7 @@ async function pollTerminalStatus(page, statusPath, { pdf, timeoutMs }) {
 
 async function findCurrentKnowledge(page, { title, query, expected }) {
   const result = await page.evaluate(async ({ query }) => {
-    const response = await fetch(`/v1/knowledge/search?q=${encodeURIComponent(query)}&limit=100`, { signal: AbortSignal.timeout(10000) });
+    const response = await fetch(`/v1/knowledge/search?limit=100&sort=updated_desc`, { signal: AbortSignal.timeout(10000) });
     return { http: response.status, body: await response.json() };
   }, { query });
   if (result.http !== 200) throw Error(`knowledge search failed with HTTP ${result.http}`);
