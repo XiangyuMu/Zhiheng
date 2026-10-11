@@ -98,11 +98,24 @@ def test_stage_evidence_requires_passed_same_sha_reports(tmp_path: Path) -> None
         {"issue": 55, "artifact": "real-files/browser-report.json"},
         {"issue": 56, "artifact": "report.json"},
     ]
-    for item in matrix[:-1]:
+    for item in matrix:
         path = tmp_path / str(item["artifact"])
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('{"status":"passed","sha":"same-sha"}')
     module.validate_stage_evidence(tmp_path, matrix, "same-sha")
     (tmp_path / "pdf-search/report.json").write_text('{"status":"failed","sha":"same-sha"}')
     with pytest.raises(ValueError, match="Issue 53"):
+        module.validate_stage_evidence(tmp_path, matrix, "same-sha")
+    (tmp_path / "pdf-search/report.json").write_text('{"status":"passed","sha":"wrong-sha"}')
+    with pytest.raises(ValueError, match="not bound"):
+        module.validate_stage_evidence(tmp_path, matrix, "same-sha")
+
+
+def test_stage_evidence_requires_delivery_report(tmp_path: Path) -> None:
+    module = collector()
+    matrix = [{"issue": 56, "artifact": "report.json"}]
+    with pytest.raises(ValueError, match="Issue 56 evidence report is missing"):
+        module.validate_stage_evidence(tmp_path, matrix, "same-sha")
+    (tmp_path / "report.json").write_text('{"status":"passed","sha":"wrong-sha"}')
+    with pytest.raises(ValueError, match="not bound"):
         module.validate_stage_evidence(tmp_path, matrix, "same-sha")

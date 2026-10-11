@@ -317,7 +317,8 @@ def _parse_generated_answer(
 
 _NEGATIVE_EXISTENCE_QUERY = re.compile(r"是否|有没有|有无|是否存在")
 _NEGATIVE_EVIDENCE_ANSWER = re.compile(
-    r"没有(?:给出|提供|发现|证据)|未(?:出现|发现)|无法(?:确认|证明)|不存在"
+    r"没有(?:给出|提供|发现|证据)|未(?:出现|发现|提供|找到)|无法(?:确认|证明)|不存在|"
+    r"证据不足"
 )
 
 

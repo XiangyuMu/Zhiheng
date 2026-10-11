@@ -646,6 +646,31 @@ def test_gateway_negative_existence_guard_removes_unrelated_claims() -> None:
     assert guarded.answerability == "insufficient"
     assert guarded.claims == ()
     assert guarded.insufficiencies
+
+
+@pytest.mark.parametrize("answer", ["材料未提供该信息，证据不足。", "未找到相关证据。"])
+def test_gateway_negative_existence_guard_accepts_insufficiency_wording(answer: str) -> None:
+    citation = _citation_for(_chunk())
+    result = _parse_generated_answer(
+        json.dumps(
+            {
+                "answer": answer,
+                "answerability": "supported",
+                "claims": [{"text": "无关审稿意见", "citation_ids": [citation.citation_id]}],
+                "conflicts": [],
+                "assumptions": [],
+                "insufficiencies": [],
+                "output_tokens": 3,
+                "personalization_refs": [],
+            }
+        ),
+        citations=(citation,),
+        memory_context=None,
+        max_output_tokens=None,
+    )
+    guarded = _guard_negative_existence_response("这些材料是否给出作者的银行账户号码？", result)
+    assert guarded.answerability == "insufficient"
+    assert not guarded.claims
 def _legacy_prompt_length(
     *,
     query: str,

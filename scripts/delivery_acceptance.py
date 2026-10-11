@@ -106,6 +106,7 @@ def real_pdf_preflight() -> list[str]:
         "ZHIHENG_RESTART_WORKER_IDENTITY_COMMAND",
         "ZHIHENG_RESTART_GATEWAY_IDENTITY_COMMAND",
         "ZHIHENG_PARSER_ACTIVE_PROBE_COMMAND",
+        "ZHIHENG_ISSUE54_FAULTS_JSON",
         "ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID",
         "ZHIHENG_EXPECTED_ANSWER_MODEL_ID",
         "ZHIHENG_EXPECTED_EMBEDDING_PROVIDER_ID",
@@ -172,8 +173,6 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
     """Require each real PDF stage to leave a passed report bound to this SHA."""
     for item in matrix:
         issue = int(item["issue"])
-        if issue == 56:
-            continue
         report_path = output / str(item["artifact"])
         if not report_path.is_file():
             raise ValueError(f"Issue {issue} evidence report is missing: {report_path}")
@@ -343,7 +342,11 @@ def main() -> int:
         ) and result["status"] != "passed":
             break
     try:
-        validate_stage_evidence(output, evidence_matrix, sha)
+        validate_stage_evidence(
+            output,
+            [item for item in evidence_matrix if int(item["issue"]) != 56],
+            sha,
+        )
         report["stage_evidence"] = "passed"
     except ValueError as error:
         report["stage_evidence"] = "failed"
@@ -361,6 +364,15 @@ def main() -> int:
         )
         else "failed"
     )
+    # Write a complete preliminary delivery report before validating its own
+    # row in the evidence matrix. The final write below replaces this copy.
+    (output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    try:
+        validate_stage_evidence(output, evidence_matrix, sha)
+    except ValueError as error:
+        report["stage_evidence"] = "failed"
+        report["stage_evidence_error"] = str(error)
+        report["status"] = "failed"
     pytest_evidence = output / "pytest" / "evidence.json"
     if pytest_evidence.exists():
         evidence = json.loads(pytest_evidence.read_text())
