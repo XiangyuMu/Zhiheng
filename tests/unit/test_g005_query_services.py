@@ -549,6 +549,31 @@ def test_supported_answer_survives_negative_evidence_wording() -> None:
     assert model.calls == 1
 
 
+
+def test_unsupported_existence_answer_withholds_unrelated_claims() -> None:
+    model = _Model(
+        answer="没有证据表明材料包含该事实。",
+        insufficiencies=("当前材料未提供该事实。",),
+    )
+    service = BoundedAgenticRagService(
+        structured_lookup=_Lookup(),
+        hybrid_retrieval=_Hybrid([_manifest()]),
+        evidence_verifier=_Verifier(),
+        model_gateway=model,
+    )
+
+    answer = service.answer(
+        QuerySessionStub(),  # type: ignore[arg-type]
+        "材料是否包含该事实？",
+        route=QueryRoute.HYBRID,
+    )
+
+    assert answer.stop_reason is StopReason.COMPLETED
+    assert answer.claims == ()
+    assert answer.citations == ()
+    assert answer.insufficiencies == ("当前材料未提供该事实。",)
+
+
 def test_partial_insufficiency_keeps_supported_claims_and_citations() -> None:
     model = _Model(
         answer="材料支持正式知识库证据；没有足够证据确认另一部分。",
