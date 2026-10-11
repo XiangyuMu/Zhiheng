@@ -515,10 +515,10 @@ class KnowledgeJobRepository:
             if task_id:
                 session.execute(
                     text(
-                        "UPDATE pdf_tasks SET state='failed', updated_at=CURRENT_TIMESTAMP "
+                        "UPDATE pdf_tasks SET state=:state, updated_at=CURRENT_TIMESTAMP "
                         "WHERE id=:task_id"
                     ),
-                    {"task_id": str(task_id)},
+                    {"task_id": str(task_id), "state": "failed" if terminal else "queued"},
                 )
         elif job.job_type == KNOWLEDGE_INDEX_JOB_TYPE and terminal:
             task_id = payload.get("task_id")

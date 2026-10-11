@@ -27,6 +27,7 @@ from zhiheng.knowledge.pdf_worker import (
     ParserReceipt,
     ParserStatus,
     ParserTerminalFailure,
+    ParserUnavailableError,
     ParserWorkerClient,
 )
 
@@ -369,3 +370,25 @@ def test_pdf_parser_failure_is_recorded_and_can_retry(tmp_path: Path) -> None:
             .all()
         )
         assert statuses == ["failed", "completed"]
+
+
+def test_transient_pdf_failures_stay_active_until_retry_budget_exhausted(tmp_path: Path) -> None:
+    settings, factory = _migrated(tmp_path)
+    job_id, task_id, _, _ = _seed_parse_job(factory, settings)
+    repository = KnowledgeJobRepository()
+    with session_scope(factory) as session:
+        session.execute(text("UPDATE jobs SET max_attempts=3 WHERE id=:id"), {"id": job_id})
+    for attempt in range(1, 4):
+        with session_scope(factory) as session:
+            job = repository.claim_available(session, worker_id="retry-state-test")[0]
+            assert job.attempts == attempt
+            assert repository.fail(session, job, exc=ParserUnavailableError("upstream unavailable"))
+            state = session.execute(
+                text("SELECT state FROM pdf_tasks WHERE id=:id"), {"id": task_id}
+            ).scalar_one()
+            assert state == ("failed" if attempt == 3 else "queued")
+            session.execute(
+                text("UPDATE jobs SET available_at=CURRENT_TIMESTAMP WHERE id=:id"), {"id": job_id}
+            )
+    with session_scope(factory) as session:
+        assert repository.claim_available(session, worker_id="retry-state-test") == []
