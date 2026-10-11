@@ -1070,6 +1070,7 @@ class VectorAwareHybridRetriever:
                 limit=limit,
                 overfetch_factor=overfetch_factor,
                 rrf_k=rrf_k,
+                filters=filters,
             )
 
         session.commit()
@@ -1097,6 +1098,7 @@ class VectorAwareHybridRetriever:
                 limit=limit,
                 overfetch_factor=overfetch_factor,
                 rrf_k=rrf_k,
+                filters=filters,
             )
         return self._hybrid.search(
             session,
