@@ -43,7 +43,12 @@ from zhiheng.retrieval import (
     VectorIndexRepository,
     VectorRetriever,
 )
-from zhiheng.retrieval.contracts import AuthorizedContextManifest, Citation, HybridRetrievalResult
+from zhiheng.retrieval.contracts import (
+    AuthorizedContextManifest,
+    Citation,
+    HybridRetrievalResult,
+    RetrievalFilters,
+)
 
 
 @dataclass(frozen=True)
@@ -134,6 +139,7 @@ class _EmbeddingHybridPort:
         limit: int = 10,
         overfetch_factor: int = 4,
         rrf_k: int | None = None,
+        filters: RetrievalFilters | None = None,
     ) -> HybridRetrievalResult:
         embedding = query_embedding or self._embeddings_by_query.get(query)
         if release_context is None:
@@ -145,6 +151,7 @@ class _EmbeddingHybridPort:
                 limit=limit,
                 overfetch_factor=overfetch_factor,
                 rrf_k=rrf_k,
+                filters=filters,
             )
         return self._hybrid.search(
             session,
@@ -155,6 +162,7 @@ class _EmbeddingHybridPort:
             limit=limit,
             overfetch_factor=overfetch_factor,
             rrf_k=rrf_k,
+            filters=filters,
         )
 
 
