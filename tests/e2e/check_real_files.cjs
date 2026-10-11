@@ -417,12 +417,25 @@ async function findCurrentKnowledge(page, { title, query, expected }) {
     if (expected.evidence_object_id && candidate.evidence_object_id !== expected.evidence_object_id) return false;
     return candidate.source_sha256 === expected.source_sha256 && candidate.media_type === expected.media_type;
   });
-  if (!item) throw Error(`current import ${title} is not searchable as the current object`);
-  if (item.searchable !== true) throw Error(`current import ${title} is not marked searchable`);
-  if (!item.knowledge_object_id || !item.knowledge_version_id || !item.evidence_object_id) {
+  let current = item;
+  if (!current && expected.knowledge_object_id) {
+    const detail = await page.evaluate(async id => {
+      const response = await fetch(`/v1/knowledge/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(10000) });
+      return { http: response.status, body: await response.json() };
+    }, expected.knowledge_object_id);
+    if (detail.http === 200) current = detail.body;
+  }
+  if (!current) throw Error(`current import ${title} is not searchable as the current object`);
+  if (current.searchable !== true) throw Error(`current import ${title} is not marked searchable`);
+  if (current.title !== title || current.knowledge_object_id !== expected.knowledge_object_id
+      || current.evidence_object_id !== expected.evidence_object_id
+      || current.source_sha256 !== expected.source_sha256) {
+    throw Error(`current import ${title} identity does not match the current receipt`);
+  }
+  if (!current.knowledge_object_id || !current.knowledge_version_id || !current.evidence_object_id) {
     throw Error(`current import ${title} lacks object/version/evidence identifiers`);
   }
-  return item;
+  return current;
 }
 
 function findCitationForImport(citations, knowledge) {
