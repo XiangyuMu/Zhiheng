@@ -151,6 +151,7 @@ def _canonical_prompt(
     conversation_context: Sequence[Mapping[str, str]] | None,
 ) -> str:
     citation_ids_by_chunk = _citation_ids_by_chunk(citations)
+    evidence_excerpt_limit = max(400, min(3000, 7000 // max(1, len(manifest.chunks))))
     payload = {
         "ASSUMPTIONS": [
             "Use only KNOWLEDGE_EVIDENCE for factual claims that require citations.",
@@ -168,7 +169,7 @@ def _canonical_prompt(
                 # Keep the outbound prompt within the privacy gateway limit
                 # while retaining every citation identity. Full source text is
                 # still available through the citation context endpoint.
-                "text": chunk.text[:800],
+                "text": chunk.text[:evidence_excerpt_limit],
                 "title": chunk.title,
             }
             for chunk in manifest.chunks
