@@ -114,3 +114,34 @@ def test_proxy_forwards_real_submission_then_injects_status_fault(tmp_path: Path
         proxy.server_close()
         upstream.shutdown()
         upstream.server_close()
+
+
+def test_proof_rejects_missing_upstream_identity(tmp_path: Path) -> None:
+    module = _module()
+    control = module.ControlState(tmp_path / "control.json")
+    control.arm("parser_failure", "failed", "parser_unavailable")
+    control.observe("GET", "/tasks/unknown", 404)
+    try:
+        module._proof(control, "parser_failure", "browser-task", "parser-attempt")
+    except RuntimeError as exc:
+        assert "upstream parser task identity" in str(exc)
+    else:
+        raise AssertionError("proof unexpectedly accepted missing upstream identity")
+
+
+def test_concurrent_observations_are_not_lost(tmp_path: Path) -> None:
+    module = _module()
+    control = module.ControlState(tmp_path / "control.json")
+    control.arm("parser_failure", "failed", "parser_unavailable")
+
+    def record(index: int) -> None:
+        control.observe("GET", f"/tasks/{index}", 200, f"upstream-{index}")
+
+    threads = [threading.Thread(target=record, args=(index,)) for index in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    observations = control.read()["observations"]
+    assert len(observations) == 20
+    assert {item["path"] for item in observations} == {f"/tasks/{index}" for index in range(20)}

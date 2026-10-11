@@ -26,6 +26,7 @@ import signal
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -82,42 +83,56 @@ class ControlState:
         self.path = path.expanduser().resolve()
         self._lock = threading.Lock()
 
-    def read(self) -> dict[str, Any]:
-        with self._lock:
-            try:
-                value = json.loads(self.path.read_text(encoding="utf-8"))
-            except FileNotFoundError:
-                return {
-                    "schema": "issue54.external-parser-control.v1",
-                    "armed": None,
-                    "observations": [],
-                }
-            except (OSError, json.JSONDecodeError) as exc:
-                raise RuntimeError(f"cannot read controller state: {self.path}") from exc
+    def _read_unlocked(self) -> dict[str, Any]:
+        try:
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {
+                "schema": "issue54.external-parser-control.v1",
+                "armed": None,
+                "observations": [],
+            }
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"cannot read controller state: {self.path}") from exc
         if not isinstance(value, dict):
             raise RuntimeError("controller state must be a JSON object")
         return value
 
-    def write(self, value: dict[str, Any]) -> None:
+    def _write_unlocked(self, value: dict[str, Any]) -> None:
         body = json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{self.path.name}.", dir=self.path.parent
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(body)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_name, self.path)
+        finally:
+            Path(temporary_name).unlink(missing_ok=True)
+
+    def read(self) -> dict[str, Any]:
         with self._lock:
-            fd, temporary_name = tempfile.mkstemp(
-                prefix=f".{self.path.name}.", dir=self.path.parent
-            )
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write(body)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(temporary_name, self.path)
-            finally:
-                Path(temporary_name).unlink(missing_ok=True)
+            return self._read_unlocked()
+
+    def write(self, value: dict[str, Any]) -> None:
+        with self._lock:
+            self._write_unlocked(value)
+
+    def update(self, mutator: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+        """Apply a read-modify-write transaction under one process lock."""
+        with self._lock:
+            state = self._read_unlocked()
+            mutator(state)
+            self._write_unlocked(state)
+            return state
 
     def arm(self, category: str, expected_state: str, expected_error_code: str) -> None:
         if category not in _SCENARIO_BY_CATEGORY:
             raise ValueError(f"unsupported Issue 54 category: {category}")
-        state = {
+        self.write({
             "schema": "issue54.external-parser-control.v1",
             "armed": {
                 "category": category,
@@ -127,8 +142,7 @@ class ControlState:
                 "fault_task_id": None,
             },
             "observations": [],
-        }
-        self.write(state)
+        })
 
     def observe(
         self,
@@ -137,18 +151,21 @@ class ControlState:
         status: int,
         upstream_task_id: str | None = None,
     ) -> None:
-        state = self.read()
-        observations = state.setdefault("observations", [])
-        observations.append(
-            {
+        def mutate(state: dict[str, Any]) -> None:
+            armed = state.get("armed")
+            if isinstance(armed, dict) and upstream_task_id and not armed.get("fault_task_id"):
+                armed["fault_task_id"] = upstream_task_id
+            observations = state.setdefault("observations", [])
+            if not isinstance(observations, list):
+                raise RuntimeError("controller observations must be a list")
+            observations.append({
                 "at": _now(),
                 "method": method,
                 "path": path,
                 "status": status,
                 **({"upstream_task_id": upstream_task_id} if upstream_task_id else {}),
-            }
-        )
-        self.write(state)
+            })
+        self.update(mutate)
 
 
 def _fault_response(category: str, path: str) -> tuple[int, dict[str, Any]] | None:
@@ -186,10 +203,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if task_id is None and self.command == "POST" and path == "/tasks":
                 forwarded = self.server.forward(self.command, path, body, self.headers)
                 upstream_task_id = _json_task_id(forwarded[1])
-                if upstream_task_id:
-                    armed["fault_task_id"] = upstream_task_id
-                    state["armed"] = armed
-                    self.server.control.write(state)
                 self.server.control.observe(
                     self.command,
                     path,
@@ -278,13 +291,15 @@ def _proof(control: ControlState, category: str, task_id: str, attempt_id: str) 
             if isinstance(candidate, str) and candidate.strip():
                 upstream_task_id = candidate
                 break
+    if not isinstance(upstream_task_id, str) or not upstream_task_id.strip():
+        raise RuntimeError("controller has no observed upstream parser task identity")
     return {
         "injected": True,
         "boundary": "external_parser",
         "category": category,
         "task_id": task_id,
         "attempt_id": attempt_id,
-        "observed_identity": upstream_task_id or "external-parser-proxy",
+        "observed_identity": upstream_task_id,
         "observed_requests": len(observations),
         "observed_ready": True,
         "proof_source": "standalone-controller-state",
