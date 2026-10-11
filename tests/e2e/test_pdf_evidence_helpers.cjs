@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 const { chromium } = require("playwright");
 
@@ -9,7 +10,30 @@ const {
   initializeEvidence,
   loadExpectation,
   revealReaderCitations,
+  sha256Buffer,
+  verifyLocalArtifact,
 } = require("./pdf_evidence_helpers.cjs");
+
+test("artifact verification reads bytes and rejects missing, changed and escaped objects", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "zhiheng-artifacts-"));
+  t.after(() => fs.rmSync(root, { recursive: true }));
+  const store = path.join(root, "objects");
+  fs.mkdirSync(store);
+  const body = Buffer.from("synthetic page image");
+  const file = path.join(store, "image.bin");
+  fs.writeFileSync(file, body);
+  const artifact = { uri: pathToFileURL(file).href, sha256: sha256Buffer(body), bytes: body.length };
+  assert.deepEqual(verifyLocalArtifact(artifact, store), {sha256: artifact.sha256, bytes: body.length});
+  assert.throws(() => verifyLocalArtifact({...artifact, bytes: 0}, store), /byte count/);
+  fs.writeFileSync(file, "modified image");
+  assert.throws(() => verifyLocalArtifact(artifact, store), /digest/);
+  fs.unlinkSync(file);
+  assert.throws(() => verifyLocalArtifact(artifact, store), /ENOENT/);
+  const outside = path.join(root, "outside.bin");
+  fs.writeFileSync(outside, body);
+  fs.symlinkSync(outside, file);
+  assert.throws(() => verifyLocalArtifact(artifact, store), /inside the configured object store/);
+});
 
 test("initializeEvidence creates a new output directory and report without overwrite", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "zhiheng-evidence-"));

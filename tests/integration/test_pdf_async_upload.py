@@ -271,6 +271,103 @@ def test_pdf_parser_failure_is_projected_to_retryable_task_status(tmp_path: Path
     assert retry_payload["source_sha256"] == task["source_sha256"]
 
 
+def test_pdf_parser_automatic_retries_stop_after_two_retries(tmp_path: Path) -> None:
+    client, session_factory = _client(tmp_path)
+    csrf = _login(client)
+    response = client.post(
+        "/v1/knowledge/pdf-imports",
+        params={"title": "自动重试 PDF", "primary_domain_id": "technology.ai"},
+        content=_pdf_bytes(),
+        headers={**_headers(csrf, "pdf-auto-retry"), "Content-Type": "application/pdf"},
+    )
+    assert response.status_code == 202
+    task = response.json()
+    with session_scope(session_factory) as session:
+        events = OutboxRepository().claim_pending(session, limit=10)
+        assert OutboxRepository().enqueue_jobs_for_events(session, events) == 1
+        session.execute(text("UPDATE jobs SET available_at=CURRENT_TIMESTAMP"))
+
+    class FailingParser:
+        def execute(self, *_: object) -> None:
+            raise ParserUnavailableError("parser unavailable")
+
+    executor = KnowledgeIndexJobExecutor(Settings(environment="test"))
+    for attempt in range(1, 4):
+        assert (
+            process_knowledge_jobs_once(
+                session_factory,
+                executor,
+                worker_id=f"pdf-auto-retry-worker-{attempt}",
+                pdf_executor=FailingParser(),
+            )
+            == 0
+        )
+        with session_scope(session_factory) as session:
+            session.execute(text("UPDATE jobs SET available_at=CURRENT_TIMESTAMP"))
+
+    assert (
+        process_knowledge_jobs_once(
+            session_factory,
+            executor,
+            worker_id="pdf-auto-retry-worker-fourth",
+            pdf_executor=FailingParser(),
+        )
+        == 0
+    )
+    with session_scope(session_factory) as session:
+        row = (
+            session.execute(
+                text(
+                    """
+                    SELECT status, attempts, max_attempts, payload_json
+                    FROM jobs
+                    WHERE job_type='knowledge.parse_pdf'
+                    """
+                )
+            )
+            .mappings()
+            .one()
+        )
+        statuses = (
+            session.execute(
+                text(
+                    """
+                    SELECT status, error_class
+                    FROM job_attempts
+                    WHERE job_id=(SELECT id FROM jobs WHERE job_type='knowledge.parse_pdf')
+                    ORDER BY started_at, id
+                    """
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    payload = json.loads(row["payload_json"])
+    assert row["status"] == "dead"
+    assert row["attempts"] == 3
+    assert row["max_attempts"] == 3
+    assert payload["failure_code"] == "parser_unavailable"
+    assert payload["failure_stage"] == "parse"
+    assert payload["retryable"] is True
+    assert [entry["status"] for entry in statuses] == ["failed", "failed", "failed"]
+    assert [entry["error_class"] for entry in statuses] == [
+        "ParserUnavailableError",
+        "ParserUnavailableError",
+        "ParserUnavailableError",
+    ]
+
+    body = client.get(task["status_url"]).json()
+    assert body["state"] == "failed"
+    assert body["error_code"] == "parser_unavailable"
+    assert body["retryable"] is True
+    retry = client.post(
+        f"/v1/knowledge/pdf-imports/{task['task_id']}/retry",
+        headers={**_headers(csrf, "pdf-auto-retry-manual"), "If-Match": body["etag"]},
+    )
+    assert retry.status_code == 200
+
+
 def test_pdf_index_worker_exception_is_projected_after_parse(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

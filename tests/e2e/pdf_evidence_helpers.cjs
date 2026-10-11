@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
+const { fileURLToPath } = require("node:url");
 
 function sha256Buffer(buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
@@ -11,6 +12,25 @@ function sha256Buffer(buffer) {
 
 function sha256File(file) {
   return sha256Buffer(fs.readFileSync(file));
+}
+
+function verifyLocalArtifact(artifact, objectRoot) {
+  assert(objectRoot, "artifact verification requires the configured object store root");
+  assert(artifact && /^[a-f0-9]{64}$/.test(artifact.sha256), "artifact requires a digest");
+  const url = new URL(artifact.uri);
+  assert(url.protocol === "file:" && !url.host && !url.search && !url.hash,
+    "artifact must be a controlled local file");
+  const root = fs.realpathSync(objectRoot);
+  const file = fs.realpathSync(fileURLToPath(url));
+  const relative = path.relative(root, file);
+  assert(relative && relative !== ".." && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative), "artifact must be inside the configured object store");
+  const bytes = fs.readFileSync(file);
+  assert.equal(sha256Buffer(bytes), artifact.sha256, "artifact digest must match stored bytes");
+  if (artifact.bytes !== undefined) {
+    assert.equal(bytes.length, artifact.bytes, "artifact byte count must match stored bytes");
+  }
+  return { sha256: artifact.sha256, bytes: bytes.length };
 }
 
 function normalizeText(value) {
@@ -204,9 +224,9 @@ async function revealReaderCitations(page) {
   await page.locator("#knowledge-detail").waitFor({ state: "visible", timeout: 20_000 });
   const citationPanel = page.locator("#knowledge-detail details.supplementary").first();
   if ((await citationPanel.count()) > 0) {
-    await citationPanel.evaluate((node) => {
-      node.open = true;
-    });
+    if (!await citationPanel.evaluate((node) => node.open)) {
+      await citationPanel.locator("summary").click();
+    }
   }
   return page.locator('#knowledge-detail [data-reader-citation="true"]');
 }
@@ -222,4 +242,5 @@ module.exports = {
   sha256File,
   validateExpectationAgainstPdf,
   verifyClickedCitation,
+  verifyLocalArtifact,
 };

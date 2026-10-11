@@ -56,6 +56,8 @@ def clean_environment() -> dict[str, str]:
         "ZHIHENG_EXPECTED_EMBEDDING_MODEL_ID",
         "MINERU_PARSER_PROFILE",
         "MINERU_WARMUP_TIMEOUT_SECONDS",
+        "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH",
+        "ZHIHENG_ISSUE54_FAULTS_JSON",
     }:
         if key in os.environ:
             cleaned[key] = os.environ[key]

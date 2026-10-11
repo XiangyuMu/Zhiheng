@@ -108,12 +108,14 @@ class _Model:
         fail: BaseException | None = None,
         answer: str = "有证据支持的回答",
         insufficiencies: tuple[str, ...] = (),
+        include_claims: bool = True,
         output_tokens: int = 7,
     ) -> None:
         self.citation_id = citation_id
         self.fail = fail
         self.answer = answer
         self.insufficiencies = insufficiencies
+        self.include_claims = include_claims
         self.output_tokens = output_tokens
         self.calls = 0
         self.manifests: list[AuthorizedContextManifest] = []
@@ -142,7 +144,11 @@ class _Model:
         citation_id = self.citation_id or citations[0].citation_id
         return GeneratedAnswer(
             answer=self.answer,
-            claims=(AnswerClaim(text="正式知识库证据", citation_ids=(citation_id,)),),
+            claims=(
+                (AnswerClaim(text="正式知识库证据", citation_ids=(citation_id,)),)
+                if self.include_claims
+                else ()
+            ),
             insufficiencies=self.insufficiencies,
             output_tokens=self.output_tokens,
         )
@@ -422,7 +428,7 @@ def test_manifest_validation_failure_is_evidence_only() -> None:
     assert answer.claims == ()
 
 
-def test_explicit_insufficient_answer_does_not_expose_retrieved_citations() -> None:
+def test_genuine_insufficient_answer_does_not_expose_retrieved_citations() -> None:
     service = BoundedAgenticRagService(
         structured_lookup=_Lookup(),
         hybrid_retrieval=_Hybrid([_manifest()]),
@@ -430,6 +436,7 @@ def test_explicit_insufficient_answer_does_not_expose_retrieved_citations() -> N
         model_gateway=_Model(
             answer="没有足够证据回答。",
             insufficiencies=("证据不足。",),
+            include_claims=False,
         ),
     )
 
@@ -440,7 +447,7 @@ def test_explicit_insufficient_answer_does_not_expose_retrieved_citations() -> N
     assert answer.citations == ()
 
 
-def test_explicit_absence_question_stays_evidence_only_without_model_call() -> None:
+def test_supported_answer_survives_negative_evidence_wording() -> None:
     model = _Model()
     service = BoundedAgenticRagService(
         structured_lookup=_Lookup(),
@@ -455,9 +462,34 @@ def test_explicit_absence_question_stays_evidence_only_without_model_call() -> N
         route=QueryRoute.HYBRID,
     )  # type: ignore[arg-type]
 
-    assert answer.stop_reason is StopReason.EVIDENCE_ONLY
-    assert answer.citations == ()
-    assert model.calls == 0
+    assert answer.stop_reason is StopReason.COMPLETED
+    assert answer.claims
+    assert answer.citations
+    assert model.calls == 1
+
+
+def test_partial_insufficiency_keeps_supported_claims_and_citations() -> None:
+    model = _Model(
+        answer="材料支持正式知识库证据；没有足够证据确认另一部分。",
+        insufficiencies=("另一部分没有授权证据支持。",),
+    )
+    service = BoundedAgenticRagService(
+        structured_lookup=_Lookup(),
+        hybrid_retrieval=_Hybrid([_manifest()]),
+        evidence_verifier=_Verifier(),
+        model_gateway=model,
+    )
+
+    answer = service.answer(
+        QuerySessionStub(),
+        "请回答正式知识库证据，并说明没有证据的部分。",
+        route=QueryRoute.HYBRID,
+    )  # type: ignore[arg-type]
+
+    assert answer.stop_reason is StopReason.COMPLETED
+    assert answer.claims
+    assert answer.citations
+    assert answer.insufficiencies == ("另一部分没有授权证据支持。",)
 
 
 def test_agentic_service_exposes_no_external_action_ports() -> None:

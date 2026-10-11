@@ -173,10 +173,10 @@ def test_load_manifest_normalizes_mineru_content_list() -> None:
         },
     }
     body = json.dumps(payload).encode()
-    written: list[bytes] = []
+    written: dict[str, bytes] = {}
 
     def write_bytes(value: bytes) -> ParserManifestReference:
-        written.append(value)
+        written["file:///canonical-manifest.json"] = value
         return ParserManifestReference(
             "file:///canonical-manifest.json", hashlib.sha256(value).hexdigest()
         )
@@ -184,7 +184,7 @@ def test_load_manifest_normalizes_mineru_content_list() -> None:
     with _client(lambda request: httpx.Response(500)) as client:
         loaded = client.load_manifest_with_reference(
             ParserManifestReference("file:///manifest.json", hashlib.sha256(body).hexdigest()),
-            read_bytes=lambda _: body,
+            read_bytes=lambda uri: body if uri == "file:///manifest.json" else written[uri],
             write_bytes=write_bytes,
         )
     result = loaded.manifest
@@ -192,6 +192,119 @@ def test_load_manifest_normalizes_mineru_content_list() -> None:
     assert result["blocks"][0]["text"] == "Hello"
     assert loaded.reference.uri == "file:///canonical-manifest.json"
     assert written
-    persisted = json.loads(written[0])
+    persisted = json.loads(written["file:///canonical-manifest.json"])
     assert persisted["schema_version"] == "pdf-parser.manifest.v1"
     assert "content_list" not in persisted
+
+
+def test_load_manifest_keeps_read_only_mineru_normalization_compatible() -> None:
+    payload = {
+        "content_list": [
+            {"type": "text", "text": "Hello", "bbox": [10, 10, 100, 40], "page_idx": 0}
+        ],
+        "metadata": {
+            "task_id": "task-1",
+            "evidence_object_id": "doc-1",
+            "source_uri": "artifact://doc.pdf",
+            "source_sha256": "a" * 64,
+            "attempt_id": "attempt-1",
+        },
+    }
+    body = json.dumps(payload).encode()
+
+    with _client(lambda request: httpx.Response(500)) as client:
+        result = client.load_manifest(
+            ParserManifestReference("file:///manifest.json", hashlib.sha256(body).hexdigest()),
+            read_bytes=lambda _: body,
+        )
+
+    assert result["schema_version"] == "pdf-parser.manifest.v1"
+    assert result["parser"]["backend"] == "mineru"
+
+
+def test_load_manifest_with_reference_requires_writer_for_mineru_content_list() -> None:
+    payload = {
+        "content_list": [
+            {"type": "text", "text": "Hello", "bbox": [10, 10, 100, 40], "page_idx": 0}
+        ],
+        "metadata": {
+            "task_id": "task-1",
+            "evidence_object_id": "doc-1",
+            "source_uri": "artifact://doc.pdf",
+            "source_sha256": "a" * 64,
+            "attempt_id": "attempt-1",
+        },
+    }
+    body = json.dumps(payload).encode()
+
+    with (
+        _client(lambda request: httpx.Response(500)) as client,
+        pytest.raises(ParserManifestError, match="writer is required"),
+    ):
+        client.load_manifest_with_reference(
+            ParserManifestReference("file:///manifest.json", hashlib.sha256(body).hexdigest()),
+            read_bytes=lambda _: body,
+        )
+
+
+def test_load_manifest_with_reference_rejects_writer_hash_mismatch() -> None:
+    payload = {
+        "content_list": [
+            {"type": "text", "text": "Hello", "bbox": [10, 10, 100, 40], "page_idx": 0}
+        ],
+        "metadata": {
+            "task_id": "task-1",
+            "evidence_object_id": "doc-1",
+            "source_uri": "artifact://doc.pdf",
+            "source_sha256": "a" * 64,
+            "attempt_id": "attempt-1",
+        },
+    }
+    body = json.dumps(payload).encode()
+
+    with (
+        _client(lambda request: httpx.Response(500)) as client,
+        pytest.raises(ParserManifestError, match="writer returned hash mismatch"),
+    ):
+        client.load_manifest_with_reference(
+            ParserManifestReference("file:///manifest.json", hashlib.sha256(body).hexdigest()),
+            read_bytes=lambda _: body,
+            write_bytes=lambda _: ParserManifestReference("file:///canonical.json", "f" * 64),
+        )
+
+
+def test_load_manifest_with_reference_rejects_unreadable_writer_uri() -> None:
+    payload = {
+        "content_list": [
+            {"type": "text", "text": "Hello", "bbox": [10, 10, 100, 40], "page_idx": 0}
+        ],
+        "metadata": {
+            "task_id": "task-1",
+            "evidence_object_id": "doc-1",
+            "source_uri": "artifact://doc.pdf",
+            "source_sha256": "a" * 64,
+            "attempt_id": "attempt-1",
+        },
+    }
+    body = json.dumps(payload).encode()
+
+    def write_bytes(value: bytes) -> ParserManifestReference:
+        return ParserManifestReference(
+            "file:///missing-canonical.json",
+            hashlib.sha256(value).hexdigest(),
+        )
+
+    def read_bytes(uri: str) -> bytes:
+        if uri == "file:///manifest.json":
+            return body
+        raise FileNotFoundError(uri)
+
+    with (
+        _client(lambda request: httpx.Response(500)) as client,
+        pytest.raises(ParserManifestError, match="artifact unavailable"),
+    ):
+        client.load_manifest_with_reference(
+            ParserManifestReference("file:///manifest.json", hashlib.sha256(body).hexdigest()),
+            read_bytes=read_bytes,
+            write_bytes=write_bytes,
+        )

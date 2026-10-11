@@ -8,6 +8,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { chromium } = require('playwright');
+const { verifyLocalArtifact } = require('./pdf_evidence_helpers.cjs');
 const [base, output, file] = process.argv.slice(2);
 assert(base && output && file, 'Expected URL, new evidence directory, PDF');
 assert(['localhost', '127.0.0.1'].includes(new URL(base).hostname), 'Local service only');
@@ -109,10 +110,19 @@ const save = () => fs.writeFileSync(path.join(output,'report.json'), JSON.string
     assert.equal(manifest.parser.backend, 'mineru');
     assert.equal(manifest.parser.attempt_id, terminal.attempt_id);
     assert(manifest.pages.length > 0 && manifest.blocks.length > 0);
-    for (const page of manifest.pages) assert(['parsed', 'empty'].includes(page.status));
-    for (const image of manifest.images) {
-      assert(image.artifact && image.artifact.uri && /^[a-f0-9]{64}$/.test(image.artifact.sha256));
+    const objectRoot = process.env.ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH;
+    report.artifacts = {
+      manifest: verifyLocalArtifact({uri: manifestPayload.manifest_uri, sha256: manifestPayload.manifest_sha256}, objectRoot),
+      pages: [], images: [], other: [],
+    };
+    for (const page of manifest.pages) {
+      assert(['parsed', 'empty'].includes(page.status));
+      if (page.render) report.artifacts.pages.push(verifyLocalArtifact(page.render, objectRoot));
     }
+    for (const image of manifest.images) {
+      report.artifacts.images.push(verifyLocalArtifact(image.artifact, objectRoot));
+    }
+    for (const artifact of manifest.artifacts) report.artifacts.other.push(verifyLocalArtifact(artifact, objectRoot));
     report.manifest = {
       uri: manifestPayload.manifest_uri,
       sha256: manifestPayload.manifest_sha256,

@@ -133,6 +133,12 @@ def test_gateway_answer_model_uses_privacy_pipeline_and_strict_scope(
     assert result.personalization_refs == (expected_ref,)
     payload = json.loads(transport.calls[0])
     assert payload["prompt_version"] == "gateway-answer-model-v4"
+    assert "Put unsupported or partially unsupported parts of the question in insufficiencies." in (
+        payload["ASSUMPTIONS"]
+    )
+    assert "Do not omit supported claims because another part of the question is unsupported." in (
+        payload["ASSUMPTIONS"]
+    )
     assert payload["user_query"] == "总结 [REDACTED_EMAIL_ADDRESS] 的论文"
     assert payload["KNOWLEDGE_EVIDENCE"][0]["text"] == (
         "联系人 [REDACTED_EMAIL_ADDRESS] 的论文证据。"

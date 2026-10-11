@@ -7,9 +7,11 @@ from types import SimpleNamespace
 
 from alembic import command
 from alembic.config import Config
+from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
+from zhiheng.api.main import create_app
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import json_text, new_id
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
@@ -20,7 +22,7 @@ from zhiheng.jobs.knowledge_indexing import (
 )
 from zhiheng.jobs.outbox import OutboxRepository
 from zhiheng.jobs.pdf_parsing import PdfParseJobExecutor
-from zhiheng.knowledge.object_store import StoredBinaryArtifact
+from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
 from zhiheng.knowledge.pdf_worker import (
     ParserManifestReference,
     ParserReceipt,
@@ -29,7 +31,7 @@ from zhiheng.knowledge.pdf_worker import (
 )
 
 
-def _session_factory(tmp_path: Path) -> sessionmaker[Session]:
+def _settings_and_session_factory(tmp_path: Path) -> tuple[Settings, sessionmaker[Session]]:
     db_path = tmp_path / "dispatch.db"
     config = Config("alembic.ini")
     config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
@@ -39,8 +41,13 @@ def _session_factory(tmp_path: Path) -> sessionmaker[Session]:
         database_url=f"sqlite:///{db_path}",
         embedding_dimension=3,
         embedding_model_revision="synthetic",
+        knowledge_object_store_path=str(tmp_path / "objects"),
     )
-    return create_session_factory(create_sqlite_engine(settings))
+    return settings, create_session_factory(create_sqlite_engine(settings))
+
+
+def _session_factory(tmp_path: Path) -> sessionmaker[Session]:
+    return _settings_and_session_factory(tmp_path)[1]
 
 
 def _insert_job(session: Session, job_type: str, payload: dict[str, object]) -> None:
@@ -114,7 +121,14 @@ def test_dispatches_parse_and_index_jobs_to_their_respective_executors(
 
 
 def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -> None:
-    session_factory = _session_factory(tmp_path)
+    settings, session_factory = _settings_and_session_factory(tmp_path)
+    client = TestClient(create_app(settings))
+    bootstrap = client.post(
+        "/auth/bootstrap",
+        json={"username": "solo_user", "password": "correct horse battery staple"},
+    )
+    assert bootstrap.status_code == 200
+    user_id = str(bootstrap.json()["user_id"])
     task_id = new_id()
     evidence_id = new_id()
     source_sha256 = "a" * 64
@@ -128,11 +142,15 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
                 )
                 VALUES (
                   :id, 'artifact://evidence/source.pdf', :sha256,
-                  'application/pdf', 1, 'imported_document', '{}', 'active', 1
+                  'application/pdf', 1, 'imported_document', :metadata, 'active', 1
                 )
                 """
             ),
-            {"id": evidence_id, "sha256": source_sha256},
+            {
+                "id": evidence_id,
+                "sha256": source_sha256,
+                "metadata": json_text({"owner_user_id": user_id}),
+            },
         )
         session.execute(
             text(
@@ -185,7 +203,8 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
         },
     }
     native_body = json.dumps(native_payload).encode("utf-8")
-    native_digest = hashlib.sha256(native_body).hexdigest()
+    store = knowledge_object_store_for_settings(settings)
+    raw_manifest = store.write_binary_artifact(native_body, namespace="manifests/raw")
 
     class _Parser(ParserWorkerClient):
         def __init__(self) -> None:
@@ -198,28 +217,9 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
             return ParserStatus(
                 "attempt-1",
                 "succeeded",
-                ParserManifestReference("artifact://manifests/attempt-1.raw.json", native_digest),
+                ParserManifestReference(raw_manifest.uri, raw_manifest.sha256),
                 None,
             )
-
-    class _Store:
-        def __init__(self) -> None:
-            self.written: dict[str, bytes] = {}
-
-        def read_bytes(self, uri: str) -> bytes:
-            if uri == "artifact://manifests/attempt-1.raw.json":
-                return native_body
-            return self.written[uri]
-
-        def write_binary_artifact(
-            self, body: bytes, *, namespace: str = "source"
-        ) -> StoredBinaryArtifact:
-            digest = hashlib.sha256(body).hexdigest()
-            uri = f"file:///objects/{namespace}/{digest}.bin"
-            self.written[uri] = body
-            return StoredBinaryArtifact(uri=uri, sha256=digest, byte_size=len(body))
-
-    store = _Store()
 
     with session_scope(session_factory) as session:
         claimed = OutboxRepository().claim_pending(session, limit=10)
@@ -279,12 +279,19 @@ def test_dispatches_real_parse_executor_and_publishes_manifest(tmp_path: Path) -
     assert state[0:3] == ("completed", "succeeded", 1)
     canonical_uri = str(state[3])
     canonical_sha256 = str(state[4])
-    assert canonical_uri.startswith("file:///objects/manifests/")
-    assert canonical_uri in store.written
-    assert hashlib.sha256(store.written[canonical_uri]).hexdigest() == canonical_sha256
-    persisted_manifest = json.loads(store.written[canonical_uri])
+    assert "/manifests/" in canonical_uri
+    persisted_body = store.read_bytes(canonical_uri)
+    assert hashlib.sha256(persisted_body).hexdigest() == canonical_sha256
+    persisted_manifest = json.loads(persisted_body)
     assert persisted_manifest["schema_version"] == "pdf-parser.manifest.v1"
     assert "content_list" not in persisted_manifest
+    endpoint = client.get(f"/v1/knowledge/pdf-imports/{task_id}/manifest")
+    assert endpoint.status_code == 200
+    endpoint_payload = endpoint.json()
+    assert endpoint_payload["manifest_uri"] == canonical_uri
+    assert endpoint_payload["manifest_sha256"] == canonical_sha256
+    assert endpoint_payload["manifest"]["schema_version"] == "pdf-parser.manifest.v1"
+    assert "content_list" not in endpoint_payload["manifest"]
     assert index_event[0:3] == ("knowledge.index", "pdf_parse_attempt", "attempt-1")
     assert materialized[3:] == ("hello", 1, canonical_uri)
     assert materialized[0] in str(index_event[3])

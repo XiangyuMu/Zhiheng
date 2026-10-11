@@ -514,6 +514,144 @@ def test_gateway_recovers_task_mapping_after_restart(tmp_path: Path) -> None:
     assert calls == ["/tasks", "/tasks/upstream-1"]
 
 
+def test_gateway_recovers_completed_upstream_task_after_restart(tmp_path: Path) -> None:
+    module = _gateway_module()
+    source = tmp_path / "objects" / "source.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(_source_pdf())
+    calls: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/tasks":
+            return httpx.Response(202, json={"task_id": "upstream-1", "status": "pending"})
+        if request.url.path == "/tasks/upstream-1":
+            return httpx.Response(200, json={"task_id": "upstream-1", "status": "completed"})
+        if request.url.path == "/tasks/upstream-1/result":
+            return httpx.Response(
+                200,
+                json={
+                    "version": "3.4.5",
+                    "results": {
+                        "source": {
+                            "content_list": [
+                                {
+                                    "type": "text",
+                                    "text": "recovered after restart",
+                                    "bbox": [0, 0, 100, 100],
+                                    "page_idx": 0,
+                                }
+                            ],
+                        }
+                    },
+                },
+            )
+        raise AssertionError(request.url.path)
+
+    async def scenario() -> tuple[httpx.Response, httpx.Response, dict[str, Any]]:
+        config = module.GatewayConfig(
+            tmp_path / "objects",
+            "http://mineru",
+            "token",
+            state_path=tmp_path / "gateway.sqlite",
+        )
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://mineru")
+        app = module.create_app(config, http_client=client)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+        ) as api:
+            submitted = await api.post(
+                "/v1/parse", json=_payload(source), headers={"Authorization": "Bearer token"}
+            )
+        await app.state.gateway.close()
+
+        restarted = module.create_app(config, http_client=client)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=restarted), base_url="http://gateway"
+        ) as api:
+            recovered = await api.get(
+                "/v1/parse/attempt-1",
+                headers={"Authorization": "Bearer token"},
+            )
+        await restarted.state.gateway.close()
+        await client.aclose()
+        manifest = json.loads(
+            Path(httpx.URL(recovered.json()["manifest"]["uri"]).path).read_text(encoding="utf-8")
+        )
+        return submitted, recovered, manifest
+
+    submitted, recovered, manifest = _run(scenario())
+    assert submitted.status_code == 200
+    assert recovered.status_code == 200
+    assert recovered.json()["state"] == "succeeded"
+    assert manifest["parser"]["attempt_id"] == "attempt-1"
+    assert manifest["source"]["evidence_object_id"] == "evidence-1"
+    assert calls == ["/tasks", "/tasks/upstream-1", "/tasks/upstream-1/result"]
+
+
+def test_gateway_persists_lost_upstream_task_and_never_resubmits(tmp_path: Path) -> None:
+    module = _gateway_module()
+    source = tmp_path / "objects" / "source.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(_source_pdf())
+    calls: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/tasks":
+            return httpx.Response(202, json={"task_id": "upstream-lost", "status": "pending"})
+        if request.url.path == "/tasks/upstream-lost":
+            return httpx.Response(404, json={"detail": "not found"})
+        raise AssertionError(request.url.path)
+
+    async def scenario() -> tuple[httpx.Response, httpx.Response, httpx.Response, httpx.Response]:
+        config = module.GatewayConfig(
+            tmp_path / "objects",
+            "http://mineru",
+            "token",
+            state_path=tmp_path / "gateway.sqlite",
+        )
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://mineru")
+        app = module.create_app(config, http_client=client)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+        ) as api:
+            submitted = await api.post(
+                "/v1/parse", json=_payload(source), headers={"Authorization": "Bearer token"}
+            )
+        await app.state.gateway.close()
+
+        restarted = module.create_app(config, http_client=client)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=restarted), base_url="http://gateway"
+        ) as api:
+            lost = await api.get("/v1/parse/attempt-1", headers={"Authorization": "Bearer token"})
+        await restarted.state.gateway.close()
+
+        second_restart = module.create_app(config, http_client=client)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=second_restart), base_url="http://gateway"
+        ) as api:
+            replay = await api.post(
+                "/v1/parse", json=_payload(source), headers={"Authorization": "Bearer token"}
+            )
+            stable = await api.get("/v1/parse/attempt-1", headers={"Authorization": "Bearer token"})
+        await second_restart.state.gateway.close()
+        await client.aclose()
+        return submitted, lost, replay, stable
+
+    submitted, lost, replay, stable = _run(scenario())
+    assert submitted.status_code == 200
+    assert lost.json() == {
+        "attempt_id": "attempt-1",
+        "state": "failed",
+        "failure_code": "mineru_task_not_found",
+    }
+    assert replay.status_code == 200
+    assert stable.json() == lost.json()
+    assert calls == ["/tasks", "/tasks/upstream-lost"]
+
+
 def test_gateway_warmup_requires_successful_real_parser_result(tmp_path: Path) -> None:
     module = _gateway_module()
     calls = []

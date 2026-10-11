@@ -201,7 +201,8 @@ class ParserWorkerClient:
         read_bytes: Callable[[str], bytes],
     ) -> dict[str, Any]:
         """Load and validate a manifest through the caller's scoped artifact store."""
-        return self.load_manifest_with_reference(reference, read_bytes=read_bytes).manifest
+        manifest, _ = self._load_canonical_manifest(reference, read_bytes=read_bytes)
+        return manifest
 
     def load_manifest_with_reference(
         self,
@@ -218,6 +219,38 @@ class ParserWorkerClient:
         never exposed through the manifest API.
         """
 
+        canonical, converted = self._load_canonical_manifest(reference, read_bytes=read_bytes)
+        canonical_reference = reference
+        if converted:
+            if write_bytes is None:
+                raise ParserManifestError(
+                    "canonical manifest writer is required for native MinerU artifacts"
+                )
+            body = _canonical_manifest_bytes(canonical)
+            canonical_reference = write_bytes(body)
+            _validate_artifact_uri(
+                canonical_reference.uri, self._allowed_uri_schemes, "canonical manifest.uri"
+            )
+            digest = hashlib.sha256(body).hexdigest()
+            if canonical_reference.sha256 != digest:
+                raise ParserManifestError("canonical manifest writer returned hash mismatch")
+            try:
+                persisted_body = read_bytes(canonical_reference.uri)
+            except Exception as exc:
+                raise ParserManifestError("canonical manifest artifact unavailable") from exc
+            if not isinstance(persisted_body, bytes):
+                raise ParserManifestError("manifest reader must return bytes")
+            if hashlib.sha256(persisted_body).hexdigest() != canonical_reference.sha256:
+                raise ParserManifestError("canonical manifest artifact hash mismatch")
+            _decode_manifest_body(persisted_body, require_canonical=True)
+        return LoadedParserManifest(canonical, canonical_reference)
+
+    def _load_canonical_manifest(
+        self,
+        reference: ParserManifestReference,
+        *,
+        read_bytes: Callable[[str], bytes],
+    ) -> tuple[dict[str, Any], bool]:
         _validate_artifact_uri(reference.uri, self._allowed_uri_schemes, "manifest.uri")
         body = read_bytes(reference.uri)
         if not isinstance(body, bytes):
@@ -225,12 +258,7 @@ class ParserWorkerClient:
         actual_hash = hashlib.sha256(body).hexdigest()
         if actual_hash != reference.sha256:
             raise ParserManifestError("manifest hash mismatch")
-        try:
-            manifest = json.loads(body)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ParserManifestError("manifest is not valid UTF-8 JSON") from exc
-        if not isinstance(manifest, dict):
-            raise ParserManifestError("manifest root must be an object")
+        manifest = _decode_manifest_body(body, require_canonical=False)
         # MinerU workers may return their native content-list artifact. Convert
         # it at this boundary so every downstream publisher receives the same
         # versioned manifest contract.
@@ -257,17 +285,7 @@ class ParserWorkerClient:
             validate_manifest(manifest)
         except ValueError as exc:
             raise ParserManifestError(str(exc)) from exc
-        canonical = cast(dict[str, Any], manifest)
-        canonical_reference = reference
-        if converted and write_bytes is not None:
-            body = json.dumps(
-                canonical,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-            canonical_reference = write_bytes(body)
-        return LoadedParserManifest(canonical, canonical_reference)
+        return manifest, converted
 
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         try:
@@ -295,6 +313,30 @@ class ParserWorkerClient:
         if not isinstance(payload, dict):
             raise ParserProtocolError("parser response root must be an object")
         return payload
+
+
+def _canonical_manifest_bytes(manifest: Mapping[str, Any]) -> bytes:
+    return json.dumps(
+        manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _decode_manifest_body(body: bytes, *, require_canonical: bool) -> dict[str, Any]:
+    try:
+        manifest = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ParserManifestError("manifest is not valid UTF-8 JSON") from exc
+    if not isinstance(manifest, dict):
+        raise ParserManifestError("manifest root must be an object")
+    if require_canonical:
+        try:
+            validate_manifest(manifest)
+        except ValueError as exc:
+            raise ParserManifestError(str(exc)) from exc
+    return cast(dict[str, Any], manifest)
 
 
 def _validate_request(request: ParserParseRequest, allowed_schemes: frozenset[str]) -> None:

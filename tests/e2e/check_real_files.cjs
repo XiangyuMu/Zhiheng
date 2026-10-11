@@ -129,7 +129,18 @@ const saveReport = () => fs.writeFileSync(
         previousAnswer,
         { timeout: 240000 },
       );
-      const answer={question: question.value, kind: question.kind, status:answerHttp.status(),answer:await page.locator('#answer').innerText(),route:await page.locator('#route').innerText(),citations:await page.locator('#citations .source-card').count(), citation_payload_count: Array.isArray(answerBody.citations) ? answerBody.citations.length : 0};
+      const answer={
+        question: question.value,
+        kind: question.kind,
+        status:answerHttp.status(),
+        answer:await page.locator('#answer').innerText(),
+        route:await page.locator('#route').innerText(),
+        stop_reason: answerBody.stop_reason || null,
+        claims_count: Array.isArray(answerBody.claims) ? answerBody.claims.length : 0,
+        insufficiency_count: Array.isArray(answerBody.insufficiencies) ? answerBody.insufficiencies.length : 0,
+        citations:await page.locator('#citations .source-card').count(),
+        citation_payload_count: Array.isArray(answerBody.citations) ? answerBody.citations.length : 0,
+      };
       answer.answer_provider_id = answerBody.answer_provider_id || null;
       answer.answer_model_id = answerBody.answer_model_id || null;
       answer.answer_audit_id = answerBody.answer_audit_id || null;
@@ -137,8 +148,13 @@ const saveReport = () => fs.writeFileSync(
       saveReport();
       if (answer.status !== 200) throw Error(`answer request failed with HTTP ${answer.status}`);
       if (!answer.answer.trim()) throw Error(`empty answer for ${question.kind}`);
-      if (question.kind !== 'negative' && answer.citations < 1) {
-        throw Error(`answer for ${question.kind} has no supporting citation`);
+      if (question.kind !== 'negative') {
+        if (answer.citations < 1 || answer.citation_payload_count < 1) {
+          throw Error(`answer for ${question.kind} has no supporting citation`);
+        }
+        if (answer.claims_count < 1) {
+          throw Error(`answer for ${question.kind} has no cited claim in the answer payload`);
+        }
       }
       const expectedAnswer = expectedPdf?.answers?.find(item => item.kind === question.kind)
         || expectedPdf?.questions?.find(item => item.kind === question.kind);
@@ -149,8 +165,16 @@ const saveReport = () => fs.writeFileSync(
             throw Error(`answer for ${question.kind} is missing expected fact`);
           }
         }
-        if (expectedAnswer.unanswerable === true && answer.citations !== 0) {
-          throw Error(`unanswerable ${question.kind} question returned citations`);
+        if (expectedAnswer.unanswerable === true) {
+          if (answer.citations !== 0 || answer.citation_payload_count !== 0) {
+            throw Error(`unanswerable ${question.kind} question returned citations`);
+          }
+          if (answer.claims_count !== 0) {
+            throw Error(`unanswerable ${question.kind} question returned cited claims`);
+          }
+          if (answer.insufficiency_count < 1) {
+            throw Error(`unanswerable ${question.kind} question did not expose insufficiency metadata`);
+          }
         }
       }
       if (process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID && answer.answer_provider_id !== process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID) {
@@ -163,6 +187,12 @@ const saveReport = () => fs.writeFileSync(
         throw Error('answer did not expose a successful model-call audit id');
       }
       if (question.kind === 'negative') {
+        if (answer.claims_count !== 0 || answer.citation_payload_count !== 0) {
+          throw Error('negative answer returned cited claims or citation payloads');
+        }
+        if (answer.insufficiency_count < 1) {
+          throw Error('negative answer did not expose insufficiency metadata');
+        }
         if (!/(没有|不足|无法|未提供|未找到|证据)/.test(answer.answer)) {
           throw Error('negative answer did not state evidence insufficiency');
         }

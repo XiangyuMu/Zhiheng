@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -392,20 +391,6 @@ class BoundedAgenticRagService:
                 release_context=release_context,
                 retrieval_run_ids=retrieval_run_ids,
             )
-        if _explicit_negative_evidence_request(query):
-            return AnswerEnvelope(
-                answer="现有材料没有提供该信息，证据不足以确认。",
-                claims=(),
-                citations=(),
-                conflicts=(),
-                assumptions=(),
-                insufficiencies=("当前问题要求的信息未在已授权材料中得到支持。",),
-                route=route,
-                stop_reason=StopReason.EVIDENCE_ONLY,
-                budget_usage=usage,
-                release_context=release_context,
-                retrieval_run_ids=retrieval_run_ids,
-            )
         session.commit()
         usage = _with_elapsed(usage, started)
         if usage.wall_clock_ms >= self._budget.max_wall_clock_ms:
@@ -542,22 +527,10 @@ class BoundedAgenticRagService:
                 release_context=release_context,
                 retrieval_run_ids=retrieval_run_ids,
             )
-        declares_insufficient = bool(
-            generated.insufficiencies
-            and re.search(
-                r"没有|不足|无法|未提供|未找到|no evidence|insufficient",
-                generated.answer,
-                re.I,
-            )
-        )
-        cited_ids = (
-            set()
-            if declares_insufficient
-            else {key for claim in generated.claims for key in claim.citation_ids}
-        )
+        cited_ids = {key for claim in generated.claims for key in claim.citation_ids}
         return AnswerEnvelope(
             answer=generated.answer,
-            claims=() if declares_insufficient else generated.claims,
+            claims=generated.claims,
             citations=tuple(
                 citation for citation in citations if citation.citation_id in cited_ids
             ),
@@ -735,16 +708,6 @@ def _evidence_only(
         release_context=release_context,
         retrieval_run_ids=retrieval_run_ids,
     )
-
-
-def _explicit_negative_evidence_request(query: str) -> bool:
-    """Keep explicit absence checks out of model-generated citation claims."""
-
-    return bool(
-        re.search(r"(?:没有证据|无证据|未提供|没有提供|是否有|有没有)", query)
-        and re.search(r"(?:银行|账户|银行卡|账号|号码|联系方式|住址|地址)", query)
-    )
-
 
 def _rough_token_count(query: str, manifest: AuthorizedContextManifest) -> int:
     chars = len(query) + sum(len(chunk.text) for chunk in manifest.chunks)
