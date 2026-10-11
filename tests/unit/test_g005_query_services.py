@@ -581,6 +581,7 @@ def test_partial_insufficiency_keeps_supported_claims_and_citations() -> None:
     model = _Model(
         answer="材料支持正式知识库证据；没有足够证据确认另一部分。",
         insufficiencies=("另一部分没有授权证据支持。",),
+        answerability="mixed",
     )
     service = BoundedAgenticRagService(
         structured_lookup=_Lookup(),
