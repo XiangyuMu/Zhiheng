@@ -309,7 +309,7 @@ async function runFaultInjections(page, taskId) {
 }
 
 function recordRegressionReferences() {
-  const commands = [
+  report.regression_references = [
     {
       claim: 'stale lease writeback is rejected and duplicate completion does not publish twice',
       command: ['uv', 'run', 'pytest', '-q', 'tests/integration/test_pdf_parser_lease.py', 'tests/integration/test_knowledge_job_claim_authority.py'],
