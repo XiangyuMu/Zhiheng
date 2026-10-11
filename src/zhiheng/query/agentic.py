@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -31,6 +32,7 @@ from zhiheng.retrieval.contracts import (
     AuthorizedContextManifest,
     Citation,
     HybridRetrievalResult,
+    RetrievalFilters,
 )
 
 
@@ -677,6 +679,9 @@ def _search_hybrid(
         kwargs["overfetch_factor"] = overfetch_factor
     if "rrf_k" in parameters or _accepts_var_keyword(parameters):
         kwargs["rrf_k"] = rrf_k
+    titles = tuple(dict.fromkeys(re.findall(r"《([^》]{1,512})》", query)))
+    if len(titles) == 1 and ("filters" in parameters or _accepts_var_keyword(parameters)):
+        kwargs["filters"] = RetrievalFilters(title=titles[0])
     return hybrid_retrieval.search(session, query, **kwargs)  # type: ignore[arg-type]
 
 

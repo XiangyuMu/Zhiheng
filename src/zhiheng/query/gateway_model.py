@@ -101,7 +101,10 @@ def _restrict_to_explicit_source_title(
     if not filtered_citations:
         return manifest, citations
     return (
-        replace(manifest, chunks=tuple(chunk for chunk in manifest.chunks if chunk.chunk_id in chunk_ids)),
+        replace(
+            manifest,
+            chunks=tuple(chunk for chunk in manifest.chunks if chunk.chunk_id in chunk_ids),
+        ),
         filtered_citations,
     )
 

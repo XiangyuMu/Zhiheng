@@ -8,6 +8,7 @@ from dataclasses import replace
 from inspect import Parameter, signature
 from typing import Protocol
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import sha256_text
@@ -201,6 +202,17 @@ class HybridRetriever:
                 degraded.append("vector_empty")
             candidates.extend(vector_hits)
 
+        if filters is not None and filters.title:
+            allowed_chunk_ids = {
+                str(row[0])
+                for row in session.execute(
+                    text("SELECT id FROM chunks WHERE title = :title"),
+                    {"title": filters.title},
+                ).all()
+            }
+            candidates = [
+                candidate for candidate in candidates if candidate.chunk_id in allowed_chunk_ids
+            ]
         fused = self._rrf(candidates, rrf_k=rrf_k)[:overfetch_limit]
         try:
             reranked = self._reranker.rerank(

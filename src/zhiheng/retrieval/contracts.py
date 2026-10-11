@@ -24,6 +24,7 @@ class RetrievalFilters:
     created_to: datetime | None = None
     updated_from: datetime | None = None
     updated_to: datetime | None = None
+    title: str | None = None
 
     def is_empty(self) -> bool:
         return all(
@@ -34,6 +35,7 @@ class RetrievalFilters:
                 self.created_to,
                 self.updated_from,
                 self.updated_to,
+                self.title,
             )
         )
 
