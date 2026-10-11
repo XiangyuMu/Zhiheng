@@ -38,6 +38,16 @@ def test_collector_drops_production_and_test_selection_environment(
     assert "PATH" in env
 
 
+def test_collector_preserves_required_recovery_and_artifact_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ZHIHENG_ISSUE54_FAULTS_JSON", "[]")
+    monkeypatch.setenv("ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH", "/private/object-store")
+    env = collector().clean_environment()
+    assert env["ZHIHENG_ISSUE54_FAULTS_JSON"] == "[]"
+    assert env["ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH"] == "/private/object-store"
+
+
 @pytest.mark.parametrize("code,status", [(0, "passed"), (3, "failed")])
 def test_collector_retains_exit_status_and_output(tmp_path: Path, code: int, status: str) -> None:
     module = collector()
