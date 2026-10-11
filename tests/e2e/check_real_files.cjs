@@ -207,8 +207,16 @@ const saveReport = () => fs.writeFileSync(
         { timeout: 240000 },
       );
       const targetImport = imported[question.kind] || null;
+      const expectedAnswer = expectedPdf?.answers?.find(item => item.kind === question.kind)
+        || expectedPdf?.questions?.find(item => item.kind === question.kind);
+      const expectedFacts = expectedAnswer?.contains || expectedAnswer?.answer_contains || expectedAnswer?.facts || [];
       const targetCitation = targetImport
-        ? findCitationForImport(answerBody.citations || [], targetImport.knowledge)
+        ? await findCitationForImportWithFacts(
+          page,
+          answerBody.citations || [],
+          targetImport.knowledge,
+          Array.isArray(expectedFacts) ? expectedFacts : [expectedFacts],
+        )
         : null;
       const answer={
         question: question.value,
@@ -260,10 +268,8 @@ const saveReport = () => fs.writeFileSync(
         }
         assertClaimsBoundToCitations(answerBody.claims || [], answerBody.citations || [], targetCitation, question.kind);
       }
-      const expectedAnswer = expectedPdf?.answers?.find(item => item.kind === question.kind)
-        || expectedPdf?.questions?.find(item => item.kind === question.kind);
       if (expectedAnswer) {
-        const facts = expectedAnswer.contains || expectedAnswer.answer_contains || expectedAnswer.facts || [];
+        const facts = expectedFacts;
         for (const fact of (Array.isArray(facts) ? facts : [facts])) {
           if (fact && !answer.answer.includes(String(fact))) {
             throw Error(`answer for ${question.kind} is missing expected fact`);
@@ -311,9 +317,6 @@ const saveReport = () => fs.writeFileSync(
         report.answers.at(-1).source_title = sourceContext.title || '';
         report.answers.at(-1).source_page_no = sourceContext.page_no || targetCitation.page_no || null;
         if (!report.answers.at(-1).source_text.trim()) throw Error('citation source text is empty');
-        const expectedAnswer = expectedPdf?.answers?.find(item => item.kind === question.kind)
-          || expectedPdf?.questions?.find(item => item.kind === question.kind);
-        const expectedFacts = expectedAnswer?.contains || expectedAnswer?.answer_contains || expectedAnswer?.facts || [];
         for (const fact of (Array.isArray(expectedFacts) ? expectedFacts : [expectedFacts])) {
           if (fact && !report.answers.at(-1).source_text.includes(String(fact))) {
             throw Error(`citation source text for ${question.kind} is missing expected supporting fact`);
@@ -449,6 +452,23 @@ async function findCurrentKnowledge(page, { title, query, expected }) {
     evidence_object_id: current.evidence_object_id || expected.evidence_object_id,
     source_sha256: current.source_sha256 || expected.source_sha256,
   };
+}
+
+async function findCitationForImportWithFacts(page, citations, knowledge, facts) {
+  const candidates = citations.filter(citation => (
+    citation.source_id === knowledge.knowledge_object_id
+    && citation.source_version_id === knowledge.knowledge_version_id
+    && citation.evidence_object_id === knowledge.evidence_object_id
+  ));
+  if (!candidates.length) return null;
+  const required = facts.map(fact => String(fact || '').trim()).filter(Boolean);
+  if (!required.length) return candidates[0];
+  for (const candidate of candidates) {
+    const context = await citationContext(page, candidate);
+    const source = String(context.quote || context.context || '').replace(/\s+/g, ' ');
+    if (required.every(fact => source.includes(fact))) return candidate;
+  }
+  return candidates[0];
 }
 
 function findCitationForImport(citations, knowledge) {
