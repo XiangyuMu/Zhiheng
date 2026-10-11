@@ -114,6 +114,8 @@ class FtsHit:
 class KnowledgeDetail:
     knowledge_object_id: str
     knowledge_version_id: str
+    evidence_object_id: str
+    source_sha256: str
     title: str
     primary_domain_id: str
     media_type: str
@@ -1079,6 +1081,7 @@ class KnowledgeRepository:
                     f"""
                 SELECT ko.id, ko.current_version_id, ko.title, ko.primary_domain_id,
                        ko.object_kind, ko.lifecycle_status, kv.summary, eo.media_type,
+                       eo.id AS evidence_object_id, eo.sha256 AS source_sha256,
                        eo.source_metadata_json, c.raw_text,
                        (
                          {formal_searchable_sql("ko")}
@@ -1149,6 +1152,8 @@ class KnowledgeRepository:
         return KnowledgeDetail(
             knowledge_object_id=str(row["id"]),
             knowledge_version_id=str(row["current_version_id"]),
+            evidence_object_id=str(row["evidence_object_id"]),
+            source_sha256=str(row["source_sha256"]),
             title=str(row["title"]),
             primary_domain_id=str(row["primary_domain_id"]),
             media_type=str(row["media_type"]),

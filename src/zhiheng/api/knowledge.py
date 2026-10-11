@@ -133,6 +133,8 @@ class KnowledgeDetailResponse(BaseModel):
 
     knowledge_object_id: str
     knowledge_version_id: str
+    evidence_object_id: str
+    source_sha256: str
     title: str
     primary_domain_id: str
     media_type: str
