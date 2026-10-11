@@ -132,7 +132,7 @@ def test_gateway_answer_model_uses_privacy_pipeline_and_strict_scope(
     assert result.claims[0].citation_ids == (citation.citation_id,)
     assert result.personalization_refs == (expected_ref,)
     payload = json.loads(transport.calls[0])
-    assert payload["prompt_version"] == "gateway-answer-model-v4"
+    assert payload["prompt_version"] == "gateway-answer-model-v5"
     assert (
         "Put unsupported or partially unsupported parts of the question in insufficiencies."
         in (payload["ASSUMPTIONS"])
