@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, replace
 from typing import Any
@@ -15,6 +16,7 @@ from zhiheng.retrieval.contracts import AuthorizedContextManifest, Citation
 _PROMPT_VERSION = "gateway-answer-model-v4"
 _ALLOWED_SENSITIVITY_LEVELS = {"public", "private", "sensitive", "highly_sensitive"}
 _LOCAL_ONLY_SENSITIVITY_LEVELS = {"sensitive", "highly_sensitive"}
+_SOURCE_TITLE_PATTERN = re.compile(r"《([^》]{1,512})》")
 
 
 class GatewayAnswerModel:
@@ -34,6 +36,9 @@ class GatewayAnswerModel:
         conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> GeneratedAnswer:
         _validate_citations(manifest, citations)
+        manifest, citations = _restrict_to_explicit_source_title(
+            query, manifest, tuple(citations)
+        )
         # Manifest/citation IDs are fresh per retrieval. Stable, content-bound wire
         # aliases prevent a retry from bypassing unresolved-dispatch protection.
         wire_citations = tuple(
@@ -77,6 +82,28 @@ class GatewayAnswerModel:
             model_id=self._model_id,
         )
 
+
+
+def _restrict_to_explicit_source_title(
+    query: str,
+    manifest: AuthorizedContextManifest,
+    citations: tuple[Citation, ...],
+) -> tuple[AuthorizedContextManifest, tuple[Citation, ...]]:
+    """Honor an unambiguous ``《title》`` source constraint in the query."""
+    titles = tuple(dict.fromkeys(_SOURCE_TITLE_PATTERN.findall(query)))
+    if len(titles) != 1:
+        return manifest, citations
+    target = titles[0]
+    chunk_ids = {chunk.chunk_id for chunk in manifest.chunks if chunk.title == target}
+    if not chunk_ids:
+        return manifest, citations
+    filtered_citations = tuple(citation for citation in citations if citation.chunk_id in chunk_ids)
+    if not filtered_citations:
+        return manifest, citations
+    return (
+        replace(manifest, chunks=tuple(chunk for chunk in manifest.chunks if chunk.chunk_id in chunk_ids)),
+        filtered_citations,
+    )
 
 def _wire_citation_id(citation: Citation) -> str:
     identity = asdict(citation)
