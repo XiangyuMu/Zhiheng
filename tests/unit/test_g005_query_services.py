@@ -4,7 +4,7 @@ import sys
 import types
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from sqlalchemy.orm import Session
@@ -137,6 +137,7 @@ class _Model:
         fail: BaseException | None = None,
         answer: str = "有证据支持的回答",
         insufficiencies: tuple[str, ...] = (),
+        answerability: Literal["supported", "mixed", "insufficient"] = "supported",
         include_claims: bool = True,
         output_tokens: int = 7,
     ) -> None:
@@ -144,6 +145,7 @@ class _Model:
         self.fail = fail
         self.answer = answer
         self.insufficiencies = insufficiencies
+        self.answerability = answerability
         self.include_claims = include_claims
         self.output_tokens = output_tokens
         self.calls = 0
@@ -179,6 +181,7 @@ class _Model:
                 else ()
             ),
             insufficiencies=self.insufficiencies,
+            answerability=self.answerability,
             output_tokens=self.output_tokens,
         )
 
@@ -549,11 +552,11 @@ def test_supported_answer_survives_negative_evidence_wording() -> None:
     assert model.calls == 1
 
 
-
 def test_unsupported_existence_answer_withholds_unrelated_claims() -> None:
     model = _Model(
         answer="没有证据表明材料包含该事实。",
         insufficiencies=("当前材料未提供该事实。",),
+        answerability="insufficient",
     )
     service = BoundedAgenticRagService(
         structured_lookup=_Lookup(),

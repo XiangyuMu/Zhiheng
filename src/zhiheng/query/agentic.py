@@ -539,7 +539,11 @@ class BoundedAgenticRagService:
                 release_context=release_context,
                 retrieval_run_ids=retrieval_run_ids,
             )
-        withhold_claims = _withhold_unsupported_existence_claims(query, generated)
+        # The model must classify whether the complete answer is supported by
+        # the authorized evidence.  This keeps publication decisions based on
+        # a typed protocol field rather than guessing from natural-language
+        # query/answer phrases.
+        withhold_claims = generated.answerability == "insufficient"
         published_claims = () if withhold_claims else generated.claims
         cited_ids = {key for claim in published_claims for key in claim.citation_ids}
         return AnswerEnvelope(
@@ -732,37 +736,6 @@ def _evidence_only(
         budget_usage=usage,
         release_context=release_context,
         retrieval_run_ids=retrieval_run_ids,
-    )
-
-
-def _withhold_unsupported_existence_claims(
-    query: str, generated: GeneratedAnswer
-) -> bool:
-    """Keep unrelated claims out of answers that explicitly lack existence evidence.
-
-    This is deliberately based on the model's structured insufficiency signal and
-    generic existence/absence language. It does not inspect domain-specific nouns
-    or maintain a query-word denylist. Mixed questions without an existence form
-    continue to publish their independently supported claims.
-    """
-    if not generated.claims or not generated.insufficiencies:
-        return False
-    existence_markers = ("是否", "有没有", "有无", "是否有", "whether", "does", "is there")
-    absence_markers = (
-        "没有证据",
-        "未提供",
-        "未找到",
-        "无法确认",
-        "证据不足",
-        "insufficient evidence",
-        "not provided",
-        "not found",
-    )
-    normalized_query = query.casefold()
-    normalized_answer = generated.answer.casefold()
-    return (
-        any(marker in normalized_query for marker in existence_markers)
-        and any(marker in normalized_answer for marker in absence_markers)
     )
 
 

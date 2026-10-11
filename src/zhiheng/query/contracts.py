@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,9 @@ class StopReason(StrEnum):
     NO_NEW_AUTHORIZED_EVIDENCE = "no_new_authorized_evidence"
     RELEASE_UNAVAILABLE = "release_unavailable"
     MEMORY_CONTEXT_CHANGED = "memory_context_changed"
+
+
+Answerability = Literal["supported", "mixed", "insufficient"]
 
 
 @dataclass(frozen=True)
@@ -119,6 +122,7 @@ class AnswerEnvelope:
 class GeneratedAnswer:
     answer: str
     claims: tuple[AnswerClaim, ...]
+    answerability: Answerability = "supported"
     conflicts: tuple[str, ...] = ()
     assumptions: tuple[str, ...] = ()
     insufficiencies: tuple[str, ...] = ()
