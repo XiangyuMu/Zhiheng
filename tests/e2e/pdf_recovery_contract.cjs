@@ -29,7 +29,7 @@ function validateFaultScenarios(scenarios) {
   assert(Array.isArray(scenarios), "ZHIHENG_ISSUE54_FAULTS_JSON must be an array");
   const names = new Set();
   const categories = new Set();
-  return scenarios.map((scenario, index) => {
+  const validated = scenarios.map((scenario, index) => {
     assert(scenario && typeof scenario === "object" && !Array.isArray(scenario), `fault scenario ${index + 1} must be an object`);
     const name = String(scenario.name || "").trim();
     assert(name, `fault scenario ${index + 1} requires name`);
@@ -55,12 +55,11 @@ function validateFaultScenarios(scenarios) {
       assert(Number(scenario.expected_retry_count) >= 2, `auto_retry_exhausted scenario ${name} requires expected_retry_count >= 2`);
     }
     return { ...scenario, name, category, expected_state: expectedState, expected_error_code: expectedErrorCode };
-  }).map((scenario) => {
-    for (const category of REQUIRED_FAULT_CATEGORIES) {
-      assert(categories.has(category), `missing Issue 54 fault category: ${category}`);
-    }
-    return scenario;
   });
+  for (const category of REQUIRED_FAULT_CATEGORIES) {
+    assert(categories.has(category), `missing Issue 54 fault category: ${category}`);
+  }
+  return validated;
 }
 
 function validateFaultCommandProof(output, scenario, identity) {

@@ -26,6 +26,7 @@ function completeScenarios(overrides = {}) {
 }
 
 test("Issue 54 fault scenarios require every external parser fault category", () => {
+  assert.throws(() => validateFaultScenarios([]), /missing Issue 54 fault category/);
   const scenarios = completeScenarios();
   assert.equal(validateFaultScenarios(scenarios).length, REQUIRED_FAULT_CATEGORIES.length);
 
