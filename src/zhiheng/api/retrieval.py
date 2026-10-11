@@ -62,7 +62,7 @@ from zhiheng.retrieval import (
     StructuredLookupService,
     VectorIndexRepository,
 )
-from zhiheng.retrieval.contracts import AuthorizedContextManifest
+from zhiheng.retrieval.contracts import AuthorizedContextManifest, RetrievalFilters
 from zhiheng.retrieval.embeddings import BgeM3QueryEmbedder, QueryEmbeddingUnavailableError
 from zhiheng.retrieval.replay import CitationReplayValidator
 from zhiheng.retrieval.repository import CitationContextRepository, LexicalRetriever
@@ -1017,6 +1017,7 @@ class VectorAwareHybridRetriever:
         limit: int = 10,
         overfetch_factor: int = 4,
         rrf_k: int | None = None,
+        filters: RetrievalFilters | None = None,
     ) -> HybridRetrievalResult:
         if query_embedding is not None and vector_generation_id is not None:
             return self._hybrid.search(
@@ -1028,6 +1029,7 @@ class VectorAwareHybridRetriever:
                 limit=limit,
                 overfetch_factor=overfetch_factor,
                 rrf_k=rrf_k,
+                filters=filters,
             )
 
         configured_route = embedding_route(session)
@@ -1039,6 +1041,7 @@ class VectorAwareHybridRetriever:
                 limit=limit,
                 overfetch_factor=overfetch_factor,
                 rrf_k=rrf_k,
+                filters=filters,
             )
         embedding_model_id = (
             configured_route["model_id"]
@@ -1167,6 +1170,7 @@ class VectorAwareHybridRetriever:
         limit: int,
         overfetch_factor: int,
         rrf_k: int | None,
+        filters: RetrievalFilters | None = None,
     ) -> HybridRetrievalResult:
         return self._hybrid.search(
             session,
@@ -1175,6 +1179,7 @@ class VectorAwareHybridRetriever:
             limit=limit,
             overfetch_factor=overfetch_factor,
             rrf_k=rrf_k,
+            filters=filters,
         )
 
 
