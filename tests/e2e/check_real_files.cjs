@@ -175,8 +175,8 @@ const saveReport = () => fs.writeFileSync(
     }
     await page.goto(base+'/knowledge-agent#research');
     const questions = [
-      { kind: 'text', value: `只根据资料《${imported.text.title}》回答：对方问“引起我注意干嘛”之后，建议如何回答？请在回答中原样保留“引起我注意干嘛”这句话，并引用原文。` },
-      { kind: 'pdf', value: `只根据资料《${imported.pdf.title}》回答：Comments 文档的主要审稿意见是什么？请引用原文。` },
+      { kind: 'text', value: `资料《${imported.text.title}》：引起我注意干嘛？请原样保留这句话并引用原文回答。` },
+      { kind: 'pdf', value: `资料《${imported.pdf.title}》：Comments 文档的主要审稿意见是什么？请引用 MannequinVideos 原文。` },
       { kind: 'negative', value: `只根据刚导入的资料《${imported.text.title}》和《${imported.pdf.title}》回答：这些材料是否给出了作者的银行账户号码？没有证据请明确说明。` },
     ];
     for (const question of questions) {
