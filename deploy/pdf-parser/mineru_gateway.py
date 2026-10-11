@@ -859,7 +859,12 @@ def _authorize(header: str | None, expected: str) -> None:
 
 
 def _http_error(error: GatewayError) -> HTTPException:
-    status = 503 if error.code in {"mineru_unavailable", "mineru_result_unavailable"} else 422
+    if error.code == "attempt_not_found":
+        status = 404
+    elif error.code in {"mineru_unavailable", "mineru_result_unavailable"}:
+        status = 503
+    else:
+        status = 422
     return HTTPException(status_code=status, detail={"code": error.code, "message": str(error)})
 
 

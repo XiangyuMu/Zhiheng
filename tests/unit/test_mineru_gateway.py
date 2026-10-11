@@ -10,9 +10,11 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 from pypdf import PdfWriter
 
 from zhiheng.knowledge.pdf_worker import (
+    ParserAttemptNotFoundError,
     ParserParseRequest,
     ParserWorkerClient,
 )
@@ -149,6 +151,8 @@ def test_gateway_submits_controlled_source_and_publishes_manifest(tmp_path: Path
             evidence_object_id="evidence-1",
         )
         with parser_client:
+            with pytest.raises(ParserAttemptNotFoundError):
+                await asyncio.to_thread(parser_client.status, request.attempt_id)
             receipt = await asyncio.to_thread(parser_client.submit, request)
             parser_status = await asyncio.to_thread(parser_client.status, receipt.attempt_id)
             assert parser_status.manifest is not None
