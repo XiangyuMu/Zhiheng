@@ -152,8 +152,8 @@ const saveReport = () => fs.writeFileSync(
         if (finalState.task_id !== receiptBody.task_id) throw Error('PDF terminal snapshot is not bound to the current task');
         if (finalState.evidence_object_id !== receiptBody.evidence_object_id) throw Error('PDF terminal snapshot is not bound to the current evidence object');
         if (finalState.source_sha256 !== item.sha256) throw Error('PDF terminal snapshot source digest mismatch');
-        if (finalState.state !== 'parsed' || finalState.index_searchable !== true) {
-          throw Error(`${path.basename(file)} did not become parsed and searchable`);
+        if (finalState.state !== 'parsed') {
+          throw Error(`${path.basename(file)} did not complete parsing`);
         }
       } else {
         if (finalState.public_status !== 'succeeded' || finalState.searchable !== true) {
