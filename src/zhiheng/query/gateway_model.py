@@ -268,8 +268,9 @@ def _parse_generated_answer(
     max_output_tokens: int | None,
 ) -> GeneratedAnswer:
     data = _json_object(raw_text, "model response")
-    required_keys = {
+    expected_keys = {
         "answer",
+        "answerability",
         "claims",
         "conflicts",
         "assumptions",
@@ -277,10 +278,10 @@ def _parse_generated_answer(
         "output_tokens",
         "personalization_refs",
     }
-    if set(data) not in (required_keys, required_keys | {"answerability"}):
+    if set(data) != expected_keys:
         raise ValueError("model response schema mismatch")
     answer = _string(data["answer"], "answer")
-    answerability = data.get("answerability", "supported")
+    answerability = data["answerability"]
     if answerability not in {"supported", "mixed", "insufficient"}:
         raise ValueError("answerability must be supported, mixed, or insufficient")
     output_tokens = _int(data["output_tokens"], "output_tokens")
@@ -291,6 +292,8 @@ def _parse_generated_answer(
 
     allowed_citation_ids = {citation.citation_id for citation in citations}
     claims = tuple(_claim(item, allowed_citation_ids) for item in _list(data["claims"], "claims"))
+    if answerability == "insufficient" and claims:
+        raise ValueError("insufficient answerability cannot include claims")
     allowed_refs = {
         _wire_memory_ref(ref): ref for ref in _allowed_personalization_refs(memory_context)
     }

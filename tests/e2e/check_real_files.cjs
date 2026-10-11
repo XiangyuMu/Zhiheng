@@ -10,7 +10,8 @@ const { execFileSync } = require('node:child_process');
 const { chromium } = require('playwright');
 const [base, output, ...files] = process.argv.slice(2);
 if (!base || !output || files.length !== 2 || !['localhost', '127.0.0.1'].includes(new URL(base).hostname)) throw Error('Expected local URL, private output directory and two files');
-fs.mkdirSync(output, { recursive: true, mode: 0o700 });
+if (fs.existsSync(output)) throw Error('Evidence output directory must be new; preserve prior runs');
+fs.mkdirSync(output, { mode: 0o700 });
 const report = {
   started: new Date().toISOString(),
   sha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
@@ -210,6 +211,7 @@ const saveReport = () => fs.writeFileSync(
       const expectedAnswer = expectedPdf?.answers?.find(item => item.kind === question.kind)
         || expectedPdf?.questions?.find(item => item.kind === question.kind);
       const expectedFacts = expectedAnswer?.contains || expectedAnswer?.answer_contains || expectedAnswer?.facts || [];
+      const answerPatterns = expectedAnswer?.answer_patterns || expectedAnswer?.answer_contains_any || [];
       const targetCitation = targetImport
         ? await findCitationForImportWithFacts(
           page,
@@ -282,6 +284,19 @@ const saveReport = () => fs.writeFileSync(
           }
           if (answer.insufficiency_count < 1) {
             throw Error(`unanswerable ${question.kind} question did not expose insufficiency metadata`);
+          }
+        } else {
+          const answerText = `${answer.answer} ${(answerBody.claims || []).map(claim => claim.text || '').join(' ')}`;
+          const patterns = Array.isArray(answerPatterns) ? answerPatterns : [answerPatterns];
+          if (patterns.some(Boolean)) {
+            if (!patterns.some(pattern => new RegExp(String(pattern), 'iu').test(answerText))) {
+              throw Error(`answer for ${question.kind} did not satisfy its semantic answer pattern`);
+            }
+          } else {
+            const facts = Array.isArray(expectedFacts) ? expectedFacts : [expectedFacts];
+            if (!facts.some(fact => fact && answerText.includes(String(fact)))) {
+              throw Error(`answer for ${question.kind} did not state an expected fact or semantic answer pattern`);
+            }
           }
         }
       }

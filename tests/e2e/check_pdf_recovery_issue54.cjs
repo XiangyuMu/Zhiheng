@@ -27,6 +27,8 @@ const {
 const [base, output, file] = process.argv.slice(2);
 assert(base && output && file, 'Expected URL, output directory and PDF');
 assert(['localhost', '127.0.0.1'].includes(new URL(base).hostname), 'Local service only');
+assert(!fs.existsSync(output), 'Evidence output directory must be new; preserve prior runs');
+assert.equal(path.basename(file), process.env.ZHIHENG_EXPECTED_PDF_BASENAME || 'Comments.pdf', 'PDF acceptance requires Comments.pdf');
 fs.mkdirSync(output, { recursive: true, mode: 0o700 });
 
 const report = {
@@ -108,6 +110,8 @@ function redact(value) {
   return String(value || '')
     .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s"',}]+/gi, '$1[REDACTED]')
     .replace(/((?:api[_-]?key|token|secret|password|authorization)\s*[=:]\s*["']?)[^\s,"'}]+/gi, '$1[REDACTED]')
+    .replace(/(["'](?:api[_-]?key|token|secret|password|authorization)["']\s*:\s*["'])[^"']*(["'])/gi, '$1[REDACTED]$2')
+    .replace(/([?&](?:api[_-]?key|token|secret|password|authorization)=)[^&#\s]+/gi, '$1[REDACTED]')
     .replace(/(Bearer\s+)[^\s"',}]+/gi, '$1[REDACTED]');
 }
 

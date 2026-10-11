@@ -19,7 +19,12 @@ from zhiheng.models import ModelGateway
 from zhiheng.models._transports import TransportResponse, TransportRoute, _ApprovedOutboundPayload
 from zhiheng.privacy.gateway import DeterministicPatternAnalyzer, PiiFinding, PrivacyPipeline
 from zhiheng.query.contracts import PersonalizationRef
-from zhiheng.query.gateway_model import GatewayAnswerModel, _wire_citation_id, _wire_memory_ref
+from zhiheng.query.gateway_model import (
+    GatewayAnswerModel,
+    _parse_generated_answer,
+    _wire_citation_id,
+    _wire_memory_ref,
+)
 from zhiheng.retrieval import RetrievalAuthorizer
 from zhiheng.retrieval.citations import CitationBuilder
 from zhiheng.retrieval.contracts import AuthorizedChunk, Citation, RetrievalSource
@@ -83,6 +88,7 @@ def test_gateway_answer_model_uses_privacy_pipeline_and_strict_scope(
             json.dumps(
                 {
                     "answer": "基于证据回答，并按用户目标调整表达。",
+                    "answerability": "supported",
                     "claims": [
                         {"text": "论文证据可用", "citation_ids": [_wire_citation_id(citation)]},
                     ],
@@ -176,6 +182,7 @@ def test_gateway_answer_model_rejects_unscoped_json_without_fallback(
             json.dumps(
                 {
                     "answer": "bad",
+                    "answerability": "supported",
                     "claims": [{"text": "bad", "citation_ids": ["unknown-citation"]}],
                     "conflicts": [],
                     "assumptions": [],
@@ -259,6 +266,7 @@ def test_gateway_answer_model_fails_closed_for_unknown_explicit_source_title(
             json.dumps(
                 {
                     "answer": "证据不足",
+                    "answerability": "insufficient",
                     "claims": [],
                     "conflicts": [],
                     "assumptions": [],
@@ -348,6 +356,7 @@ def test_gateway_answer_model_compacts_redundant_provenance_without_dropping_evi
             json.dumps(
                 {
                     "answer": "16 条证据均已纳入回答。",
+                    "answerability": "supported",
                     "claims": [
                         {
                             "text": "全部证据都可用于回答",
@@ -584,6 +593,35 @@ def _citation_for(chunk: AuthorizedChunk) -> Citation:
     )
 
 
+def test_gateway_answer_parser_requires_answerability_and_consistent_claims() -> None:
+    citation = _citation_for(_chunk())
+    base = {
+        "answer": "证据不足",
+        "claims": [],
+        "conflicts": [],
+        "assumptions": [],
+        "insufficiencies": ["未找到支持"],
+        "output_tokens": 1,
+        "personalization_refs": [],
+    }
+    with pytest.raises(ValueError, match="schema mismatch"):
+        _parse_generated_answer(
+            json.dumps(base), citations=(citation,), memory_context=None, max_output_tokens=None
+        )
+    inconsistent = {
+        **base,
+        "answerability": "insufficient",
+        "claims": [{"text": "x", "citation_ids": [citation.citation_id]}],
+    }
+    with pytest.raises(ValueError, match="cannot include claims"):
+        _parse_generated_answer(
+            json.dumps(inconsistent),
+            citations=(citation,),
+            memory_context=None,
+            max_output_tokens=None,
+        )
+
+
 def _legacy_prompt_length(
     *,
     query: str,
@@ -618,6 +656,7 @@ def _legacy_prompt_length(
         ],
         "RESPONSE_SCHEMA": {
             "answer": "string",
+            "answerability": "supported | mixed | insufficient",
             "claims": [{"text": "string", "citation_ids": ["citation_id"]}],
             "conflicts": ["string"],
             "assumptions": ["string"],

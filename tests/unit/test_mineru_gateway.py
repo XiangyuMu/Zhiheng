@@ -453,6 +453,14 @@ def test_gateway_rejects_manifest_with_missing_image_resource(tmp_path: Path) ->
     }
 
 
+def test_gateway_rejects_malformed_image_resource_instead_of_dropping_it(tmp_path: Path) -> None:
+    gateway_module = _gateway_module()
+    config = gateway_module.GatewayConfig(tmp_path / "objects", "http://mineru", "token")
+    gateway = gateway_module.MinerUGateway(config)
+    with pytest.raises(gateway_module.GatewayError, match="resource"):
+        gateway._persist_images({"images/broken.png": "not-base64"}, tmp_path / "images")
+
+
 def test_gateway_authentication_is_required(tmp_path: Path) -> None:
     gateway_module = _gateway_module()
     config = gateway_module.GatewayConfig(tmp_path, "http://mineru", "token")

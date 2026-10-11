@@ -13,6 +13,8 @@ const [base, output, file] = process.argv.slice(2);
 assert(base && output && file, 'Expected URL, new evidence directory, PDF');
 assert(['localhost', '127.0.0.1'].includes(new URL(base).hostname), 'Local service only');
 assert(process.env.ZHIHENG_TEST_USERNAME && process.env.ZHIHENG_TEST_PASSWORD, 'Missing credentials');
+assert(!fs.existsSync(output), 'Evidence output directory must be new; preserve prior runs');
+assert.equal(path.basename(file), process.env.ZHIHENG_EXPECTED_PDF_BASENAME || 'Comments.pdf', 'PDF acceptance requires Comments.pdf');
 fs.mkdirSync(output, { mode: 0o700 });
 const report = {
   started: new Date().toISOString(), scope: 'issue52-real-parser',

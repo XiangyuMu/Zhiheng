@@ -558,20 +558,32 @@ class MinerUGateway:
     def _persist_images(self, images: Any, output_dir: Path) -> dict[str, dict[str, Any]]:
         if images is None:
             return {}
+        if not isinstance(images, (dict, list)):
+            raise GatewayError(
+                "mineru_resource_invalid", "MinerU image resources must be an object or list"
+            )
         output_dir.mkdir(parents=True, exist_ok=True)
         entries: list[tuple[str, str]] = []
         if isinstance(images, dict):
             for name, encoded in images.items():
-                if isinstance(name, str) and isinstance(encoded, str):
-                    entries.append((name, encoded))
+                if not isinstance(name, str) or not isinstance(encoded, str):
+                    raise GatewayError(
+                        "mineru_resource_invalid", "MinerU image resource has invalid name or data"
+                    )
+                entries.append((name, encoded))
         elif isinstance(images, list):
             for image in images:
                 if not isinstance(image, dict):
-                    continue
+                    raise GatewayError(
+                        "mineru_resource_invalid", "MinerU image resource entry is invalid"
+                    )
                 name = image.get("path") or image.get("name") or image.get("img_path")
                 encoded = image.get("data") or image.get("base64") or image.get("content")
-                if isinstance(name, str) and isinstance(encoded, str):
-                    entries.append((name, encoded))
+                if not isinstance(name, str) or not isinstance(encoded, str):
+                    raise GatewayError(
+                        "mineru_resource_invalid", "MinerU image resource has invalid name or data"
+                    )
+                entries.append((name, encoded))
         artifacts: dict[str, dict[str, Any]] = {}
         for name, encoded in entries:
             original_name = name
@@ -580,7 +592,10 @@ class MinerUGateway:
             try:
                 body = base64.b64decode(encoded, validate=True)
             except (binascii.Error, ValueError):
-                continue
+                raise GatewayError(
+                    "mineru_resource_invalid",
+                    f"MinerU image resource is not valid base64: {original_name}",
+                ) from None
             suffix = Path(name).suffix.lower() or ".bin"
             safe_name = f"{hashlib.sha256(body).hexdigest()}{suffix}"
             output_path = output_dir / safe_name
