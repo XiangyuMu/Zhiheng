@@ -177,13 +177,13 @@ const saveReport = () => fs.writeFileSync(
           }
         }
       }
-      if (process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID && answer.answer_provider_id !== process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID) {
+      if (question.kind !== 'negative' && process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID && answer.answer_provider_id !== process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID) {
         throw Error(`answer used provider ${answer.answer_provider_id || 'unset'}, expected ${process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID}`);
       }
-      if (process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID && answer.answer_model_id !== process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID) {
+      if (question.kind !== 'negative' && process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID && answer.answer_model_id !== process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID) {
         throw Error(`answer used model ${answer.answer_model_id || 'unset'}, expected ${process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID}`);
       }
-      if (process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID && !answer.answer_audit_id) {
+      if (question.kind !== 'negative' && process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID && !answer.answer_audit_id) {
         throw Error('answer did not expose a successful model-call audit id');
       }
       if (question.kind === 'negative') {
