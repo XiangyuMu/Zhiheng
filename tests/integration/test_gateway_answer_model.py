@@ -133,11 +133,13 @@ def test_gateway_answer_model_uses_privacy_pipeline_and_strict_scope(
     assert result.personalization_refs == (expected_ref,)
     payload = json.loads(transport.calls[0])
     assert payload["prompt_version"] == "gateway-answer-model-v4"
-    assert "Put unsupported or partially unsupported parts of the question in insufficiencies." in (
-        payload["ASSUMPTIONS"]
+    assert (
+        "Put unsupported or partially unsupported parts of the question in insufficiencies."
+        in (payload["ASSUMPTIONS"])
     )
-    assert "Do not omit supported claims because another part of the question is unsupported." in (
-        payload["ASSUMPTIONS"]
+    assert (
+        "Do not omit supported claims because another part of the question is unsupported."
+        in (payload["ASSUMPTIONS"])
     )
     assert payload["user_query"] == "总结 [REDACTED_EMAIL_ADDRESS] 的论文"
     assert payload["KNOWLEDGE_EVIDENCE"][0]["text"] == (
@@ -240,6 +242,56 @@ def test_gateway_answer_model_requires_local_for_sensitive_memory(
         )
 
     assert transport.calls == []
+
+
+def test_gateway_answer_model_fails_closed_for_unknown_explicit_source_title(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, settings, session_factory = _migrated_session_factory(tmp_path)
+    monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "secret-value")
+    chunk = _chunk()
+    manifest = RetrievalAuthorizer().seal_manifest(
+        query_hash=sha256_text("《不存在的资料》总结"), chunks=[chunk]
+    )
+    transport = CountingTransport(
+        responses=[
+            json.dumps(
+                {
+                    "answer": "证据不足",
+                    "claims": [],
+                    "conflicts": [],
+                    "assumptions": [],
+                    "insufficiencies": ["没有匹配的资料"],
+                    "output_tokens": 2,
+                    "personalization_refs": [],
+                },
+                ensure_ascii=False,
+            )
+        ],
+        calls=[],
+    )
+    gateway = ModelGateway._for_test(
+        session_factory=session_factory,
+        settings=settings.model_copy(update={"external_models_enabled": True}),
+        privacy_pipeline=PrivacyPipeline(analyzer=DeterministicPatternAnalyzer()),
+        transports={"openai-compatible": transport},
+    )
+    with session_scope(session_factory) as session:
+        _insert_provider(session)
+
+    GatewayAnswerModel(
+        gateway=gateway,
+        provider_id="provider-openai",
+        model_id="gpt-test",
+    ).generate_answer(
+        query="请只根据《不存在的资料》回答",
+        manifest=manifest,
+        citations=(_citation_for(chunk),),
+    )
+
+    payload = json.loads(transport.calls[0])
+    assert payload["KNOWLEDGE_EVIDENCE"] == []
 
 
 def test_gateway_answer_model_rejects_unknown_memory_sensitivity_before_gateway(
@@ -496,8 +548,7 @@ def _chunk_for_prompt_budget(index: int) -> AuthorizedChunk:
         chunk_id=f"chunk-{index:02d}-9d96168c7e224de9b3375f475404a8bb",
         confirmation_generation=100 + index,
         generation=(
-            f"mineru layout-parser-v1 attempt {index} "
-            f"native-content-list-conversion-{index:02d}"
+            f"mineru layout-parser-v1 attempt {index} native-content-list-conversion-{index:02d}"
         ),
         title=f"Comments.pdf 第 {index + 1} 页证据",
         text=text,

@@ -131,6 +131,15 @@ def test_privacy_pipeline_does_not_join_distant_document_segments() -> None:
     assert result.status == "clear"
 
 
+def test_privacy_pipeline_detects_english_sensitive_semantics_without_word_splitting() -> None:
+    pipeline = PrivacyPipeline(analyzer=DeterministicPatternAnalyzer())
+
+    result = pipeline.prepare_for_model("My finance is private")
+
+    assert result.status == "refused"
+    assert "first-person" in result.reason
+
+
 def test_privacy_pipeline_fails_closed_when_default_presidio_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

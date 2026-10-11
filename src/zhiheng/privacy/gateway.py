@@ -386,10 +386,9 @@ def _contains_sensitive_personal_semantics(text: str) -> bool:
     # evidence can contain first-person dialogue and a separate sensitive
     # topic elsewhere; only a single sentence/line establishes the semantic
     # relationship that requires local handling.
-    segments = re.split(r"[\n\\n。！？!?;；]", text)
+    segments = re.split(r"(?:\n|\\n|[。！？!?;；])", text)
     return any(
-        _FIRST_PERSON_PATTERN.search(segment)
-        and _SENSITIVE_CONTEXT_PATTERN.search(segment)
+        _FIRST_PERSON_PATTERN.search(segment) and _SENSITIVE_CONTEXT_PATTERN.search(segment)
         for segment in segments
     )
 

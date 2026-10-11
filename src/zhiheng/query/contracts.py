@@ -14,6 +14,7 @@ from zhiheng.retrieval.contracts import (
     Citation,
     HybridRetrievalResult,
     QueryRoute,
+    RetrievalFilters,
 )
 
 
@@ -140,6 +141,7 @@ class HybridRetrievalPort(Protocol):
         limit: int = 10,
         overfetch_factor: int = 4,
         rrf_k: int | None = None,
+        filters: RetrievalFilters | None = None,
     ) -> HybridRetrievalResult: ...
 
 

@@ -216,34 +216,60 @@ class HybridRetriever:
             # An explicit source title scopes the query to the complete source.
             # Add its remaining serving chunks so a title-only hit (for example
             # a PDF cover block) cannot hide the substantive pages.
-            template = candidates[0] if candidates else None
+            identities = {
+                (candidate.source_type, candidate.source_id, candidate.source_version_id)
+                for candidate in candidates
+            }
+            # A title can be reused by multiple sources.  Without a candidate
+            # identity there is no safe way to choose which source to expand.
+            if len(identities) > 1:
+                # Never answer an ambiguous title query with a mixture of
+                # same-named sources.  The caller can retry with an explicit
+                # object/version constraint.
+                candidates = []
+                identities = set()
+            template = candidates[0] if len(identities) == 1 else None
             known = {candidate.chunk_id for candidate in candidates}
-            rows = session.execute(
+            if template is None:
+                rows = session.execute(
+                    text(
+                        "SELECT id, source_type, source_id, source_version_id, "
+                        "confirmation_generation FROM chunks WHERE 1 = 0"
+                    )
+                ).mappings()
+            else:
+                rows = session.execute(
                     text(
                         "SELECT id, source_type, source_id, source_version_id, "
                         "confirmation_generation FROM chunks WHERE title = :title "
-                        "AND status = 'ready'"
+                        "AND source_type = :source_type AND source_id = :source_id "
+                        "AND source_version_id = :source_version_id AND status = 'ready'"
                     ),
-                    {"title": filters.title},
+                    {
+                        "title": filters.title,
+                        "source_type": template.source_type,
+                        "source_id": template.source_id,
+                        "source_version_id": template.source_version_id,
+                    },
                 ).mappings()
             for index, row in enumerate(rows, start=1):
                 chunk_id = str(row["id"])
                 if chunk_id in known:
                     continue
                 candidates.append(
-                        RetrievalCandidate(
-                            source_type=str(row["source_type"]),
-                            source_id=str(row["source_id"]),
-                            source_version_id=str(row["source_version_id"]),
-                            chunk_id=chunk_id,
-                            confirmation_generation=int(row["confirmation_generation"]),
+                    RetrievalCandidate(
+                        source_type=str(row["source_type"]),
+                        source_id=str(row["source_id"]),
+                        source_version_id=str(row["source_version_id"]),
+                        chunk_id=chunk_id,
+                        confirmation_generation=int(row["confirmation_generation"]),
                         generation=None if template is None else template.generation,
-                            rank=index,
-                            score=0.0,
-                            retriever=RetrievalSource.LEXICAL,
-                            component_ranks=((RetrievalSource.LEXICAL, index),),
-                        )
+                        rank=index,
+                        score=0.0,
+                        retriever=RetrievalSource.LEXICAL,
+                        component_ranks=((RetrievalSource.LEXICAL, index),),
                     )
+                )
         fused = self._rrf(candidates, rrf_k=rrf_k)[:overfetch_limit]
         try:
             reranked = self._reranker.rerank(

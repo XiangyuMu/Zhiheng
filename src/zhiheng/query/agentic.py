@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from inspect import Parameter, signature
-from typing import Protocol, TypedDict
+from typing import Protocol, TypedDict, cast
 
 from sqlalchemy.orm import Session
 
@@ -233,7 +233,7 @@ class BoundedAgenticRagService:
                 result = _search_hybrid(
                     self._hybrid_retrieval,
                     session,
-                    subquery,
+                    scoped_subquery,
                     release_context=release_context,
                     limit=max(1, self._budget.max_context_chunks - usage.context_chunks),
                     overfetch_factor=behavior.overfetch_factor,
@@ -685,7 +685,8 @@ def _search_hybrid(
     titles = tuple(dict.fromkeys(re.findall(r"《([^》]{1,512})》", query)))
     if len(titles) == 1 and ("filters" in parameters or _accepts_var_keyword(parameters)):
         kwargs["filters"] = RetrievalFilters(title=titles[0])
-    return hybrid_retrieval.search(session, query, **kwargs)  # type: ignore[arg-type]
+    search = cast(Callable[..., HybridRetrievalResult], hybrid_retrieval.search)
+    return search(session, query, **kwargs)
 
 
 def _accepts_var_keyword(parameters: Mapping[str, Parameter]) -> bool:
@@ -716,6 +717,7 @@ def _evidence_only(
         release_context=release_context,
         retrieval_run_ids=retrieval_run_ids,
     )
+
 
 def _rough_token_count(query: str, manifest: AuthorizedContextManifest) -> int:
     chars = len(query) + sum(len(chunk.text) for chunk in manifest.chunks)

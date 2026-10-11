@@ -36,9 +36,7 @@ class GatewayAnswerModel:
         conversation_context: Sequence[Mapping[str, str]] | None = None,
     ) -> GeneratedAnswer:
         _validate_citations(manifest, citations)
-        manifest, citations = _restrict_to_explicit_source_title(
-            query, manifest, tuple(citations)
-        )
+        manifest, citations = _restrict_to_explicit_source_title(query, manifest, tuple(citations))
         # Manifest/citation IDs are fresh per retrieval. Stable, content-bound wire
         # aliases prevent a retry from bypassing unresolved-dispatch protection.
         wire_citations = tuple(
@@ -83,7 +81,6 @@ class GatewayAnswerModel:
         )
 
 
-
 def _restrict_to_explicit_source_title(
     query: str,
     manifest: AuthorizedContextManifest,
@@ -96,10 +93,10 @@ def _restrict_to_explicit_source_title(
     target = titles[0]
     chunk_ids = {chunk.chunk_id for chunk in manifest.chunks if chunk.title == target}
     if not chunk_ids:
-        return manifest, citations
+        return replace(manifest, chunks=()), ()
     filtered_citations = tuple(citation for citation in citations if citation.chunk_id in chunk_ids)
     if not filtered_citations:
-        return manifest, citations
+        return replace(manifest, chunks=()), ()
     return (
         replace(
             manifest,
@@ -107,6 +104,7 @@ def _restrict_to_explicit_source_title(
         ),
         filtered_citations,
     )
+
 
 def _wire_citation_id(citation: Citation) -> str:
     identity = asdict(citation)
