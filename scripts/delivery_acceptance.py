@@ -181,6 +181,21 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
             raise ValueError(f"{label} is missing")
         return value
 
+    def require_list(value: Any, label: str) -> list[Any]:
+        if not isinstance(value, list):
+            raise ValueError(f"{label} must be a list")
+        return value
+
+    def require_object_list(value: Any, label: str) -> list[dict[str, Any]]:
+        rows = require_list(value, label)
+        if not rows or any(not isinstance(row, dict) for row in rows):
+            raise ValueError(f"{label} must be a non-empty list of objects")
+        return rows
+
+    def require_positive_number(value: Any, label: str) -> None:
+        if not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError(f"{label} must be positive")
+
     for item in matrix:
         issue = int(item["issue"])
         report_path = output / str(item["artifact"])
@@ -203,10 +218,14 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
             require_nonempty(
                 receipt_body.get("evidence_object_id"), "Issue 52 receipt evidence_object_id"
             )
+            if receipt_body.get("source_sha256") != source_sha:
+                raise ValueError("Issue 52 receipt source digest is not bound to input")
             parsed = require_dict(payload.get("parsed"), "Issue 52 parsed")
             if parsed.get("state") not in {"parsed", "succeeded"}:
                 raise ValueError("Issue 52 evidence does not prove a parsed terminal state")
             require_nonempty(parsed.get("attempt_id"), "Issue 52 parsed.attempt_id")
+            if parsed.get("evidence_object_id") != receipt_body.get("evidence_object_id"):
+                raise ValueError("Issue 52 parsed evidence object is not bound to receipt")
             if parsed.get("source_sha256") != source_sha:
                 raise ValueError("Issue 52 parsed source digest is not bound to input")
             require_nonempty(parsed.get("manifest_uri"), "Issue 52 parsed.manifest_uri")
@@ -224,37 +243,83 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                 if key not in artifacts:
                     raise ValueError(f"Issue 52 artifacts.{key} is missing")
         elif issue == 53:
-            search = payload.get("search")
-            if (
-                not isinstance(search, list)
-                or not search
-                or any(not isinstance(row, dict) for row in search)
-            ):
-                raise ValueError("Issue 53 search evidence must be a non-empty list")
+            source = require_dict(payload.get("input"), "Issue 53 input")
+            source_sha = require_nonempty(source.get("sha256"), "Issue 53 input.sha256")
+            receipt = require_dict(payload.get("receipt"), "Issue 53 receipt")
+            receipt_body = require_dict(receipt.get("body"), "Issue 53 receipt.body")
+            require_nonempty(receipt_body.get("task_id"), "Issue 53 receipt task_id")
+            evidence_object_id = require_nonempty(
+                receipt_body.get("evidence_object_id"), "Issue 53 receipt evidence_object_id"
+            )
+            if receipt_body.get("source_sha256") != source_sha:
+                raise ValueError("Issue 53 receipt source digest is not bound to input")
+            search = require_object_list(payload.get("search"), "Issue 53 search")
             if not any(row.get("hit_found") is True for row in search):
                 raise ValueError("Issue 53 evidence does not prove a library hit")
+            hit = require_dict(payload.get("hit"), "Issue 53 hit")
+            if hit.get("evidence_object_id") != evidence_object_id:
+                raise ValueError("Issue 53 hit evidence object is not bound to receipt")
+            if hit.get("source_sha256") != source_sha:
+                raise ValueError("Issue 53 hit source digest is not bound to input")
+            if hit.get("searchable") is not True or hit.get("media_type") != "application/pdf":
+                raise ValueError("Issue 53 hit does not prove searchable PDF qualification")
             detail = require_dict(payload.get("detail"), "Issue 53 detail")
-            if detail.get("searchable") is not True:
+            if (
+                detail.get("searchable") is not True
+                or detail.get("knowledge_object_id") != hit.get("knowledge_object_id")
+                or detail.get("media_type") != "application/pdf"
+                or not isinstance(detail.get("citation_count"), int)
+                or detail["citation_count"] < 1
+            ):
                 raise ValueError("Issue 53 detail is not searchable")
             generation = require_dict(
                 detail.get("retrieval_generation"), "Issue 53 retrieval_generation"
             )
             require_nonempty(generation.get("model_id"), "Issue 53 retrieval model_id")
+            require_nonempty(
+                generation.get("model_revision"), "Issue 53 retrieval model_revision"
+            )
+            require_positive_number(generation.get("dimension"), "Issue 53 retrieval dimension")
+            if generation.get("purpose") != "retrieval":
+                raise ValueError("Issue 53 retrieval generation purpose is not retrieval")
             require_nonempty(generation.get("physical_index_ref"), "Issue 53 physical_index_ref")
         elif issue == 54:
-            restarts = payload.get("restarts")
-            if (
-                not isinstance(restarts, list)
-                or any(not isinstance(item, dict) for item in restarts)
-                or {
-                item.get("kind")
-                for item in restarts
-                if isinstance(item, dict) and item.get("status") == "succeeded"
-                }
-                != {"worker", "gateway"}
-            ):
+            receipt = require_dict(payload.get("receipt"), "Issue 54 receipt")
+            task_id = require_nonempty(receipt.get("task_id"), "Issue 54 receipt task_id")
+            source_sha = require_nonempty(
+                receipt.get("source_sha256"), "Issue 54 receipt source_sha256"
+            )
+            restarts = require_object_list(payload.get("restarts"), "Issue 54 restarts")
+            if {item.get("kind") for item in restarts if item.get("status") == "succeeded"} != {
+                "worker",
+                "gateway",
+            }:
                 raise ValueError("Issue 54 evidence does not prove both process restarts")
-            faults = payload.get("fault_injections")
+            for restart in restarts:
+                if restart.get("status") != "succeeded" or restart.get("exit_code") != 0:
+                    raise ValueError("Issue 54 restart did not succeed")
+                require_nonempty(restart.get("command_sha256"), "Issue 54 restart command_sha256")
+                proof = require_dict(restart.get("proof"), "Issue 54 restart proof")
+                if proof.get("kind") != restart.get("kind") or proof.get("task_id") != task_id:
+                    raise ValueError("Issue 54 restart proof is not bound to current task")
+                if proof.get("ready") is not True and proof.get("observed_ready") is not True:
+                    raise ValueError("Issue 54 restart proof is missing readiness")
+                if not (
+                    proof.get("observed_identity") or proof.get("pid") or proof.get("container_id")
+                ):
+                    raise ValueError("Issue 54 restart proof is missing process identity")
+            parser_proof = require_dict(
+                payload.get("active_parser_before_gateway_restart"),
+                "Issue 54 active parser proof",
+            )
+            if parser_proof.get("task_id") != task_id or not parser_proof.get("upstream_task_id"):
+                raise ValueError("Issue 54 parser proof is not bound to current task")
+            if (
+                parser_proof.get("ready") is not True
+                and parser_proof.get("observed_ready") is not True
+            ):
+                raise ValueError("Issue 54 parser proof is missing readiness")
+            faults = require_object_list(payload.get("fault_injections"), "Issue 54 fault evidence")
             required = {
                 "lost_parser_attempt",
                 "parser_failure",
@@ -262,43 +327,96 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                 "auto_retry_exhausted",
                 "manual_ui_retry",
             }
-            observed = (
-                {
-                    item.get("category")
-                    for item in faults
-                    if isinstance(item, dict) and item.get("status") == "passed"
-                }
-                if isinstance(faults, list)
-                else set()
-            )
+            observed = {
+                item.get("category") for item in faults if item.get("status") == "passed"
+            }
             if observed != required:
                 raise ValueError("Issue 54 evidence does not prove all five fault categories")
-            if not isinstance(faults, list) or any(not isinstance(item, dict) for item in faults):
-                raise ValueError("Issue 54 fault evidence must be a list of objects")
-            if any(
-                not item.get("observed", {}).get("polling", {}).get("polling_stopped")
-                for item in faults
-            ):
-                raise ValueError("Issue 54 evidence is missing polling-stop proof")
-        elif issue == 55:
-            answers = payload.get("answers")
-            if (
-                not isinstance(answers, list)
-                or any(not isinstance(item, dict) for item in answers)
-                or not any(
-                    item.get("kind") == "negative"
-                    and item.get("citations") == 0
-                    and item.get("claims_count") == 0
-                    for item in answers
+            for fault in faults:
+                if fault.get("task_id") == task_id:
+                    raise ValueError("Issue 54 fault task reused the restart task")
+                if fault.get("source_sha256") != source_sha:
+                    raise ValueError("Issue 54 fault source digest is not bound to input")
+                observed_state = require_dict(fault.get("observed"), "Issue 54 fault observed")
+                if (
+                    observed_state.get("state") != fault.get("expected_state")
+                    or observed_state.get("error_code") != fault.get("expected_error_code")
+                ):
+                    raise ValueError("Issue 54 fault terminal state is not bound to expectation")
+                polling = require_dict(observed_state.get("polling"), "Issue 54 fault polling")
+                if polling.get("polling_stopped") is not True:
+                    raise ValueError("Issue 54 evidence is missing polling-stop proof")
+                command_proof = require_dict(
+                    fault.get("command_proof"), "Issue 54 fault command proof"
                 )
+                if (
+                    command_proof.get("injected") is not True
+                    or command_proof.get("boundary") != "external_parser"
+                    or command_proof.get("category") != fault.get("category")
+                    or command_proof.get("task_id") != fault.get("task_id")
+                ):
+                    raise ValueError("Issue 54 fault command proof is not bound to scenario")
+                if not (
+                    command_proof.get("observed_identity")
+                    or command_proof.get("observed_ready") is not None
+                ):
+                    raise ValueError("Issue 54 fault command proof is missing observation")
+                if fault.get("category") == "auto_retry_exhausted" and (
+                    not isinstance(observed_state.get("retry_count"), int)
+                    or observed_state["retry_count"] < 3
+                ):
+                    raise ValueError("Issue 54 auto retry exhaustion is not proven")
+                if fault.get("category") == "manual_ui_retry":
+                    retry_result = require_dict(
+                        fault.get("retry_result"), "Issue 54 manual retry result"
+                    )
+                    if fault.get("ui_retry_clicked") is not True:
+                        raise ValueError("Issue 54 manual retry did not use the UI")
+                    if (
+                        retry_result.get("task_id") != fault.get("task_id")
+                        or retry_result.get("source_sha256") != fault.get("source_sha256")
+                    ):
+                        raise ValueError("Issue 54 manual retry result is not bound to fault")
+                    require_nonempty(
+                        retry_result.get("manifest_sha256"),
+                        "Issue 54 manual retry manifest_sha256",
+                    )
+        elif issue == 55:
+            answers = require_object_list(payload.get("answers"), "Issue 55 answers")
+            by_kind = {item.get("kind"): item for item in answers}
+            if set(by_kind) != {"text", "pdf", "negative"}:
+                raise ValueError("Issue 55 evidence must include text, PDF and negative answers")
+            if any(
+                item.get("status") != 200
+                or item.get("stop_reason") != "completed"
+                or not item.get("answer_audit_id")
+                or not item.get("answer_provider_id")
+                or not item.get("answer_model_id")
+                for item in answers
+            ):
+                raise ValueError("Issue 55 evidence is missing answer audit identity")
+            negative = by_kind["negative"]
+            if (
+                negative.get("citations") != 0
+                or negative.get("citation_payload_count") != 0
+                or negative.get("claims_count") != 0
+                or not isinstance(negative.get("insufficiency_count"), int)
+                or negative["insufficiency_count"] < 1
             ):
                 raise ValueError("Issue 55 evidence does not prove a citation-free negative answer")
-            positive = [item for item in answers if item.get("kind") in {"text", "pdf"}]
-            if not positive or any(
-                item.get("citations", 0) < 1 or item.get("claims_count", 0) < 1
-                for item in positive
-            ):
-                raise ValueError("Issue 55 evidence does not prove cited positive answers")
+            for kind in ("text", "pdf"):
+                answer = by_kind[kind]
+                if (
+                    not isinstance(answer.get("citations"), int)
+                    or answer["citations"] < 1
+                    or not isinstance(answer.get("citation_payload_count"), int)
+                    or answer["citation_payload_count"] < 1
+                    or not isinstance(answer.get("claims_count"), int)
+                    or answer["claims_count"] < 1
+                    or not isinstance(answer.get("bound_source"), dict)
+                    or not isinstance(answer.get("bound_citation"), dict)
+                ):
+                    raise ValueError("Issue 55 evidence does not prove cited positive answers")
         elif issue == 56:
             steps = payload.get("steps")
             if (
@@ -307,15 +425,8 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                 or payload.get("same_sha") is not True
             ):
                 raise ValueError("Issue 56 evidence is not clean and same-SHA bound")
-            if (
-                not isinstance(steps, list)
-                or not steps
-                or any(not isinstance(item, dict) for item in steps)
-                or any(
-                    item.get("status") != "passed" or item.get("exit_code") != 0
-                    for item in steps
-                )
-            ):
+            steps = require_object_list(steps, "Issue 56 steps")
+            if any(item.get("status") != "passed" or item.get("exit_code") != 0 for item in steps):
                 raise ValueError("Issue 56 evidence contains incomplete quality-gate steps")
             required_steps = {
                 "dependencies", "versions", "compile", "ruff", "mypy", "pytest", "browser",
@@ -325,10 +436,34 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
             if {item.get("name") for item in steps} != required_steps:
                 raise ValueError("Issue 56 evidence is missing required quality-gate steps")
             if any(
-                not isinstance(item.get("seconds"), (int, float)) or not item.get("command")
+                not isinstance(item.get("seconds"), (int, float))
+                or item["seconds"] < 0
+                or not isinstance(item.get("command"), list)
+                or not item["command"]
+                or any(not isinstance(part, str) or not part for part in item["command"])
                 for item in steps
             ):
                 raise ValueError("Issue 56 evidence steps lack timing or command details")
+            pytest_path = output / "pytest" / "evidence.json"
+            if not pytest_path.is_file():
+                raise ValueError("Issue 56 pytest evidence report is missing")
+            try:
+                pytest_evidence = json.loads(pytest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise ValueError("Issue 56 pytest evidence report is not valid JSON") from error
+            if not isinstance(pytest_evidence, dict):
+                raise ValueError("Issue 56 pytest evidence report must be an object")
+            if (
+                pytest_evidence.get("status") != "passed"
+                or pytest_evidence.get("sha") != sha
+                or pytest_evidence.get("termination") != "completed"
+                or pytest_evidence.get("exit_code") != 0
+                or pytest_evidence.get("report_complete") is not True
+                or pytest_evidence.get("clean_after") is not True
+                or pytest_evidence.get("skips")
+                or pytest_evidence.get("failed_nodes")
+            ):
+                raise ValueError("Issue 56 pytest evidence did not pass cleanly")
 
 
 def main() -> int:
