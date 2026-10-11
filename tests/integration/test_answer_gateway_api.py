@@ -133,7 +133,7 @@ def test_answer_api_uses_configured_model_gateway_and_counting_transport(
     payload = response.json()
     prompt = json.loads(transport.calls[0])
     assert len(transport.calls) == 1
-    assert prompt["prompt_version"] == "gateway-answer-model-v4"
+    assert prompt["prompt_version"] == "gateway-answer-model-v5"
     assert prompt["KNOWLEDGE_EVIDENCE"]
     assert prompt["USER_CONFIRMED_CONTEXT"]["entries"]
     assert "pending-memory-sentinel" not in transport.calls[0]

@@ -122,7 +122,7 @@ def test_decision_api_gateway_payload_uses_opaque_memory_aliases(
     prompt = json.loads(transport.calls[0])
     outbound = transport.calls[0]
     assert len(transport.calls) == 1
-    assert prompt["prompt_version"] == "gateway-answer-model-v4"
+    assert prompt["prompt_version"] == "gateway-answer-model-v5"
     assert "goal.finance" in prompt["user_query"]
     assert ids["goal_id"] not in prompt["user_query"]
     assert ids["goal_version_id"] not in prompt["user_query"]
