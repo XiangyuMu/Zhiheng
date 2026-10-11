@@ -166,8 +166,8 @@ const saveReport = () => fs.writeFileSync(
         expected: {
           knowledge_object_id: receiptBody.result?.knowledge_object_id || null,
           evidence_object_id: receiptBody.evidence_object_id || null,
-          source_sha256: item.sha256,
-          media_type: pdf ? 'application/pdf' : 'text/markdown',
+          source_sha256: pdf ? item.sha256 : null,
+          media_type: pdf ? 'application/pdf' : 'text/plain',
         },
       });
       imported[kind] = item;
