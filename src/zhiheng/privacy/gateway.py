@@ -349,7 +349,7 @@ def _default_anonymizer() -> PiiAnonymizerPort:
 
 
 def _minimize_payload(payload: str) -> str:
-    return re.sub(r"\s+", " ", payload).strip()
+    return "\n".join(re.sub(r"\s+", " ", line).strip() for line in payload.splitlines()).strip()
 
 
 def _deduplicate_findings(findings: list[PiiFinding]) -> list[PiiFinding]:

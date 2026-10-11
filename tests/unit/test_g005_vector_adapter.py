@@ -70,6 +70,7 @@ class _FakeEmbedder(QueryEmbeddingPort):
         self,
         query: str,
         *,
+        provider_id: str | None = None,
         model_id: str,
         model_revision: str,
         dimension: int,

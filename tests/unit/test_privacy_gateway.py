@@ -131,6 +131,13 @@ def test_privacy_pipeline_does_not_join_distant_document_segments() -> None:
     assert result.status == "clear"
 
 
+@pytest.mark.parametrize("separator", ["\n", "\r\n", r"\n"])
+def test_privacy_pipeline_preserves_line_only_semantic_boundaries(separator: str) -> None:
+    pipeline = PrivacyPipeline(analyzer=DeterministicPatternAnalyzer())
+    result = pipeline.prepare_for_model(f"I describe a dialogue{separator}finance overview")
+    assert result.status == "clear"
+
+
 def test_privacy_pipeline_detects_english_sensitive_semantics_without_word_splitting() -> None:
     pipeline = PrivacyPipeline(analyzer=DeterministicPatternAnalyzer())
 

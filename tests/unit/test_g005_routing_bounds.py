@@ -23,6 +23,7 @@ from zhiheng.retrieval.contracts import (
     AuthorizedContextManifest,
     Citation,
     HybridRetrievalResult,
+    RetrievalFilters,
 )
 
 
@@ -117,6 +118,7 @@ class _Hybrid:
         limit: int = 10,
         overfetch_factor: int = 4,
         rrf_k: int | None = None,
+        filters: RetrievalFilters | None = None,
     ) -> HybridRetrievalResult:
         self.calls.append((query, limit))
         manifest = self._manifests[min(len(self.calls) - 1, len(self._manifests) - 1)]

@@ -404,10 +404,31 @@ async function runFaultInjections(page, file) {
           Boolean(scenario.expect_ui_retry),
         );
         if (scenario.expect_ui_retry) {
+          const beforeRetry = dbSnapshot(record.task_id, `fault-${name}-before-retry`);
+          const previousAttempts = new Set((beforeRetry.attempts || []).map((attempt) => attempt.id));
           const item = page.locator('.processing-item').filter({ hasText: name }).first();
+          const retryResponse = page.waitForResponse((response) => (
+            new URL(response.url()).pathname === `/v1/knowledge/pdf-imports/${record.task_id}/retry`
+            && response.request().method() === 'POST'
+          ));
           await item.getByRole('button', { name: '重试', exact: true }).click();
+          const submitted = await retryResponse;
+          assert.equal(submitted.status(), 200, 'manual retry request failed');
+          assert.equal((await submitted.json()).task_id, record.task_id);
           record.ui_retry_clicked = true;
-          await page.waitForTimeout(1_000);
+          const recovered = await waitForTask(page, record.task_id, (state) => (
+            state.state === 'parsed' && !previousAttempts.has(state.attempt_id)
+          ), `fault-${name}-retry-complete`, 300_000);
+          assert.equal(recovered.evidence_object_id, taskReceipt.evidence_object_id);
+          assert.equal(recovered.source_sha256, taskReceipt.source_sha256);
+          assert(recovered.manifest_uri && recovered.manifest_sha256);
+          record.retry_result = {
+            task_id: recovered.task_id,
+            attempt_id: recovered.attempt_id,
+            source_sha256: recovered.source_sha256,
+            manifest_sha256: recovered.manifest_sha256,
+          };
+          dbSnapshot(record.task_id, `fault-${name}-retry-complete`);
         } else if (scenario.expect_retry_endpoint) {
           const retry = await api(page, `/v1/knowledge/pdf-imports/${encodeURIComponent(record.task_id)}/retry`, {
             method: 'POST',

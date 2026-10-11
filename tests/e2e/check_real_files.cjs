@@ -245,10 +245,10 @@ const saveReport = () => fs.writeFileSync(
       saveReport();
       if (answer.status !== 200) throw Error(`answer request failed with HTTP ${answer.status}`);
       if (!answer.answer.trim()) throw Error(`empty answer for ${question.kind}`);
+      if (answer.stop_reason !== 'completed') {
+        throw Error(`answer for ${question.kind} did not complete: ${answer.stop_reason || 'unset'}`);
+      }
       if (question.kind !== 'negative') {
-        if (answer.stop_reason !== 'completed') {
-          throw Error(`answer for ${question.kind} did not complete: ${answer.stop_reason || 'unset'}`);
-        }
         if (!targetCitation) {
           throw Error(`answer for ${question.kind} did not cite the current imported object/version`);
         }
@@ -281,13 +281,13 @@ const saveReport = () => fs.writeFileSync(
           }
         }
       }
-      if (question.kind !== 'negative' && process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID && answer.answer_provider_id !== process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID) {
+      if (process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID && answer.answer_provider_id !== process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID) {
         throw Error(`answer used provider ${answer.answer_provider_id || 'unset'}, expected ${process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID}`);
       }
-      if (question.kind !== 'negative' && process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID && answer.answer_model_id !== process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID) {
+      if (process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID && answer.answer_model_id !== process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID) {
         throw Error(`answer used model ${answer.answer_model_id || 'unset'}, expected ${process.env.ZHIHENG_EXPECTED_ANSWER_MODEL_ID}`);
       }
-      if (question.kind !== 'negative' && process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID && !answer.answer_audit_id) {
+      if (process.env.ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID && !answer.answer_audit_id) {
         throw Error('answer did not expose a successful model-call audit id');
       }
       if (question.kind === 'negative') {

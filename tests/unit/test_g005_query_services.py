@@ -26,6 +26,7 @@ from zhiheng.retrieval.contracts import (
     AuthorizedContextManifest,
     Citation,
     HybridRetrievalResult,
+    RetrievalFilters,
     RetrievalSource,
 )
 from zhiheng.retrieval.embeddings import (
@@ -82,6 +83,7 @@ class _Hybrid:
         limit: int = 10,
         overfetch_factor: int = 4,
         rrf_k: int | None = None,
+        filters: RetrievalFilters | None = None,
     ) -> HybridRetrievalResult:
         self.calls.append(query)
         manifest = self.manifests[min(len(self.calls) - 1, len(self.manifests) - 1)]
@@ -457,10 +459,10 @@ def test_supported_answer_survives_negative_evidence_wording() -> None:
     )
 
     answer = service.answer(
-        QuerySessionStub(),
+        QuerySessionStub(),  # type: ignore[arg-type]
         "材料有没有作者的银行账户号码？没有证据请明确说明。",
         route=QueryRoute.HYBRID,
-    )  # type: ignore[arg-type]
+    )
 
     assert answer.stop_reason is StopReason.COMPLETED
     assert answer.claims
@@ -481,10 +483,10 @@ def test_partial_insufficiency_keeps_supported_claims_and_citations() -> None:
     )
 
     answer = service.answer(
-        QuerySessionStub(),
+        QuerySessionStub(),  # type: ignore[arg-type]
         "请回答正式知识库证据，并说明没有证据的部分。",
         route=QueryRoute.HYBRID,
-    )  # type: ignore[arg-type]
+    )
 
     assert answer.stop_reason is StopReason.COMPLETED
     assert answer.claims
