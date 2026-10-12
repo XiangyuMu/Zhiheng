@@ -99,6 +99,13 @@ class PdfParseJobExecutor:
         fallback_attempted = False
         try:
             parser_status = self._run_attempt(parser_client, request)
+        except ParserAttemptNotFoundError as exc:
+            # A task disappearing after it was accepted is a terminal
+            # integrity failure. Retrying would create a different upstream
+            # task while the durable attempt still points at the lost one.
+            raise ParserTerminalFailure(
+                "mineru_task_not_found", "parser attempt disappeared"
+            ) from exc
         except (ParserUnavailableError, TimeoutError) as exc:
             if request.backend != "deepdoc" or self._client_for_backend("mineru") is None:
                 raise

@@ -493,7 +493,10 @@ class KnowledgeJobRepository:
         )
         attempts = int(row["attempts"])
         max_attempts = int(row["max_attempts"])
-        terminal = attempts >= max_attempts
+        terminal = attempts >= max_attempts or (
+            isinstance(exc, ParserTerminalFailure)
+            and exc.failure_code == "mineru_task_not_found"
+        )
         status = "dead" if terminal else "pending"
         payload = _json_object(row["payload_json"])
         if job.job_type == KNOWLEDGE_PARSE_PDF_JOB_TYPE:
@@ -501,7 +504,7 @@ class KnowledgeJobRepository:
                 {
                     "failure_code": _failure_code_for_job_exception(exc, job_type=job.job_type),
                     "failure_stage": "parse",
-                    "retryable": True,
+                    "retryable": not terminal,
                 }
             )
         elif job.job_type == KNOWLEDGE_INDEX_JOB_TYPE:
