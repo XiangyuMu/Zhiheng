@@ -306,6 +306,7 @@ async function assertFailureUi(page, task, expectedErrorCode, expectRetry) {
   await page.goto(`${base}/knowledge-agent#library`);
   const item = page.locator('.processing-item').filter({ hasText: task.title }).first();
   await item.waitFor({ state: 'visible', timeout: 30_000 });
+  await item.getByText(expectedErrorCode, { exact: false }).waitFor({ state: 'visible', timeout: 30_000 });
   const text = await item.innerText();
   assert(text.includes(expectedErrorCode), `failure UI omitted stable error code ${expectedErrorCode}`);
   assert.match(text, /补充资料/, 'failure UI omitted the supplement-material action');
