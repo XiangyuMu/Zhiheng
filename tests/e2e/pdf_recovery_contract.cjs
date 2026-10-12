@@ -72,7 +72,22 @@ function validateFaultCommandProof(output, scenario, identity) {
   if (identity.attempt_id) {
     assert.equal(proof.attempt_id, identity.attempt_id, `fault scenario ${scenario.name} command proof attempt_id mismatch`);
   }
-  assert(proof.observed_identity || proof.observed_ready !== undefined, `fault scenario ${scenario.name} command proof must include observed_identity or observed_ready`);
+  assert(
+    typeof proof.observed_identity === "string" && proof.observed_identity.trim(),
+    `fault scenario ${scenario.name} command proof requires observed_identity`,
+  );
+  if (identity.upstream_task_id) {
+    assert.equal(
+      proof.observed_identity,
+      identity.upstream_task_id,
+      `fault scenario ${scenario.name} upstream identity mismatch`,
+    );
+  }
+  assert.equal(
+    proof.observed_ready,
+    true,
+    `fault scenario ${scenario.name} command proof must report observed_ready=true`,
+  );
   return proof;
 }
 
@@ -104,6 +119,66 @@ function snapshotHasActiveLease(snapshot) {
   ));
 }
 
+function nonEmptyString(value, label) {
+  assert(typeof value === "string" && value.trim(), `${label} must be a non-empty string`);
+  return value;
+}
+
+function validateRestartScenario(scenario, expectedSourceSha) {
+  assert(scenario && typeof scenario === "object" && !Array.isArray(scenario), "restart scenario must be an object");
+  assert(["worker", "gateway"].includes(scenario.kind), "restart scenario kind must be worker or gateway");
+  assert.equal(scenario.status, "passed", `${scenario.kind} restart scenario must pass`);
+  const receipt = scenario.receipt;
+  assert(receipt && typeof receipt === "object" && !Array.isArray(receipt), `${scenario.kind} restart receipt must be an object`);
+  const taskId = nonEmptyString(receipt.task_id, `${scenario.kind} restart receipt.task_id`);
+  const attemptId = nonEmptyString(receipt.parser_attempt_id, `${scenario.kind} restart receipt.parser_attempt_id`);
+  const evidenceObjectId = nonEmptyString(receipt.evidence_object_id, `${scenario.kind} restart receipt.evidence_object_id`);
+  assert.equal(receipt.source_sha256, expectedSourceSha, `${scenario.kind} restart receipt source digest mismatch`);
+  assert(snapshotHasActiveLease(scenario.active_lease_before_restart), `${scenario.kind} restart requires active lease proof`);
+
+  if (scenario.kind === "gateway") {
+    assert(scenario.active_parser_before_restart, "gateway restart requires active parser proof");
+    validateParserActiveProof(
+      JSON.stringify(scenario.active_parser_before_restart),
+      { task_id: taskId, attempt_id: attemptId },
+    );
+  }
+
+  const restart = scenario.restart;
+  assert(restart && typeof restart === "object" && !Array.isArray(restart), `${scenario.kind} restart proof record must be an object`);
+  assert.equal(restart.kind, scenario.kind, `${scenario.kind} restart record kind mismatch`);
+  assert.equal(restart.status, "succeeded", `${scenario.kind} restart command must succeed`);
+  assert.equal(restart.exit_code, 0, `${scenario.kind} restart command exit code must be zero`);
+  validateRestartCommandProof(JSON.stringify(restart.proof), scenario.kind, { task_id: taskId });
+
+  const terminal = scenario.terminal;
+  assert(terminal && typeof terminal === "object" && !Array.isArray(terminal), `${scenario.kind} restart terminal state must be an object`);
+  assert.equal(terminal.task_id, taskId, `${scenario.kind} restart terminal task mismatch`);
+  assert.equal(terminal.evidence_object_id, evidenceObjectId, `${scenario.kind} restart terminal evidence mismatch`);
+  assert.equal(terminal.source_sha256, expectedSourceSha, `${scenario.kind} restart terminal source digest mismatch`);
+  assert.equal(terminal.state, "parsed", `${scenario.kind} restart terminal state must be parsed`);
+  assert.equal(terminal.attempt_id, attemptId, `${scenario.kind} restart changed parser attempt identity`);
+  const manifestSha = nonEmptyString(terminal.manifest_sha256, `${scenario.kind} restart terminal.manifest_sha256`);
+  nonEmptyString(terminal.manifest_uri, `${scenario.kind} restart terminal.manifest_uri`);
+  const attempts = scenario.final_snapshot?.attempts;
+  assert(Array.isArray(attempts), `${scenario.kind} restart final snapshot attempts must be a list`);
+  assert.equal(attempts.length, 1, `${scenario.kind} restart must not duplicate parse attempts`);
+  assert.equal(attempts[0]?.id, attemptId, `${scenario.kind} restart final attempt id mismatch`);
+  assert.equal(attempts[0]?.manifest_sha256, manifestSha, `${scenario.kind} restart final manifest mismatch`);
+  assert(Number(scenario.elapsed_ms) > 0 && Number(scenario.elapsed_ms) <= 300_000, `${scenario.kind} restart elapsed_ms exceeds budget`);
+  return scenario;
+}
+
+function validateRestartScenarios(scenarios, expectedSourceSha) {
+  assert(Array.isArray(scenarios), "restart_scenarios must be a list");
+  assert.equal(scenarios.length, 2, "restart_scenarios must contain worker and gateway scenarios");
+  const validated = scenarios.map((scenario) => validateRestartScenario(scenario, expectedSourceSha));
+  assert.deepEqual(new Set(validated.map((scenario) => scenario.kind)), new Set(["worker", "gateway"]));
+  assert.equal(new Set(validated.map((scenario) => scenario.receipt.task_id)).size, 2, "worker and gateway restarts must use independent tasks");
+  assert.equal(new Set(validated.map((scenario) => scenario.receipt.parser_attempt_id)).size, 2, "worker and gateway restarts must use independent attempts");
+  return validated;
+}
+
 module.exports = {
   REQUIRED_FAULT_CATEGORIES,
   parseLastJsonLine,
@@ -111,5 +186,6 @@ module.exports = {
   validateFaultCommandProof,
   validateFaultScenarios,
   validateParserActiveProof,
+  validateRestartScenarios,
   validateRestartCommandProof,
 };

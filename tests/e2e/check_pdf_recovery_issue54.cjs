@@ -21,6 +21,7 @@ const {
   validateFaultCommandProof,
   validateFaultScenarios,
   validateParserActiveProof,
+  validateRestartScenarios,
   validateRestartCommandProof,
 } = require('./pdf_recovery_contract.cjs');
 
@@ -41,6 +42,7 @@ const report = {
     sha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
   },
   restarts: [],
+  restart_scenarios: [],
   db_snapshots: [],
   fault_injections: [],
   regression_references: [],
@@ -88,15 +90,18 @@ function restart(kind, command, identity) {
     const proof = validateRestartCommandProof(stdout, kind, identity);
     const afterIdentity = identityProbe();
     assert(afterIdentity && afterIdentity !== beforeIdentity, `${kind} identity did not change after restart`);
-    report.restarts.push({ kind, status: 'succeeded', exit_code: 0, command_sha256: commandDigest, before_identity_sha256: crypto.createHash('sha256').update(beforeIdentity).digest('hex'), after_identity_sha256: crypto.createHash('sha256').update(afterIdentity).digest('hex'), proof, elapsed_ms: Date.now() - started, stdout_path: stdoutPath, stderr_path: stderrPath });
+    const record = { kind, status: 'succeeded', exit_code: 0, command_sha256: commandDigest, before_identity_sha256: crypto.createHash('sha256').update(beforeIdentity).digest('hex'), after_identity_sha256: crypto.createHash('sha256').update(afterIdentity).digest('hex'), proof, elapsed_ms: Date.now() - started, stdout_path: stdoutPath, stderr_path: stderrPath };
+    report.restarts.push(record);
+    save();
+    return record;
   } catch (error) {
     writeLog(stdoutPath, error.stdout);
     writeLog(stderrPath, error.stderr || error.message);
-    report.restarts.push({ kind, status: 'failed', exit_code: typeof error.status === 'number' ? error.status : null, command_sha256: commandDigest, elapsed_ms: Date.now() - started, stdout_path: stdoutPath, stderr_path: stderrPath, timed_out: error.killed === true });
+    const record = { kind, status: 'failed', exit_code: typeof error.status === 'number' ? error.status : null, command_sha256: commandDigest, elapsed_ms: Date.now() - started, stdout_path: stdoutPath, stderr_path: stderrPath, timed_out: error.killed === true };
+    report.restarts.push(record);
     save();
     throw error;
   }
-  save();
 }
 
 function jsonEnv(name, fallback) {
@@ -285,6 +290,7 @@ async function uploadPdfTask(page, file, title) {
   assert.equal(payload.http, 202);
   assert(payload.body.task_id && payload.body.evidence_object_id);
   assert.equal(payload.body.source_sha256, report.input.sha256);
+  await page.waitForFunction(() => !document.querySelector('#import-dialog')?.open, { timeout: 60_000 });
   await page.evaluate(() => { window.__issue54Receipt = null; });
   return { ...payload.body, title };
 }
@@ -299,6 +305,102 @@ async function assertFailureUi(page, task, expectedErrorCode, expectRetry) {
   if (expectRetry) {
     await item.getByRole('button', { name: '重试', exact: true }).waitFor({ state: 'visible' });
   }
+}
+
+async function runRestartScenario(page, file, kind) {
+  const command = kind === 'worker'
+    ? process.env.ZHIHENG_RESTART_WORKER_COMMAND
+    : process.env.ZHIHENG_RESTART_GATEWAY_COMMAND;
+  assert(command, `Missing ${kind} restart command`);
+  const receiptAt = Date.now();
+  const taskReceipt = await uploadPdfTask(page, file, `Issue 54 ${kind} recovery ${crypto.randomUUID()}`);
+  const initialSnapshot = dbSnapshot(taskReceipt.task_id, `${kind}-after-receipt`);
+  const parserAttempt = parserAttemptFrom(initialSnapshot);
+  assert(parserAttempt, `${kind} restart database snapshot must expose the durable local parser attempt identity`);
+  const scenario = {
+    kind,
+    status: 'running',
+    title: taskReceipt.title,
+    receipt: {
+      task_id: taskReceipt.task_id,
+      evidence_object_id: taskReceipt.evidence_object_id,
+      source_sha256: taskReceipt.source_sha256,
+      parser_attempt_id: parserAttempt,
+    },
+  };
+  report.restart_scenarios.push(scenario);
+  save();
+
+  const preRestart = await waitForTask(
+    page,
+    taskReceipt.task_id,
+    state => state.state === 'processing',
+    `before-${kind}-restart`,
+    30_000,
+  );
+  assert.equal(preRestart.task_id, taskReceipt.task_id);
+  assert.equal(preRestart.evidence_object_id, taskReceipt.evidence_object_id);
+  assert.equal(preRestart.source_sha256, report.input.sha256);
+  if (preRestart.attempt_id) assert.equal(preRestart.attempt_id, parserAttempt);
+
+  const identity = {
+    task_id: taskReceipt.task_id,
+    attempt_id: parserAttempt,
+    evidence_object_id: taskReceipt.evidence_object_id,
+    source_sha256: taskReceipt.source_sha256,
+  };
+  const activeLease = await waitForActiveLease(
+    page,
+    taskReceipt.task_id,
+    `before-${kind}-restart-active-lease`,
+    30_000,
+  );
+  scenario.active_lease_before_restart = activeLease;
+  if (kind === 'worker') report.active_lease_before_worker_restart = activeLease;
+
+  if (kind === 'gateway') {
+    const parserProof = await parserStatusProof(identity);
+    scenario.active_parser_before_restart = parserProof;
+    report.active_parser_before_gateway_restart = parserProof;
+    identity.upstream_task_id = parserProof.upstream_task_id;
+  } else {
+    scenario.active_parser_before_restart = null;
+  }
+
+  scenario.restart = restart(kind, command, identity);
+  dbSnapshot(taskReceipt.task_id, `after-${kind}-restart`);
+  await page.screenshot({ path: path.join(output, `after-${kind}-restart.png`), fullPage: true });
+
+  const parsed = await waitForTask(
+    page,
+    taskReceipt.task_id,
+    state => ['parsed', 'failed', 'partial', 'unsupported', 'dead'].includes(state.state),
+    `terminal-after-${kind}-restart`,
+    Math.max(1_000, 300_000 - (Date.now() - receiptAt)),
+  );
+  if (['failed', 'partial', 'unsupported', 'dead'].includes(parsed.state)) {
+    throw Error(`${kind} restart recovery reached terminal failure: ${parsed.state} ${parsed.error_code || ''}`);
+  }
+  assert.equal(parsed.state, 'parsed');
+  assert.equal(parsed.task_id, taskReceipt.task_id);
+  assert.equal(parsed.evidence_object_id, taskReceipt.evidence_object_id);
+  assert.equal(parsed.source_sha256, taskReceipt.source_sha256);
+  assert.equal(parsed.attempt_id, parserAttempt, `${kind} restart recovery changed parser attempt identity`);
+  assert(parsed.manifest_uri && parsed.manifest_sha256, `${kind} restart must publish a durable manifest reference`);
+
+  const finalSnapshot = dbSnapshot(taskReceipt.task_id, `parsed-after-${kind}-restart`);
+  const parseAttempts = finalSnapshot ? (finalSnapshot.attempts || []) : [];
+  assert.equal(parseAttempts.length, 1, `${kind} restart recovery must not duplicate PDF parse attempts`);
+  assert.equal(parseAttempts[0].id, parserAttempt);
+  assert.equal(parseAttempts[0].manifest_sha256, parsed.manifest_sha256);
+  scenario.terminal = parsed;
+  scenario.final_snapshot = finalSnapshot;
+  scenario.elapsed_ms = Date.now() - receiptAt;
+  assert(scenario.elapsed_ms <= 300_000, `${kind} restart parse plus recovery exceeded the 5 minute budget`);
+  scenario.status = 'passed';
+  report.timings[`${kind}_parse_and_recovery_ms`] = scenario.elapsed_ms;
+  save();
+  return scenario;
 }
 
 async function runFaultInjections(page, file) {
@@ -557,99 +659,9 @@ function recordRegressionReferences() {
     await page.locator('#form button').click();
     await page.waitForURL('**/knowledge-agent*');
     report.login = true;
-    await page.locator('[data-open-import]:visible').first().click();
-    await page.locator('#import-file').setInputFiles(file);
-    await page.locator('#import-title').fill(`Issue 54 recovery ${crypto.randomUUID()}`);
-    await page.locator('#import-submit').click();
-    const receipt = await page.waitForFunction(
-      () => window.__issue54Receipt,
-      { timeout: 60_000 },
-    );
-    const receiptPayload = await receipt.jsonValue();
-    assert.equal(receiptPayload.http, 202);
-    const receiptBody = receiptPayload.body;
-    assert(receiptBody.task_id && receiptBody.evidence_object_id);
-    assert.equal(receiptBody.source_sha256, report.input.sha256);
-    report.receipt = {
-      task_id: receiptBody.task_id,
-      evidence_object_id: receiptBody.evidence_object_id,
-      source_sha256: receiptBody.source_sha256,
-    };
-    const taskId = receiptBody.task_id;
-    const receiptAt = Date.now();
-    const initialSnapshot = dbSnapshot(taskId, 'after-receipt');
-    const persistedParserAttempt = parserAttemptFrom(initialSnapshot);
-    assert(persistedParserAttempt, 'database snapshot must expose the durable local parser attempt identity');
-    report.receipt.parser_attempt_id = persistedParserAttempt;
-    let firstAttempt = null;
-    const deadline = Date.now() + 300_000;
-    const preWorker = await waitForTask(
-      page,
-      taskId,
-      state => state.state === 'processing',
-      'before-worker-restart',
-      30_000,
-    );
-    assert.equal(preWorker.task_id, taskId);
-    assert.equal(preWorker.evidence_object_id, receiptBody.evidence_object_id);
-    assert.equal(preWorker.source_sha256, report.input.sha256);
-    const activeLease = await waitForActiveLease(page, taskId, 'before-worker-restart-active-lease', 30_000);
-    report.active_lease_before_worker_restart = activeLease;
-    restart('worker', process.env.ZHIHENG_RESTART_WORKER_COMMAND, {
-      task_id: taskId,
-      attempt_id: persistedParserAttempt,
-      evidence_object_id: receiptBody.evidence_object_id,
-      source_sha256: report.input.sha256,
-    });
-    dbSnapshot(taskId, 'after-worker-restart');
-    await page.screenshot({path: path.join(output, 'after-worker-restart.png'), fullPage: true});
-
-    const preGateway = await waitForTask(
-      page,
-      taskId,
-      state => state.state === 'processing',
-      'before-gateway-restart',
-      Math.max(1_000, deadline - Date.now()),
-    );
-    assert.equal(preGateway.state, 'processing', 'gateway restart must occur while parsing is active');
-    if (preGateway.attempt_id) firstAttempt = preGateway.attempt_id;
-    if (firstAttempt) assert.equal(firstAttempt, persistedParserAttempt);
-    const parserProof = await parserStatusProof({
-      task_id: taskId,
-      attempt_id: persistedParserAttempt,
-      evidence_object_id: receiptBody.evidence_object_id,
-      source_sha256: report.input.sha256,
-    });
-    report.active_parser_before_gateway_restart = parserProof;
-    restart('gateway', process.env.ZHIHENG_RESTART_GATEWAY_COMMAND, {
-      task_id: taskId,
-      attempt_id: persistedParserAttempt,
-      evidence_object_id: receiptBody.evidence_object_id,
-      source_sha256: report.input.sha256,
-    });
-    dbSnapshot(taskId, 'after-gateway-restart');
-    await page.screenshot({path: path.join(output, 'after-gateway-restart.png'), fullPage: true});
-
-    const parsed = await waitForTask(
-      page,
-      taskId,
-      state => ['parsed', 'failed', 'partial', 'unsupported', 'dead'].includes(state.state),
-      'terminal-after-restarts',
-      Math.max(1_000, deadline - Date.now()),
-    );
-    if (['failed', 'partial', 'unsupported', 'dead'].includes(parsed.state)) {
-      throw Error(`recovery reached terminal failure: ${parsed.state} ${parsed.error_code || ''}`);
-    }
-    assert.equal(parsed.state, 'parsed');
-    assert.equal(parsed.attempt_id, persistedParserAttempt, 'recovery changed parser attempt identity');
-    assert(parsed.manifest_uri && parsed.manifest_sha256, 'recovered parse must publish a durable manifest reference');
-    const finalSnapshot = dbSnapshot(taskId, 'parsed-after-restarts');
-    const parseAttempts = finalSnapshot ? (finalSnapshot.attempts || []) : [];
-    assert.equal(parseAttempts.length, 1, 'recovery must not duplicate PDF parse attempts');
-    assert.equal(parseAttempts[0].id, persistedParserAttempt);
-    assert.equal(parseAttempts[0].manifest_sha256, parsed.manifest_sha256);
-    report.timings.parse_and_recovery_ms = Date.now() - receiptAt;
-    assert(report.timings.parse_and_recovery_ms <= 300_000, 'parse plus recovery exceeded the 5 minute budget');
+    await runRestartScenario(page, file, 'worker');
+    await runRestartScenario(page, file, 'gateway');
+    validateRestartScenarios(report.restart_scenarios, report.input.sha256);
     await runFaultInjections(page, file);
     recordRegressionReferences();
     report.status = 'passed';

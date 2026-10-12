@@ -7,6 +7,7 @@ const {
   validateFaultCommandProof,
   validateFaultScenarios,
   validateParserActiveProof,
+  validateRestartScenarios,
   validateRestartCommandProof,
 } = require("./pdf_recovery_contract.cjs");
 
@@ -72,16 +73,64 @@ test("fault command proof binds external injection to the current browser task",
       category: scenario.category,
       task_id: "task-1",
       attempt_id: "attempt-1",
-      observed_identity: "gateway-state-row",
+      observed_identity: "upstream-1",
+      observed_ready: true,
     })}`,
     scenario,
-    { task_id: "task-1", attempt_id: "attempt-1" },
+    { task_id: "task-1", attempt_id: "attempt-1", upstream_task_id: "upstream-1" },
   );
   assert.equal(proof.task_id, "task-1");
 
   assert.throws(
     () => validateFaultCommandProof("not json", scenario, { task_id: "task-1" }),
     /must print a JSON object/,
+  );
+  assert.throws(
+    () => validateFaultCommandProof(
+      JSON.stringify({
+        injected: true,
+        boundary: "external_parser",
+        category: scenario.category,
+        task_id: "task-1",
+        attempt_id: "attempt-1",
+        observed_ready: true,
+      }),
+      scenario,
+      { task_id: "task-1", attempt_id: "attempt-1", upstream_task_id: "upstream-1" },
+    ),
+    /requires observed_identity/,
+  );
+  assert.throws(
+    () => validateFaultCommandProof(
+      JSON.stringify({
+        injected: true,
+        boundary: "external_parser",
+        category: scenario.category,
+        task_id: "task-1",
+        attempt_id: "attempt-1",
+        observed_identity: "upstream-2",
+        observed_ready: true,
+      }),
+      scenario,
+      { task_id: "task-1", attempt_id: "attempt-1", upstream_task_id: "upstream-1" },
+    ),
+    /upstream identity mismatch/,
+  );
+  assert.throws(
+    () => validateFaultCommandProof(
+      JSON.stringify({
+        injected: true,
+        boundary: "external_parser",
+        category: scenario.category,
+        task_id: "task-1",
+        attempt_id: "attempt-1",
+        observed_identity: "upstream-1",
+        observed_ready: false,
+      }),
+      scenario,
+      { task_id: "task-1", attempt_id: "attempt-1", upstream_task_id: "upstream-1" },
+    ),
+    /observed_ready=true/,
   );
 });
 
@@ -137,5 +186,74 @@ test("active lease detection requires a processing job with an owner and attempt
       jobs: [{ status: "processing", attempts: 1, lease_owner_sha256: "abc" }],
     }),
     true,
+  );
+});
+
+function restartScenario(kind, taskId, attemptId, manifestSha) {
+  return {
+    kind,
+    status: "passed",
+    receipt: {
+      task_id: taskId,
+      evidence_object_id: `${taskId}-evidence`,
+      source_sha256: "source-sha",
+      parser_attempt_id: attemptId,
+    },
+    active_lease_before_restart: {
+      task: { id: taskId, state: "processing", evidence_object_id: `${taskId}-evidence` },
+      jobs: [{ status: "processing", attempts: 1, lease_owner_sha256: "lease", parser_attempt_id: attemptId }],
+    },
+    active_parser_before_restart: kind === "gateway" ? {
+      task_id: taskId,
+      attempt_id: attemptId,
+      state: "running",
+      upstream_task_id: `${taskId}-upstream`,
+      ready: true,
+    } : null,
+    restart: {
+      kind,
+      status: "succeeded",
+      exit_code: 0,
+      proof: { kind, task_id: taskId, observed_identity: `${kind}-pid`, ready: true },
+    },
+    terminal: {
+      task_id: taskId,
+      evidence_object_id: `${taskId}-evidence`,
+      source_sha256: "source-sha",
+      state: "parsed",
+      attempt_id: attemptId,
+      manifest_sha256: manifestSha,
+      manifest_uri: `file:///objects/${manifestSha}.json`,
+    },
+    final_snapshot: {
+      attempts: [{ id: attemptId, manifest_sha256: manifestSha }],
+    },
+    elapsed_ms: 1000,
+  };
+}
+
+test("restart scenarios require independent active tasks and final manifests", () => {
+  const scenarios = [
+    restartScenario("worker", "task-worker", "attempt-worker", "manifest-worker"),
+    restartScenario("gateway", "task-gateway", "attempt-gateway", "manifest-gateway"),
+  ];
+  assert.equal(validateRestartScenarios(scenarios, "source-sha").length, 2);
+
+  assert.throws(
+    () => validateRestartScenarios([
+      restartScenario("worker", "task-1", "attempt-worker", "manifest-worker"),
+      restartScenario("gateway", "task-1", "attempt-gateway", "manifest-gateway"),
+    ], "source-sha"),
+    /independent tasks/,
+  );
+  assert.throws(
+    () => validateRestartScenarios([
+      restartScenario("worker", "task-worker", "attempt-worker", "manifest-worker"),
+      {
+        ...restartScenario("gateway", "task-gateway", "attempt-gateway", "manifest-gateway"),
+        active_parser_before_restart: null,
+      },
+    ], "source-sha"),
+    /gateway restart requires active parser proof/,
   );
 });
