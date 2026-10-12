@@ -70,6 +70,27 @@ def test_expired_knowledge_claim_cannot_complete_or_fail(tmp_path: Path) -> None
         ).scalar_one() == "processing"
 
 
+def test_expired_knowledge_claim_cannot_mark_unsupported(tmp_path: Path) -> None:
+    _settings, factory = _migrated(tmp_path)
+    repository = KnowledgeJobRepository()
+    with factory.begin() as session:
+        job_id = _enqueue_knowledge_job(session, "knowledge-expired-unsupported")
+        claimed = repository.claim_available(session, worker_id="expired-unsupported-worker")[0]
+        session.execute(
+            text("UPDATE jobs SET lease_expires_at = datetime('now', '-1 second') WHERE id=:id"),
+            {"id": job_id},
+        )
+        assert repository.mark_unsupported(
+            session,
+            claimed,
+            code="unsupported_embedding",
+            message="synthetic unsupported capability",
+        ) is False
+        assert session.execute(
+            text("SELECT status FROM jobs WHERE id=:id"), {"id": job_id}
+        ).scalar_one() == "processing"
+
+
 def test_active_worker_owned_lease_is_not_reclaimed_by_same_identity(
     tmp_path: Path,
 ) -> None:

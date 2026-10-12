@@ -8,7 +8,7 @@ import os
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
@@ -123,6 +123,35 @@ class ProviderTextEmbedder:
             norm = math.sqrt(sum(value * value for value in values)) or 1.0
             return [value / norm for value in values]
         return values
+
+    def embed_texts(
+        self,
+        texts: list[str],
+        *,
+        model_id: str,
+        model_revision: str,
+        dimension: int,
+        normalize: bool,
+    ) -> list[Sequence[float]]:
+        transport_route = TransportRoute(
+            provider_id=self._route["provider_id"],
+            provider_kind=self._route["provider_kind"],
+            model_id=model_id,
+            endpoint_url=self._route["endpoint_url"],
+            endpoint_origin=self._route["endpoint_origin"],
+            policy_revision=model_revision,
+            secret_ref=self._route["secret_ref"] or None,
+        )
+        vectors = self._transport.embed(route=transport_route, texts=texts)
+        if len(vectors) != len(texts) or any(len(vector) != dimension for vector in vectors):
+            raise ValueError("embedding response dimension does not match configured index")
+        if not normalize:
+            return cast(list[Sequence[float]], vectors)
+        normalized: list[Sequence[float]] = []
+        for vector in vectors:
+            norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+            normalized.append([value / norm for value in vector])
+        return normalized
 
 
 class BgeM3TextEmbedder:
@@ -469,6 +498,13 @@ class KnowledgeJobRepository:
                     updated_at=CURRENT_TIMESTAMP
                 WHERE id=:job_id AND status='processing'
                   AND attempts=:attempts AND lease_owner=:owner
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at > CURRENT_TIMESTAMP
+                  AND EXISTS (
+                    SELECT 1 FROM job_attempts
+                    WHERE id=:attempt_id AND job_id=:job_id
+                      AND status='processing' AND finished_at IS NULL
+                  )
                 """
             ),
             {
@@ -476,6 +512,7 @@ class KnowledgeJobRepository:
                 "payload_json": json.dumps(payload, ensure_ascii=False, sort_keys=True),
                 "attempts": job.attempts,
                 "owner": job.lease_owner,
+                "attempt_id": job.attempt_id,
             },
         )
         if int(session.execute(text("SELECT changes()")).scalar_one()) != 1:
@@ -778,16 +815,29 @@ class KnowledgeIndexJobExecutor:
         embedding_model_revision = (
             route["revision"] if route is not None else self._settings.embedding_model_revision
         )
-        embeddings_by_chunk_id = {
-            chunk.chunk_id: embedder.embed_text(
-                self._chunk_text_by_id(session_factory, chunk.chunk_id),
+        chunk_texts = [
+            self._chunk_text_by_id(session_factory, chunk.chunk_id) for chunk in serving_chunks
+        ]
+        if isinstance(embedder, ProviderTextEmbedder):
+            vectors = embedder.embed_texts(
+                chunk_texts,
                 model_id=embedding_model_id,
                 model_revision=embedding_model_revision,
                 dimension=self._settings.embedding_dimension,
                 normalize=self._settings.embedding_normalize,
             )
-            for chunk in serving_chunks
-        }
+        else:
+            vectors = [
+                embedder.embed_text(
+                    chunk_text,
+                    model_id=embedding_model_id,
+                    model_revision=embedding_model_revision,
+                    dimension=self._settings.embedding_dimension,
+                    normalize=self._settings.embedding_normalize,
+                )
+                for chunk_text in chunk_texts
+            ]
+        embeddings_by_chunk_id = dict(zip((chunk.chunk_id for chunk in serving_chunks), vectors, strict=True))
 
         with session_scope(session_factory) as session:
             self._require_current_job_lease(session, job)
@@ -952,6 +1002,7 @@ def process_knowledge_jobs_once(
     repository: KnowledgeJobRepository | None = None,
     pdf_executor: KnowledgeJobExecutorPort | None = None,
     lease_seconds: int = KNOWLEDGE_JOB_LEASE_SECONDS,
+    execution_role: str = "worker",
 ) -> int:
     job_repository = repository or KnowledgeJobRepository()
     with session_scope(session_factory) as session:
@@ -985,7 +1036,7 @@ def process_knowledge_jobs_once(
         heartbeat_stop = threading.Event()
         heartbeat = threading.Thread(
             target=_lease_heartbeat,
-            args=(session_factory, job_repository, job, heartbeat_stop, lease_seconds),
+            args=(session_factory, job_repository, job, heartbeat_stop, lease_seconds, execution_role),
             name=f"knowledge-lease-heartbeat-{job.id}",
             daemon=True,
         )
@@ -1023,6 +1074,7 @@ def _lease_heartbeat(
     job: ClaimedKnowledgeJob,
     stop: threading.Event,
     lease_seconds: int,
+    execution_role: str,
 ) -> None:
     while not stop.wait(KNOWLEDGE_JOB_HEARTBEAT_SECONDS):
         try:
@@ -1040,7 +1092,7 @@ def _lease_heartbeat(
                 "knowledge lease heartbeat database failure",
                 extra={
                     "error_class": type(exc).__name__,
-                    "role": "worker",
+                    "role": execution_role,
                     "transient": level == logging.WARNING,
                 },
             )
@@ -1052,7 +1104,7 @@ def _lease_heartbeat(
                 "knowledge lease heartbeat unexpected failure",
                 extra={
                     "error_class": type(exc).__name__,
-                    "role": "worker",
+                    "role": execution_role,
                 },
             )
             return

@@ -82,6 +82,7 @@ def process_worker_once(
             worker_id=worker_id,
             limit=limit,
             pdf_executor=_pdf_executor(settings, pdf_executor_factory),
+            execution_role="worker",
         )
         classified = process_classification_jobs_once(
             session_factory,
@@ -130,6 +131,7 @@ def process_publisher_once(
             worker_id=publisher_id,
             limit=limit,
             pdf_executor=_pdf_executor(settings, pdf_executor_factory),
+            execution_role="publisher",
         )
         executor = _evolution_executor(
             settings,
