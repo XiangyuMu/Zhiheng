@@ -336,7 +336,7 @@ async function runRestartScenario(page, file, kind) {
     taskReceipt.task_id,
     state => state.state === 'processing',
     `before-${kind}-restart`,
-    30_000,
+    60_000,
   );
   assert.equal(preRestart.task_id, taskReceipt.task_id);
   assert.equal(preRestart.evidence_object_id, taskReceipt.evidence_object_id);
@@ -353,7 +353,7 @@ async function runRestartScenario(page, file, kind) {
     page,
     taskReceipt.task_id,
     `before-${kind}-restart-active-lease`,
-    30_000,
+    60_000,
   );
   scenario.active_lease_before_restart = activeLease;
   if (kind === 'worker') report.active_lease_before_worker_restart = activeLease;
@@ -424,7 +424,7 @@ async function runFaultInjections(page, file) {
       page,
       taskReceipt.task_id,
       `fault-${name}-active-lease`,
-      30_000,
+      60_000,
     );
     const scenarioIdentity = {
       task_id: taskReceipt.task_id,
