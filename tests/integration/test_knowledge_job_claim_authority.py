@@ -53,7 +53,7 @@ def test_stale_knowledge_claim_cannot_finish_or_fail_reclaimed_attempt(
         assert session.execute(text("SELECT count(*) FROM dead_letters")).scalar_one() == 0
 
 
-def test_reclaim_worker_owned_lease_after_restart_is_immediately_claimable(
+def test_active_worker_owned_lease_is_not_reclaimed_by_same_identity(
     tmp_path: Path,
 ) -> None:
     _settings, factory = _migrated(tmp_path)
@@ -64,16 +64,39 @@ def test_reclaim_worker_owned_lease_after_restart_is_immediately_claimable(
         assert first.id == job_id
 
     with factory.begin() as session:
-        assert repository.reclaim_worker_owned_leases(session, worker_id="stable-worker") == 1
-        reclaimed = repository.claim_available(session, worker_id="stable-worker")[0]
-        assert reclaimed.id == job_id
-        assert reclaimed.attempts == 2
+        # A stable owner string does not prove that the old process stopped.
+        # The lease remains fenced until its durable expiry is reached.
+        assert repository.claim_available(session, worker_id="stable-worker") == []
 
     with factory() as session:
         row = session.execute(
-            text("SELECT status, lease_owner FROM jobs WHERE id=:id"), {"id": job_id}
+            text("SELECT status, lease_owner, attempts FROM jobs WHERE id=:id"),
+            {"id": job_id},
         ).one()
-        assert tuple(row) == ("processing", "stable-worker")
+        assert tuple(row) == ("processing", "stable-worker", 1)
+
+
+def test_live_lease_heartbeat_extends_exact_attempt_only(tmp_path: Path) -> None:
+    _settings, factory = _migrated(tmp_path)
+    repository = KnowledgeJobRepository()
+    with factory.begin() as session:
+        job_id = _enqueue_knowledge_job(session, "knowledge-heartbeat")
+        claimed = repository.claim_available(
+            session,
+            worker_id="heartbeat-worker",
+            lease_seconds=1,
+        )[0]
+        before = session.execute(
+            text("SELECT lease_expires_at FROM jobs WHERE id=:id"), {"id": job_id}
+        ).scalar_one()
+        assert repository.renew_lease(session, claimed, lease_seconds=90) is True
+        after = session.execute(
+            text("SELECT lease_expires_at FROM jobs WHERE id=:id"), {"id": job_id}
+        ).scalar_one()
+        assert after >= before
+
+        forged = replace(claimed, attempt_id=new_id())
+        assert repository.renew_lease(session, forged, lease_seconds=90) is False
 
 
 def test_knowledge_ack_requires_exact_open_attempt(tmp_path: Path) -> None:

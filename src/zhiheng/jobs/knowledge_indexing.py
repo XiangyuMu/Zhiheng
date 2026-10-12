@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import os
+import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -27,6 +28,8 @@ KNOWLEDGE_INDEX_JOB_TYPE = "knowledge.index"
 EVENT_INDEX_JOB_TYPE = "event.index"
 KNOWLEDGE_PARSE_PDF_JOB_TYPE = "knowledge.parse_pdf"
 KNOWLEDGE_JOB_TYPES = (KNOWLEDGE_INDEX_JOB_TYPE, KNOWLEDGE_PARSE_PDF_JOB_TYPE)
+KNOWLEDGE_JOB_LEASE_SECONDS = 90
+KNOWLEDGE_JOB_HEARTBEAT_SECONDS = 15
 
 
 class TextEmbeddingPort(Protocol):
@@ -336,37 +339,45 @@ class KnowledgeJobRepository:
                 )
         return claimed
 
-    def reclaim_worker_owned_leases(self, session: Session, *, worker_id: str) -> int:
-        """Make jobs left by a restarted instance immediately claimable.
-
-        A worker keeps a stable identity across restarts.  Reclaiming only jobs
-        owned by that identity preserves the lease protection between distinct
-        workers while avoiding a full lease-duration delay after a crash.
-        """
-        result = session.execute(
+    def renew_lease(
+        self,
+        session: Session,
+        job: ClaimedKnowledgeJob,
+        *,
+        lease_seconds: int = KNOWLEDGE_JOB_LEASE_SECONDS,
+    ) -> bool:
+        """Extend a live claim while its executor is performing external work."""
+        if job.lease_owner is None or job.attempt_id is None:
+            return False
+        session.execute(
             text(
                 """
                 UPDATE jobs
-                SET status = 'pending',
-                    lease_owner = NULL,
-                    lease_expires_at = NULL,
-                    heartbeat_at = NULL,
-                    available_at = CURRENT_TIMESTAMP,
+                SET lease_expires_at = datetime('now', :lease_delta),
+                    heartbeat_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE status = 'processing'
-                  AND lease_owner = :worker_id
-                  AND job_type IN (:index_job_type, :event_job_type, :parse_job_type)
+                WHERE id = :job_id
+                  AND status = 'processing'
+                  AND attempts = :attempts
+                  AND lease_owner = :owner
+                  AND EXISTS (
+                    SELECT 1 FROM job_attempts
+                    WHERE id = :attempt_id
+                      AND job_id = :job_id
+                      AND status = 'processing'
+                      AND finished_at IS NULL
+                  )
                 """
             ),
             {
-                "worker_id": worker_id,
-                "index_job_type": KNOWLEDGE_INDEX_JOB_TYPE,
-                "event_job_type": EVENT_INDEX_JOB_TYPE,
-                "parse_job_type": KNOWLEDGE_PARSE_PDF_JOB_TYPE,
+                "job_id": job.id,
+                "attempts": job.attempts,
+                "owner": job.lease_owner,
+                "attempt_id": job.attempt_id,
+                "lease_delta": f"+{lease_seconds} seconds",
             },
         )
-        del result
-        return int(session.execute(text("SELECT changes()")).scalar_one())
+        return int(session.execute(text("SELECT changes()")).scalar_one()) == 1
 
     def complete(
         self,
@@ -930,10 +941,16 @@ def process_knowledge_jobs_once(
     limit: int = 10,
     repository: KnowledgeJobRepository | None = None,
     pdf_executor: KnowledgeJobExecutorPort | None = None,
+    lease_seconds: int = KNOWLEDGE_JOB_LEASE_SECONDS,
 ) -> int:
     job_repository = repository or KnowledgeJobRepository()
     with session_scope(session_factory) as session:
-        claimed = job_repository.claim_available(session, worker_id=worker_id, limit=limit)
+        claimed = job_repository.claim_available(
+            session,
+            worker_id=worker_id,
+            limit=limit,
+            lease_seconds=lease_seconds,
+        )
 
     completed = 0
     for job in claimed:
@@ -955,6 +972,14 @@ def process_knowledge_jobs_once(
             executor_for_job = pdf_executor
         else:
             executor_for_job = executor
+        heartbeat_stop = threading.Event()
+        heartbeat = threading.Thread(
+            target=_lease_heartbeat,
+            args=(session_factory, job_repository, job, heartbeat_stop, lease_seconds),
+            name=f"knowledge-lease-heartbeat-{job.id}",
+            daemon=True,
+        )
+        heartbeat.start()
         try:
             result = executor_for_job.execute(session_factory, job)
         except EmbeddingCapabilityUnavailable as exc:
@@ -973,10 +998,35 @@ def process_knowledge_jobs_once(
             with session_scope(session_factory) as session:
                 job_repository.fail(session, job, exc=exc)
             continue
+        finally:
+            heartbeat_stop.set()
+            heartbeat.join(timeout=KNOWLEDGE_JOB_HEARTBEAT_SECONDS)
         with session_scope(session_factory) as session:
             acknowledged = job_repository.complete(session, job, result=result)
         completed += int(acknowledged)
     return completed
+
+
+def _lease_heartbeat(
+    session_factory: sessionmaker[Session],
+    repository: KnowledgeJobRepository,
+    job: ClaimedKnowledgeJob,
+    stop: threading.Event,
+    lease_seconds: int,
+) -> None:
+    while not stop.wait(KNOWLEDGE_JOB_HEARTBEAT_SECONDS):
+        try:
+            with session_scope(session_factory) as session:
+                if not repository.renew_lease(
+                    session,
+                    job,
+                    lease_seconds=lease_seconds,
+                ):
+                    return
+        except Exception:
+            # The executor's fenced acknowledgement remains authoritative. A
+            # transient heartbeat failure must not mask its actual result.
+            return
 
 
 def _json_object(value: Any) -> dict[str, Any]:
