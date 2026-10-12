@@ -62,6 +62,7 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
         "expected_state": "failed",
         "expected_error_code": "parser_unavailable",
         "expected_retry_count": 3,
+        "wait_ms": 300_000,
         "assert_polling_stopped": True,
     },
     {
