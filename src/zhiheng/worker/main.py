@@ -33,6 +33,7 @@ from zhiheng.jobs import (
     process_knowledge_jobs_once,
     process_memory_extraction_jobs_once,
 )
+from zhiheng.jobs.knowledge_indexing import KnowledgeJobRepository
 from zhiheng.recovery import startup_recovery_barrier
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,9 @@ def process_worker_once(
         session_factory = create_session_factory(engine)
         repository = OutboxRepository()
         with session_scope(session_factory) as session:
+            KnowledgeJobRepository().reclaim_worker_owned_leases(
+                session, worker_id=worker_id
+            )
             events = repository.claim_pending(session, limit=limit)
             enqueued = repository.enqueue_jobs_for_events(session, events)
             suspended = ConclusionApplicabilityService().sweep(session)

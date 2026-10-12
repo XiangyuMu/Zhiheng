@@ -53,6 +53,29 @@ def test_stale_knowledge_claim_cannot_finish_or_fail_reclaimed_attempt(
         assert session.execute(text("SELECT count(*) FROM dead_letters")).scalar_one() == 0
 
 
+def test_reclaim_worker_owned_lease_after_restart_is_immediately_claimable(
+    tmp_path: Path,
+) -> None:
+    _settings, factory = _migrated(tmp_path)
+    repository = KnowledgeJobRepository()
+    with factory.begin() as session:
+        job_id = _enqueue_knowledge_job(session, "knowledge-restart-owned")
+        first = repository.claim_available(session, worker_id="stable-worker")[0]
+        assert first.id == job_id
+
+    with factory.begin() as session:
+        assert repository.reclaim_worker_owned_leases(session, worker_id="stable-worker") == 1
+        reclaimed = repository.claim_available(session, worker_id="stable-worker")[0]
+        assert reclaimed.id == job_id
+        assert reclaimed.attempts == 2
+
+    with factory() as session:
+        row = session.execute(
+            text("SELECT status, lease_owner FROM jobs WHERE id=:id"), {"id": job_id}
+        ).one()
+        assert tuple(row) == ("processing", "stable-worker")
+
+
 def test_knowledge_ack_requires_exact_open_attempt(tmp_path: Path) -> None:
     _settings, factory = _migrated(tmp_path)
     repository = KnowledgeJobRepository()

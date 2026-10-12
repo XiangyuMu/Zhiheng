@@ -336,6 +336,38 @@ class KnowledgeJobRepository:
                 )
         return claimed
 
+    def reclaim_worker_owned_leases(self, session: Session, *, worker_id: str) -> int:
+        """Make jobs left by a restarted instance immediately claimable.
+
+        A worker keeps a stable identity across restarts.  Reclaiming only jobs
+        owned by that identity preserves the lease protection between distinct
+        workers while avoiding a full lease-duration delay after a crash.
+        """
+        result = session.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status = 'pending',
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    heartbeat_at = NULL,
+                    available_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE status = 'processing'
+                  AND lease_owner = :worker_id
+                  AND job_type IN (:index_job_type, :event_job_type, :parse_job_type)
+                """
+            ),
+            {
+                "worker_id": worker_id,
+                "index_job_type": KNOWLEDGE_INDEX_JOB_TYPE,
+                "event_job_type": EVENT_INDEX_JOB_TYPE,
+                "parse_job_type": KNOWLEDGE_PARSE_PDF_JOB_TYPE,
+            },
+        )
+        del result
+        return int(session.execute(text("SELECT changes()")).scalar_one())
+
     def complete(
         self,
         session: Session,
