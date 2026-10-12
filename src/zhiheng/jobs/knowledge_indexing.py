@@ -21,7 +21,11 @@ from zhiheng.jobs.knowledge_contract import job_etag, retry_idempotency_key
 from zhiheng.knowledge import KnowledgeRepository
 from zhiheng.knowledge.pdf_worker import ParserTerminalFailure
 from zhiheng.models.configuration import embedding_route
-from zhiheng.models.embeddings import OpenAIEmbeddingsTransport, TransportRoute
+from zhiheng.models.embeddings import (
+    EmbeddingTransportError,
+    OpenAIEmbeddingsTransport,
+    TransportRoute,
+)
 from zhiheng.retrieval.embeddings import BgeM3QueryEmbedder, QueryEmbeddingUnavailableError
 from zhiheng.retrieval.vector_index import VectorIndexRepository
 from zhiheng.secrets import ProviderSecretStore
@@ -819,13 +823,29 @@ class KnowledgeIndexJobExecutor:
             self._chunk_text_by_id(session_factory, chunk.chunk_id) for chunk in serving_chunks
         ]
         if isinstance(embedder, ProviderTextEmbedder):
-            vectors = embedder.embed_texts(
-                chunk_texts,
-                model_id=embedding_model_id,
-                model_revision=embedding_model_revision,
-                dimension=self._settings.embedding_dimension,
-                normalize=self._settings.embedding_normalize,
-            )
+            try:
+                vectors = embedder.embed_texts(
+                    chunk_texts,
+                    model_id=embedding_model_id,
+                    model_revision=embedding_model_revision,
+                    dimension=self._settings.embedding_dimension,
+                    normalize=self._settings.embedding_normalize,
+                )
+            except EmbeddingTransportError:
+                logger.warning(
+                    "provider rejected batch embedding request; retrying per text",
+                    extra={"chunk_count": len(chunk_texts)},
+                )
+                vectors = [
+                    embedder.embed_text(
+                        chunk_text,
+                        model_id=embedding_model_id,
+                        model_revision=embedding_model_revision,
+                        dimension=self._settings.embedding_dimension,
+                        normalize=self._settings.embedding_normalize,
+                    )
+                    for chunk_text in chunk_texts
+                ]
         else:
             vectors = [
                 embedder.embed_text(
