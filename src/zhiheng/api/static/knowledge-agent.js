@@ -588,7 +588,9 @@ async function pollPdfTask(id) {
   renderProcessing();
   let failures = 0;
   try {
-    for (let attempt = 0; attempt < 60; attempt += 1) {
+    // Keep polling through the durable Worker retry window (three one-minute
+    // backoffs) so a terminal auto-retry result is rendered in this session.
+    for (let attempt = 0; attempt < 240; attempt += 1) {
       try {
         const current = await fetchJson(`/v1/knowledge/pdf-imports/${encodeURIComponent(id)}`);
         failures = 0;
