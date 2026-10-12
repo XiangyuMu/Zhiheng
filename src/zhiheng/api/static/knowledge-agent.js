@@ -693,7 +693,12 @@ function renderProcessing() {
     } else {
       actions.append(action("刷新进度", () => entry.kind === "pdf" ? pollPdfTask(id) : pollProcessing(id), "secondary small"));
     }
-    if (entry.retryable && entry.terminal) actions.append(action("重试", (event) => retryImportTask(id, entry, event.currentTarget), "secondary small"));
+    // A terminal failed/dead PDF remains manually retryable even after the
+    // bounded automatic retry budget is exhausted. The API accepts these
+    // durable terminal states, so keep the recovery action visible when the
+    // persisted retryable flag is false.
+    const canRetry = entry.retryable || (entry.terminal && ["failed", "dead"].includes(entry.state));
+    if (canRetry && entry.terminal) actions.append(action("重试", (event) => retryImportTask(id, entry, event.currentTarget), "secondary small"));
     if (entry.terminal) actions.append(action("补充资料", () => openDialog("import-dialog"), "secondary small"));
     if (entry.kind === "pdf" && entry.terminal) actions.append(action("查看详情", () => loadPdfDetail(entry), "quiet small"));
     actions.querySelectorAll("button").forEach((button) => { button.disabled = Boolean(entry.polling); });
