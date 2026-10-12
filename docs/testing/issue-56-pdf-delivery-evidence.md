@@ -86,12 +86,12 @@ the resulting task state, error code, lease/retry observations, and recovery
 result. A generated scenario list or a controller proof by itself is setup
 evidence, not acceptance evidence.
 
-The Worker job claim lease defaults to 300 seconds (`src/zhiheng/jobs/
-knowledge_indexing.py`). Issue 54 also caps parse and recovery at five minutes
-(300 seconds), so a run cannot spend the entire budget waiting for lease
-expiry and still claim recovery. The controller does not change that lease;
-the operator must start the harness while the Worker can observe and recover
-the active lease within the remaining budget.
+Knowledge indexing claims use a 90-second lease with a 15-second fenced
+heartbeat (`src/zhiheng/jobs/knowledge_indexing.py`); the generic repository
+claim default remains 300 seconds for other callers. Issue 54 caps parse and
+recovery at five minutes (300 seconds), so a crashed Worker can be reclaimed
+within that budget while a live external call remains protected by heartbeats.
+The controller does not change either value.
 
 ## Acceptance stages
 

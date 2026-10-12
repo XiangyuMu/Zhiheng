@@ -98,6 +98,12 @@ def test_live_lease_heartbeat_extends_exact_attempt_only(tmp_path: Path) -> None
         forged = replace(claimed, attempt_id=new_id())
         assert repository.renew_lease(session, forged, lease_seconds=90) is False
 
+        session.execute(
+            text("UPDATE jobs SET lease_expires_at = datetime('now', '-1 second') WHERE id=:id"),
+            {"id": job_id},
+        )
+        assert repository.renew_lease(session, claimed, lease_seconds=90) is False
+
 
 def test_knowledge_ack_requires_exact_open_attempt(tmp_path: Path) -> None:
     _settings, factory = _migrated(tmp_path)

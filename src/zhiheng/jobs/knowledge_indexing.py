@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import threading
@@ -10,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from zhiheng.core.config import Settings
@@ -30,6 +32,8 @@ KNOWLEDGE_PARSE_PDF_JOB_TYPE = "knowledge.parse_pdf"
 KNOWLEDGE_JOB_TYPES = (KNOWLEDGE_INDEX_JOB_TYPE, KNOWLEDGE_PARSE_PDF_JOB_TYPE)
 KNOWLEDGE_JOB_LEASE_SECONDS = 90
 KNOWLEDGE_JOB_HEARTBEAT_SECONDS = 15
+
+logger = logging.getLogger(__name__)
 
 
 class TextEmbeddingPort(Protocol):
@@ -360,6 +364,8 @@ class KnowledgeJobRepository:
                   AND status = 'processing'
                   AND attempts = :attempts
                   AND lease_owner = :owner
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at > CURRENT_TIMESTAMP
                   AND EXISTS (
                     SELECT 1 FROM job_attempts
                     WHERE id = :attempt_id
@@ -1023,12 +1029,46 @@ def _lease_heartbeat(
                     lease_seconds=lease_seconds,
                 ):
                     return
-        except Exception:
-            # A transient database/connection failure must not abandon the
-            # lease while the executor is still running external work. Retry
-            # on the next interval; a definitive fenced update returning
-            # False is the signal that this attempt is no longer authoritative.
+        except (OperationalError, InterfaceError) as exc:
+            logger.warning(
+                "knowledge lease heartbeat transient database failure",
+                extra={
+                    "error_class": type(exc).__name__,
+                    "job_id": job.id,
+                    "attempt_id": job.attempt_id,
+                },
+            )
             continue
+        except DBAPIError as exc:
+            if not exc.connection_invalidated:
+                logger.error(
+                    "knowledge lease heartbeat database failure",
+                    extra={
+                        "error_class": type(exc).__name__,
+                        "job_id": job.id,
+                        "attempt_id": job.attempt_id,
+                    },
+                )
+                return
+            logger.warning(
+                "knowledge lease heartbeat transient database failure",
+                extra={
+                    "error_class": type(exc).__name__,
+                    "job_id": job.id,
+                    "attempt_id": job.attempt_id,
+                },
+            )
+            continue
+        except Exception as exc:
+            logger.error(
+                "knowledge lease heartbeat unexpected failure",
+                extra={
+                    "error_class": type(exc).__name__,
+                    "job_id": job.id,
+                    "attempt_id": job.attempt_id,
+                },
+            )
+            return
 
 
 def _json_object(value: Any) -> dict[str, Any]:
