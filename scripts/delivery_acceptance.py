@@ -86,6 +86,9 @@ def clean_environment() -> dict[str, str]:
         "MINERU_WARMUP_TIMEOUT_SECONDS",
         "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH",
         "ZHIHENG_ISSUE54_FAULTS_JSON",
+        "ZHIHENG_MINERU_RUNTIME",
+        "ZHIHENG_MINERU_GATEWAY_URL",
+        "ZHIHENG_MINERU_TOKEN_FILE",
     }:
         if key in os.environ:
             cleaned[key] = os.environ[key]
@@ -167,6 +170,28 @@ def execute(
         result["exit_code"] = process.returncode
         result["seconds"] = round(time.monotonic() - started, 3)
     return result
+
+
+def mineru_command(name: str, output: Path) -> list[str]:
+    """Select an explicit real runtime; never turn a skipped runtime into success."""
+    if os.environ.get("ZHIHENG_MINERU_RUNTIME", "compose") == "host":
+        url = os.environ.get("ZHIHENG_MINERU_GATEWAY_URL", "http://127.0.0.1:9392")
+        token_file = os.environ.get(
+            "ZHIHENG_MINERU_TOKEN_FILE", "/private/tmp/zhiheng-mineru-token"
+        )
+        if name == "mineru-warmup":
+            return [
+                sys.executable, "scripts/mineru_http_warmup.py", "--url", url,
+                "--token-file", token_file, "--diagnostics", str(output / "mineru-warmup.json"),
+                "--timeout", "1800",
+            ]
+        return [
+            sys.executable, "scripts/mineru_http_health.py", "--url", url,
+            "--token-file", token_file,
+        ]
+    if name == "mineru-warmup":
+        return ["bash", "scripts/mineru_local.sh", "start"]
+    return ["bash", "scripts/mineru_local.sh", "health"]
 
 
 def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str) -> None:
@@ -539,14 +564,8 @@ def main() -> int:
         ),
         ("browser", ["bash", "scripts/browser_acceptance.sh"]),
         ("real-pdf-preflight", real_pdf_preflight()),
-        (
-            "mineru-warmup",
-            ["bash", "scripts/mineru_local.sh", "start"],
-        ),
-        (
-            "parser-health",
-            ["bash", "scripts/mineru_local.sh", "health"],
-        ),
+        ("mineru-warmup", mineru_command("mineru-warmup", output)),
+        ("parser-health", mineru_command("parser-health", output)),
         (
             "pdf-parse",
             [
