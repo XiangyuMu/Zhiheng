@@ -834,6 +834,9 @@ async function loadPersistentImportTasks() {
         page_count: task.progress_total,
         ready: false,
       };
+      if (entry.failure) {
+        entry.label = `${entry.failure.code || task.status}：${entry.failure.redacted_summary || "处理未完成，请补充资料或重新处理。"}`;
+      }
       state.processing.set(id, entry);
       if (entry.kind === "pdf") pollPdfTask(id);
       else pollProcessing(id);
