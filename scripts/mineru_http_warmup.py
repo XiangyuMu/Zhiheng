@@ -12,6 +12,25 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+
+
+def local_origin(url: str) -> str:
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+        or parsed.username is not None or parsed.password is not None
+        or parsed.query or parsed.fragment or parsed.path not in {"", "/"}
+    ):
+        raise ValueError("MinerU gateway must be a loopback origin without credentials")
+    _ = parsed.port
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
 
 
 def request(url: str, token: str, timeout: float, method: str = "GET") -> dict[str, Any]:
@@ -20,7 +39,7 @@ def request(url: str, token: str, timeout: float, method: str = "GET") -> dict[s
         method=method,
         headers={"Authorization": f"Bearer {token}"},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.build_opener(NoRedirect).open(request, timeout=timeout) as response:
         payload = json.load(response)
     if not isinstance(payload, dict):
         raise ValueError("MinerU response must be an object")
@@ -31,11 +50,12 @@ def warmup(url: str, token_file: Path, diagnostics: Path, timeout: float) -> int
     started = time.monotonic()
     report: dict[str, Any] = {
         "status": "failed",
-        "gateway_url": url,
         "observations": [],
     }
     diagnostics.parent.mkdir(parents=True, exist_ok=True)
     try:
+        url = local_origin(url)
+        report["gateway_url"] = url
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
         report["sha"] = subprocess.check_output(

@@ -12,6 +12,25 @@ operator runbook, not a claim that an unexecuted external-service run passed.
 - A configured MinerU gateway, Embedding route, and DeepSeek answer route.
 - A durable evidence directory outside the checkout.
 
+### Existing host gateway
+
+The default runtime starts the Compose deployment. When the API and independent
+Worker already use a host gateway and its existing persistent object store,
+select that runtime explicitly before running the collector:
+
+```bash
+export ZHIHENG_MINERU_RUNTIME=host
+export ZHIHENG_MINERU_GATEWAY_URL=http://127.0.0.1:9392
+export ZHIHENG_MINERU_TOKEN_FILE=/absolute/private/path/mineru-token
+```
+
+The host mode performs an authenticated real `/warmup`, requires the matching
+probe to succeed through `/ready`, and saves timing and readiness diagnostics.
+It does not start services: the API, Worker, gateway and fault proxy must already
+run the candidate SHA. Only loopback gateway origins are accepted; redirects
+are rejected before any token can be forwarded. This avoids starting a second
+Compose gateway over a different object store during a host-runtime acceptance.
+
 ## Issue 54 external fault controller
 
 The browser recovery harness requires five explicitly injected scenarios at the

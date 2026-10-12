@@ -174,11 +174,14 @@ def execute(
 
 def mineru_command(name: str, output: Path) -> list[str]:
     """Select an explicit real runtime; never turn a skipped runtime into success."""
-    if os.environ.get("ZHIHENG_MINERU_RUNTIME", "compose") == "host":
+    runtime = os.environ.get("ZHIHENG_MINERU_RUNTIME", "compose")
+    if runtime not in {"host", "compose"}:
+        raise ValueError("ZHIHENG_MINERU_RUNTIME must be host or compose")
+    if runtime == "host":
         url = os.environ.get("ZHIHENG_MINERU_GATEWAY_URL", "http://127.0.0.1:9392")
-        token_file = os.environ.get(
-            "ZHIHENG_MINERU_TOKEN_FILE", "/private/tmp/zhiheng-mineru-token"
-        )
+        token_file = os.environ.get("ZHIHENG_MINERU_TOKEN_FILE")
+        if not token_file:
+            raise ValueError("host MinerU requires ZHIHENG_MINERU_TOKEN_FILE")
         if name == "mineru-warmup":
             return [
                 sys.executable, "scripts/mineru_http_warmup.py", "--url", url,
@@ -464,7 +467,9 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                 "real-pdf-preflight", "mineru-warmup", "parser-health", "pdf-parse", "pdf-search",
                 "pdf-recovery", "real-files", "extraction",
             }
-            if {item.get("name") for item in steps} != required_steps:
+            if len(steps) != len(required_steps) or {
+                item.get("name") for item in steps
+            } != required_steps:
                 raise ValueError("Issue 56 evidence is missing required quality-gate steps")
             if any(
                 not isinstance(item.get("seconds"), (int, float))

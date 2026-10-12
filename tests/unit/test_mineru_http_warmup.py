@@ -60,6 +60,47 @@ def test_missing_token_preserves_failure_report(tmp_path: Path) -> None:
     assert json.loads(report.read_text())["failure_code"] == "FileNotFoundError"
 
 
+@pytest.mark.parametrize("url", [
+    "https://example.com", "http://user:secret@localhost", "http://127.0.0.1?key=secret",
+    "http://localhost/#secret", "http://localhost/elsewhere",
+])
+def test_untrusted_url_rejected_without_reading_token_or_recording_url(
+    tmp_path: Path, url: str,
+) -> None:
+    report = tmp_path / "report.json"
+    assert warmup(url, tmp_path / "missing", report, 1) == 1
+    payload = json.loads(report.read_text())
+    assert payload["failure_code"] == "ValueError"
+    assert "gateway_url" not in payload
+    assert "secret" not in report.read_text()
+
+
+def test_authenticated_requests_do_not_follow_redirects(tmp_path: Path) -> None:
+    reached_sink: list[bool] = []
+
+    class Redirect(Handler):
+        def do_GET(self) -> None:
+            if self.path == "/sink":
+                reached_sink.append(True)
+            self.send_response(302)
+            self.send_header("Location", "/sink")
+            self.end_headers()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        token = tmp_path / "token"
+        token.write_text("secret")
+        report = tmp_path / "report.json"
+        assert warmup(f"http://127.0.0.1:{server.server_port}", token, report, .1) == 1
+        assert not reached_sink
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+
 @pytest.mark.parametrize("mode", ["missing_attempt", "wrong_attempt", "not_ready"])
 def test_unproven_readiness_fails_with_bounded_diagnostics(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,

@@ -84,6 +84,25 @@ def test_unknown_parser_profile_is_rejected() -> None:
         collector().parser_backend("unknown")
 
 
+def test_host_runtime_requires_explicit_token_and_real_warmup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = collector()
+    monkeypatch.setenv("ZHIHENG_MINERU_RUNTIME", "host")
+    monkeypatch.delenv("ZHIHENG_MINERU_TOKEN_FILE", raising=False)
+    with pytest.raises(ValueError, match="TOKEN_FILE"):
+        module.mineru_command("mineru-warmup", tmp_path)
+    monkeypatch.setenv("ZHIHENG_MINERU_TOKEN_FILE", "/private/token")
+    command = module.mineru_command("mineru-warmup", tmp_path)
+    assert command[1] == "scripts/mineru_http_warmup.py"
+    assert "--token-file" in command
+    assert "/private/token" in command
+    assert module.clean_environment()["ZHIHENG_MINERU_TOKEN_FILE"] == "/private/token"
+    monkeypatch.setenv("ZHIHENG_MINERU_RUNTIME", "skip")
+    with pytest.raises(ValueError, match="host or compose"):
+        module.mineru_command("mineru-warmup", tmp_path)
+
+
 def test_pdf_evidence_matrix_requires_all_issue_rows() -> None:
     module = collector()
     matrix = module.load_pdf_evidence_matrix(Path(__file__).resolve().parents[2])
@@ -367,6 +386,7 @@ def test_stage_evidence_requires_passed_same_sha_reports(tmp_path: Path) -> None
         ),
         (lambda payloads: payloads[55].__setitem__("answers", ["bad"]), "Issue 55"),
         (lambda payloads: payloads[56].__setitem__("steps", [1]), "Issue 56"),
+        (lambda payloads: payloads[56]["steps"].append(payloads[56]["steps"][0]), "Issue 56"),
         (
             lambda payloads: payloads[56]["steps"][0].__setitem__("command", "not-a-list"),
             "Issue 56",
