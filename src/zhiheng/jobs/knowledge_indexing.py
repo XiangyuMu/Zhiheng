@@ -1024,9 +1024,11 @@ def _lease_heartbeat(
                 ):
                     return
         except Exception:
-            # The executor's fenced acknowledgement remains authoritative. A
-            # transient heartbeat failure must not mask its actual result.
-            return
+            # A transient database/connection failure must not abandon the
+            # lease while the executor is still running external work. Retry
+            # on the next interval; a definitive fenced update returning
+            # False is the signal that this attempt is no longer authoritative.
+            continue
 
 
 def _json_object(value: Any) -> dict[str, Any]:
