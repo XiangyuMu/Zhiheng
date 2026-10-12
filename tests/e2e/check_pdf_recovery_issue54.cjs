@@ -273,8 +273,15 @@ async function assertPollingStopped(page, taskId, label) {
   const after = await page.evaluate((path) => (
     (window.__issue54StatusRequests || []).filter((item) => item === path).length
   ), key);
-  assert.equal(after, before, `${label} continued polling after terminal state`);
-  return { before, after, polling_stopped: true };
+  // One request may already be in flight when the terminal response arrives;
+  // require the count to remain stable over a second observation window.
+  assert(after <= before + 1, `${label} issued multiple requests after terminal state`);
+  await page.waitForTimeout(2_500);
+  const settled = await page.evaluate((path) => (
+    (window.__issue54StatusRequests || []).filter((item) => item === path).length
+  ), key);
+  assert.equal(settled, after, `${label} continued polling after terminal state`);
+  return { before, after, settled, polling_stopped: true };
 }
 
 async function uploadPdfTask(page, file, title) {
