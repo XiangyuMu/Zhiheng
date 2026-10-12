@@ -211,12 +211,18 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if task_id is None and self.command == "POST" and path == "/tasks":
                 forwarded = self.server.forward(self.command, path, body, self.headers)
                 upstream_task_id = _json_task_id(forwarded[1])
+                def activate(value: dict[str, Any]) -> None:
+                    armed_value = value.get("armed")
+                    if isinstance(armed_value, dict) and upstream_task_id:
+                        armed_value["fault_task_id"] = upstream_task_id
+                        armed_value["active"] = True
                 self.server.control.observe(
                     self.command,
                     path,
                     forwarded[0],
                     upstream_task_id,
                 )
+                self.server.control.update(activate)
                 self._send(*forwarded)
                 return
             if task_id and armed.get("active") and path.startswith(f"/tasks/{task_id}"):

@@ -565,7 +565,10 @@ class KnowledgeJobRepository:
                 {
                     "failure_code": _failure_code_for_job_exception(exc, job_type=job.job_type),
                     "failure_stage": "parse",
-                    "retryable": not terminal,
+                    # A parser failure remains manually retryable even after
+                    # the automatic budget is exhausted.  The durable job is
+                    # dead, but the source and retry endpoint remain usable.
+                    "retryable": True,
                 }
             )
         elif job.job_type == KNOWLEDGE_INDEX_JOB_TYPE:
