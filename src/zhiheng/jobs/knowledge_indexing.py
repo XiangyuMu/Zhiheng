@@ -495,7 +495,8 @@ class KnowledgeJobRepository:
         max_attempts = int(row["max_attempts"])
         terminal = attempts >= max_attempts or (
             isinstance(exc, ParserTerminalFailure)
-            and exc.failure_code == "mineru_task_not_found"
+            and exc.failure_code
+            in {"mineru_task_not_found", "mineru_failed", "mineru_result_invalid"}
         )
         status = "dead" if terminal else "pending"
         payload = _json_object(row["payload_json"])
