@@ -525,7 +525,10 @@ async function runFaultInjections(page, file) {
         if (scenario.expect_ui_retry) {
           const beforeRetry = dbSnapshot(record.task_id, `fault-${name}-before-retry`);
           const previousAttempts = new Set((beforeRetry.attempts || []).map((attempt) => attempt.id));
-          const item = page.locator('.processing-item').filter({ hasText: name }).first();
+          // Match the exact task title from this run. Filtering by the stable
+          // scenario name alone can select a stale task from an earlier
+          // evidence run and send the retry to the wrong import.
+          const item = page.locator('.processing-item').filter({ hasText: record.title }).first();
           const retryResponse = page.waitForResponse((response) => (
             new URL(response.url()).pathname === `/v1/knowledge/pdf-imports/${record.task_id}/retry`
             && response.request().method() === 'POST'
