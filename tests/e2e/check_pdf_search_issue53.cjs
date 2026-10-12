@@ -167,6 +167,7 @@ assert(process.env.ZHIHENG_EXPECTED_EMBEDDING_PROVIDER_ID && process.env.ZHIHENG
           citation_count: detail.body.citations.length,
           retrieval_generation: {
             id: detail.body.retrieval_generation.id,
+            provider_id: detail.body.retrieval_generation.provider_id,
             model_id: detail.body.retrieval_generation.model_id,
             model_revision: detail.body.retrieval_generation.model_revision,
             dimension: detail.body.retrieval_generation.dimension,

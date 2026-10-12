@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
+import math
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -13,13 +14,13 @@ from pathlib import Path
 from typing import Any
 
 
-def request(url: str, token: str, method: str = "GET") -> dict[str, Any]:
+def request(url: str, token: str, timeout: float, method: str = "GET") -> dict[str, Any]:
     request = urllib.request.Request(
         url,
         method=method,
         headers={"Authorization": f"Bearer {token}"},
     )
-    with urllib.request.urlopen(request, timeout=10) as response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.load(response)
     if not isinstance(payload, dict):
         raise ValueError("MinerU response must be an object")
@@ -29,39 +30,58 @@ def request(url: str, token: str, method: str = "GET") -> dict[str, Any]:
 def warmup(url: str, token_file: Path, diagnostics: Path, timeout: float) -> int:
     started = time.monotonic()
     report: dict[str, Any] = {
-        "status": "running",
+        "status": "failed",
         "gateway_url": url,
-        "token_file_sha256": hashlib.sha256(token_file.read_bytes()).hexdigest(),
         "observations": [],
     }
     diagnostics.parent.mkdir(parents=True, exist_ok=True)
     try:
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be finite and positive")
+        report["sha"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True
+        ).strip()
         token = token_file.read_text(encoding="utf-8").strip()
         if not token:
             raise ValueError("MinerU token file is empty")
-        accepted = request(f"{url.rstrip('/')}/warmup", token, "POST")
+        accepted = request(f"{url.rstrip('/')}/warmup", token, min(10, timeout), "POST")
         report["attempt_id"] = accepted.get("attempt_id")
-        while time.monotonic() - started <= timeout:
+        if not isinstance(report["attempt_id"], str) or not report["attempt_id"]:
+            raise ValueError("warmup did not return an attempt")
+        while (remaining := timeout - (time.monotonic() - started)) > 0:
             try:
-                ready = request(f"{url.rstrip('/')}/ready", token)
+                ready = request(f"{url.rstrip('/')}/ready", token, min(10, remaining))
                 report["observations"].append(
                     {
                         key: ready.get(key)
                         for key in ("status", "gateway", "upstream", "model", "upstream_version")
                     }
                 )
-                if ready.get("status") == "ready" and ready.get("model") == "ready":
+                probe = ready.get("probe")
+                if (
+                    ready.get("status") == "ready" and ready.get("model") == "ready"
+                    and isinstance(probe, dict)
+                    and probe.get("attempt_id") == report["attempt_id"]
+                    and probe.get("state") == "succeeded"
+                    and time.monotonic() - started <= timeout
+                ):
+                    report["probe"] = {
+                        "attempt_id": probe["attempt_id"], "state": probe["state"]
+                    }
                     report["status"] = "passed"
                     return 0
             except (OSError, ValueError, urllib.error.URLError) as error:
                 report["observations"].append({"error_class": type(error).__name__})
-            time.sleep(2)
+            time.sleep(min(2, max(0, timeout - (time.monotonic() - started))))
         report["failure_code"] = "mineru_warmup_timeout"
         return 1
-    except (OSError, ValueError, urllib.error.URLError) as error:
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
         report["status"] = "failed"
         report["failure_code"] = type(error).__name__
         return 1
+    except KeyboardInterrupt:
+        report["failure_code"] = "interrupted"
+        return 130
     finally:
         report["seconds"] = round(time.monotonic() - started, 3)
         diagnostics.write_text(
@@ -76,8 +96,8 @@ def main() -> int:
     parser.add_argument("--diagnostics", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=1800)
     args = parser.parse_args()
-    if args.timeout <= 0:
-        parser.error("timeout must be positive")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        parser.error("timeout must be finite and positive")
     return warmup(args.url, args.token_file, args.diagnostics, args.timeout)
 
 

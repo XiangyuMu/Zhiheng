@@ -1,8 +1,12 @@
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import pytest
+
+from scripts import mineru_http_warmup as module
 from scripts.mineru_http_warmup import warmup
 
 
@@ -25,7 +29,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(
             json.dumps(
-                {"status": "ready", "gateway": "healthy", "upstream": "healthy", "model": "ready"}
+                {"status": "ready", "gateway": "healthy", "upstream": "healthy", "model": "ready",
+                 "probe": {"attempt_id": "warmup-1", "state": "succeeded"}}
             ).encode()
         )
 
@@ -46,4 +51,38 @@ def test_warmup_requires_real_ready_and_never_writes_token(tmp_path: Path) -> No
     finally:
         server.shutdown()
         thread.join(timeout=2)
+        server.server_close()
 
+
+def test_missing_token_preserves_failure_report(tmp_path: Path) -> None:
+    report = tmp_path / "report.json"
+    assert warmup("http://127.0.0.1:9392", tmp_path / "missing", report, 1) == 1
+    assert json.loads(report.read_text())["failure_code"] == "FileNotFoundError"
+
+
+@pytest.mark.parametrize("mode", ["missing_attempt", "wrong_attempt", "not_ready"])
+def test_unproven_readiness_fails_with_bounded_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    token = tmp_path / "token"
+    token.write_text("private-token")
+    report = tmp_path / "report.json"
+
+    def respond(url: str, token: str, timeout: float, method: str = "GET") -> dict[str, object]:
+        assert 0 < timeout <= .05
+        if method == "POST":
+            return {} if mode == "missing_attempt" else {"attempt_id": "current"}
+        return {
+            "status": "not_ready" if mode == "not_ready" else "ready", "model": "ready",
+            "probe": {"attempt_id": "wrong", "state": "succeeded"},
+        }
+
+    monkeypatch.setattr(module, "request", respond)
+    started = time.monotonic()
+    assert warmup("http://127.0.0.1:9392", token, report, .05) == 1
+    assert time.monotonic() - started < 1
+    payload = json.loads(report.read_text())
+    assert payload["status"] == "failed"
+    assert payload["failure_code"]
+    assert "private-token" not in report.read_text()
+    assert "token_file_sha256" not in payload

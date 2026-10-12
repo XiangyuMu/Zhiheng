@@ -235,6 +235,7 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                 "media_type": "application/pdf",
                 "citation_count": 1,
                 "retrieval_generation": {
+                    "provider_id": "embedding-provider",
                     "model_id": "embed",
                     "model_revision": "rev",
                     "dimension": 1024,
