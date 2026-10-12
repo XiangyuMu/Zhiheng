@@ -53,6 +53,23 @@ def test_stale_knowledge_claim_cannot_finish_or_fail_reclaimed_attempt(
         assert session.execute(text("SELECT count(*) FROM dead_letters")).scalar_one() == 0
 
 
+def test_expired_knowledge_claim_cannot_complete_or_fail(tmp_path: Path) -> None:
+    _settings, factory = _migrated(tmp_path)
+    repository = KnowledgeJobRepository()
+    with factory.begin() as session:
+        job_id = _enqueue_knowledge_job(session, "knowledge-expired-ack")
+        claimed = repository.claim_available(session, worker_id="expired-worker")[0]
+        session.execute(
+            text("UPDATE jobs SET lease_expires_at = datetime('now', '-1 second') WHERE id=:id"),
+            {"id": job_id},
+        )
+        assert repository.complete(session, claimed, result=_result("expired")) is False
+        assert repository.fail(session, claimed, exc=RuntimeError("expired")) is False
+        assert session.execute(
+            text("SELECT status FROM jobs WHERE id=:id"), {"id": job_id}
+        ).scalar_one() == "processing"
+
+
 def test_active_worker_owned_lease_is_not_reclaimed_by_same_identity(
     tmp_path: Path,
 ) -> None:
