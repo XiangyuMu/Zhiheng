@@ -98,6 +98,12 @@ def test_host_runtime_requires_explicit_token_and_real_warmup(
     assert "--token-file" in command
     assert "/private/token" in command
     assert module.clean_environment()["ZHIHENG_MINERU_TOKEN_FILE"] == "/private/token"
+    monkeypatch.setenv("ZHIHENG_MINERU_GATEWAY_URL", "http://user:secret@example.com?token=secret")
+    with pytest.raises(ValueError, match="loopback"):
+        module.mineru_command("mineru-warmup", tmp_path)
+    monkeypatch.setenv("ZHIHENG_MINERU_GATEWAY_URL", "http://127.0.0.1:9392")
+    monkeypatch.setenv("MINERU_WARMUP_TIMEOUT_SECONDS", "12.5")
+    assert "12.5" in module.mineru_command("mineru-warmup", tmp_path)
     monkeypatch.setenv("ZHIHENG_MINERU_RUNTIME", "skip")
     with pytest.raises(ValueError, match="host or compose"):
         module.mineru_command("mineru-warmup", tmp_path)
@@ -266,23 +272,47 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
         54: {
             "status": "passed",
             "sha": "same-sha",
-            "receipt": {"task_id": "restart-task", "source_sha256": "source"},
-            "active_parser_before_gateway_restart": {
-                "task_id": "restart-task",
-                "attempt_id": "restart-attempt",
-                "state": "running",
-                "upstream_task_id": "upstream-task",
-                "ready": True,
-            },
+            "input": {"sha256": "source"},
+            "restart_scenarios": [
+                {
+                    "kind": kind,
+                    "status": "passed",
+                    "receipt": {
+                        "task_id": f"restart-{kind}", "source_sha256": "source",
+                        "parser_attempt_id": f"attempt-{kind}",
+                    },
+                    "active_lease_before_restart": {
+                        "jobs": [
+                            {
+                                "status": "processing", "attempts": 1,
+                                "lease_owner_sha256": "lease",
+                            }
+                        ]
+                    },
+                    **({
+                        "active_parser_before_restart": {
+                            "task_id": "restart-gateway", "attempt_id": "attempt-gateway",
+                            "state": "running", "upstream_task_id": "upstream-task", "ready": True,
+                        }
+                    } if kind == "gateway" else {}),
+                    "terminal": {
+                        "state": "parsed", "task_id": f"restart-{kind}",
+                        "source_sha256": "source", "manifest_sha256": f"manifest-{kind}",
+                    },
+                }
+                for kind in ("worker", "gateway")
+            ],
             "restarts": [
                 {
                     "kind": kind,
                     "status": "succeeded",
                     "exit_code": 0,
                     "command_sha256": f"{kind}-digest",
+                    "before_identity_sha256": f"{kind}-before",
+                    "after_identity_sha256": f"{kind}-after",
                     "proof": {
                         "kind": kind,
-                        "task_id": "restart-task",
+                        "task_id": f"restart-{kind}",
                         "observed_identity": f"{kind}-identity",
                         "ready": True,
                     },

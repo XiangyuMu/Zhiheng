@@ -15,6 +15,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 def git(repo: Path, *args: str) -> str:
@@ -178,7 +179,9 @@ def mineru_command(name: str, output: Path) -> list[str]:
     if runtime not in {"host", "compose"}:
         raise ValueError("ZHIHENG_MINERU_RUNTIME must be host or compose")
     if runtime == "host":
-        url = os.environ.get("ZHIHENG_MINERU_GATEWAY_URL", "http://127.0.0.1:9392")
+        url = validated_loopback_url(
+            os.environ.get("ZHIHENG_MINERU_GATEWAY_URL", "http://127.0.0.1:9392")
+        )
         token_file = os.environ.get("ZHIHENG_MINERU_TOKEN_FILE")
         if not token_file:
             raise ValueError("host MinerU requires ZHIHENG_MINERU_TOKEN_FILE")
@@ -186,7 +189,7 @@ def mineru_command(name: str, output: Path) -> list[str]:
             return [
                 sys.executable, "scripts/mineru_http_warmup.py", "--url", url,
                 "--token-file", token_file, "--diagnostics", str(output / "mineru-warmup.json"),
-                "--timeout", "1800",
+                "--timeout", str(mineru_warmup_timeout()),
             ]
         return [
             sys.executable, "scripts/mineru_http_health.py", "--url", url,
@@ -195,6 +198,33 @@ def mineru_command(name: str, output: Path) -> list[str]:
     if name == "mineru-warmup":
         return ["bash", "scripts/mineru_local.sh", "start"]
     return ["bash", "scripts/mineru_local.sh", "health"]
+
+
+def validated_loopback_url(value: str) -> str:
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ValueError("MinerU gateway must be a loopback origin without credentials")
+    _ = parsed.port
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def mineru_warmup_timeout() -> float:
+    raw = os.environ.get("MINERU_WARMUP_TIMEOUT_SECONDS", "1800")
+    try:
+        value = float(raw)
+    except ValueError as error:
+        raise ValueError("MINERU_WARMUP_TIMEOUT_SECONDS must be numeric") from error
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("MINERU_WARMUP_TIMEOUT_SECONDS must be finite and positive")
+    return value
 
 
 def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str) -> None:
@@ -318,23 +348,78 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                 raise ValueError("Issue 53 retrieval generation purpose is not retrieval")
             require_nonempty(generation.get("physical_index_ref"), "Issue 53 physical_index_ref")
         elif issue == 54:
-            receipt = require_dict(payload.get("receipt"), "Issue 54 receipt")
-            task_id = require_nonempty(receipt.get("task_id"), "Issue 54 receipt task_id")
-            source_sha = require_nonempty(
-                receipt.get("source_sha256"), "Issue 54 receipt source_sha256"
+            source = require_dict(payload.get("input"), "Issue 54 input")
+            source_sha = require_nonempty(source.get("sha256"), "Issue 54 input.sha256")
+            scenarios = require_object_list(
+                payload.get("restart_scenarios"), "Issue 54 restart scenarios"
             )
+            if {item.get("kind") for item in scenarios} != {"worker", "gateway"}:
+                raise ValueError(
+                    "Issue 54 evidence must contain independent worker and gateway scenarios"
+                )
+            if (
+                len(scenarios) != 2
+                or len({item.get("receipt", {}).get("task_id") for item in scenarios}) != 2
+            ):
+                raise ValueError("Issue 54 restart scenarios must use independent tasks")
             restarts = require_object_list(payload.get("restarts"), "Issue 54 restarts")
             if {item.get("kind") for item in restarts if item.get("status") == "succeeded"} != {
                 "worker",
                 "gateway",
             }:
                 raise ValueError("Issue 54 evidence does not prove both process restarts")
+            scenario_by_kind = {item["kind"]: item for item in scenarios}
+            for scenario in scenarios:
+                receipt = require_dict(scenario.get("receipt"), "Issue 54 scenario receipt")
+                task_id = require_nonempty(receipt.get("task_id"), "Issue 54 scenario task_id")
+                if receipt.get("source_sha256") != source_sha:
+                    raise ValueError("Issue 54 scenario source digest is not bound to input")
+                require_nonempty(receipt.get("parser_attempt_id"), "Issue 54 parser attempt")
+                if scenario.get("status") != "passed":
+                    raise ValueError("Issue 54 restart scenario did not pass")
+                terminal = require_dict(scenario.get("terminal"), "Issue 54 terminal recovery")
+                if (
+                    terminal.get("state") != "parsed"
+                    or terminal.get("task_id") != task_id
+                    or terminal.get("source_sha256") != source_sha
+                ):
+                    raise ValueError("Issue 54 terminal recovery is not bound to scenario")
+                require_nonempty(terminal.get("manifest_sha256"), "Issue 54 terminal manifest")
+                lease = require_dict(
+                    scenario.get("active_lease_before_restart"),
+                    "Issue 54 active lease proof",
+                )
+                if not any(
+                    isinstance(job, dict)
+                    and job.get("status") == "processing"
+                    and int(job.get("attempts", 0)) > 0
+                    and job.get("lease_owner_sha256")
+                    for job in require_list(lease.get("jobs"), "Issue 54 active lease jobs")
+                ):
+                    raise ValueError("Issue 54 restart lacks an active leased job")
             for restart in restarts:
                 if restart.get("status") != "succeeded" or restart.get("exit_code") != 0:
                     raise ValueError("Issue 54 restart did not succeed")
                 require_nonempty(restart.get("command_sha256"), "Issue 54 restart command_sha256")
+                before = require_nonempty(
+                    restart.get("before_identity_sha256"), "Issue 54 restart before identity"
+                )
+                after = require_nonempty(
+                    restart.get("after_identity_sha256"), "Issue 54 restart after identity"
+                )
+                if before == after:
+                    raise ValueError("Issue 54 restart process identity did not change")
                 proof = require_dict(restart.get("proof"), "Issue 54 restart proof")
-                if proof.get("kind") != restart.get("kind") or proof.get("task_id") != task_id:
+                scenario = scenario_by_kind.get(restart.get("kind"))
+                scenario_receipt = (
+                    require_dict(scenario.get("receipt"), "Issue 54 scenario receipt")
+                    if scenario
+                    else {}
+                )
+                if (
+                    proof.get("kind") != restart.get("kind")
+                    or proof.get("task_id") != scenario_receipt.get("task_id")
+                ):
                     raise ValueError("Issue 54 restart proof is not bound to current task")
                 if proof.get("ready") is not True and proof.get("observed_ready") is not True:
                     raise ValueError("Issue 54 restart proof is missing readiness")
@@ -342,11 +427,18 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                     proof.get("observed_identity") or proof.get("pid") or proof.get("container_id")
                 ):
                     raise ValueError("Issue 54 restart proof is missing process identity")
+            parser_scenario = scenario_by_kind["gateway"]
             parser_proof = require_dict(
-                payload.get("active_parser_before_gateway_restart"),
+                parser_scenario.get("active_parser_before_restart"),
                 "Issue 54 active parser proof",
             )
-            if parser_proof.get("task_id") != task_id or not parser_proof.get("upstream_task_id"):
+            parser_receipt = require_dict(
+                parser_scenario.get("receipt"), "Issue 54 gateway receipt"
+            )
+            if (
+                parser_proof.get("task_id") != parser_receipt.get("task_id")
+                or not parser_proof.get("upstream_task_id")
+            ):
                 raise ValueError("Issue 54 parser proof is not bound to current task")
             if (
                 parser_proof.get("ready") is not True
@@ -367,7 +459,7 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
             if observed != required:
                 raise ValueError("Issue 54 evidence does not prove all five fault categories")
             for fault in faults:
-                if fault.get("task_id") == task_id:
+                if fault.get("task_id") in {item["receipt"]["task_id"] for item in scenarios}:
                     raise ValueError("Issue 54 fault task reused the restart task")
                 if fault.get("source_sha256") != source_sha:
                     raise ValueError("Issue 54 fault source digest is not bound to input")
@@ -390,9 +482,9 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                     or command_proof.get("task_id") != fault.get("task_id")
                 ):
                     raise ValueError("Issue 54 fault command proof is not bound to scenario")
-                if not (
-                    command_proof.get("observed_identity")
-                    or command_proof.get("observed_ready") is not None
+                if (
+                    not isinstance(command_proof.get("observed_identity"), str)
+                    or not command_proof["observed_identity"]
                 ):
                     raise ValueError("Issue 54 fault command proof is missing observation")
                 if fault.get("category") == "auto_retry_exhausted" and (
@@ -638,7 +730,11 @@ def main() -> int:
     for name, command in steps:
         print(f"Running {name} for {sha}", flush=True)
         timeout = (
-            None if name == "pytest" else 1830 if name == "mineru-warmup" else args.timeout + 30
+            None
+            if name == "pytest"
+            else mineru_warmup_timeout() + 30
+            if name == "mineru-warmup"
+            else args.timeout + 30
         )
         result = execute(repo, output, name, command, timeout, env)
         report["steps"].append(result)
