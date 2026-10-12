@@ -701,7 +701,9 @@ function renderProcessing() {
     if (canRetry && entry.terminal) actions.append(action("重试", (event) => retryImportTask(id, entry, event.currentTarget), "secondary small"));
     if (entry.terminal) actions.append(action("补充资料", () => openDialog("import-dialog"), "secondary small"));
     if (entry.kind === "pdf" && entry.terminal) actions.append(action("查看详情", () => loadPdfDetail(entry), "quiet small"));
-    actions.querySelectorAll("button").forEach((button) => { button.disabled = Boolean(entry.polling); });
+    // Once a durable terminal state is rendered, recovery actions remain
+    // usable even if the final status response is still unwinding its poll.
+    actions.querySelectorAll("button").forEach((button) => { button.disabled = Boolean(entry.polling && !entry.terminal); });
     li.append(actions);
     return li;
   }));
