@@ -145,6 +145,7 @@ class ControlState:
                 "expected_error_code": expected_error_code,
                 "armed_at": _now(),
                 "fault_task_id": None,
+                "active": False,
             },
             "observations": [],
         })
@@ -216,7 +217,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 )
                 self._send(*forwarded)
                 return
-            if task_id and path.startswith(f"/tasks/{task_id}"):
+            if task_id and armed.get("active") and path.startswith(f"/tasks/{task_id}"):
                 fault = _fault_response(str(armed.get("category")), path)
         if fault is None:
             response = self.server.forward(self.command, path, body, self.headers)
@@ -298,6 +299,12 @@ def _proof(control: ControlState, category: str, task_id: str, attempt_id: str) 
                 break
     if not isinstance(upstream_task_id, str) or not upstream_task_id.strip():
         raise RuntimeError("controller has no observed upstream parser task identity")
+    def activate(value: dict[str, Any]) -> None:
+        current = value.get("armed")
+        if isinstance(current, dict) and current.get("category") == category:
+            current["active"] = True
+            current["fault_task_id"] = upstream_task_id
+    control.update(activate)
     return {
         "injected": True,
         "boundary": "external_parser",
