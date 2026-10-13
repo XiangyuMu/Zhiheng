@@ -11,8 +11,24 @@ const server = https.createServer({ cert: fs.readFileSync(certPath), key: fs.rea
     return;
   }
   if (request.method === 'POST' && request.url === '/embeddings') {
-    response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ data: [{ index: 0, embedding: [1, ...Array(1023).fill(0)] }] }));
+    let body = '';
+    request.setEncoding('utf8');
+    request.on('data', (chunk) => { body += chunk; });
+    request.on('end', () => {
+      let inputCount = 1;
+      try {
+        const parsed = JSON.parse(body);
+        if (Array.isArray(parsed.input)) inputCount = parsed.input.length || 1;
+      } catch (_) {
+        inputCount = 1;
+      }
+      const data = Array.from({ length: inputCount }, (_, index) => ({
+        index,
+        embedding: [1, ...Array(1023).fill(0)],
+      }));
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ data }));
+    });
     return;
   }
   response.writeHead(404, { 'content-type': 'application/json' });
