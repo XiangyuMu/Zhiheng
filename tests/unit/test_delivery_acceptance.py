@@ -477,3 +477,27 @@ def test_stage_evidence_requires_delivery_report(tmp_path: Path) -> None:
     (tmp_path / "report.json").write_text('{"status":"passed","sha":"wrong-sha"}')
     with pytest.raises(ValueError, match="not bound"):
         module.validate_stage_evidence(tmp_path, matrix, "same-sha")
+
+
+def test_pytest_environment_does_not_inherit_real_storage_or_routes() -> None:
+    module = collector()
+    private = {
+        "ZHIHENG_PDF_PARSER_BACKEND": "mineru",
+        "ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID": "real-answer-provider",
+        "ZHIHENG_EXPECTED_ANSWER_MODEL_ID": "real-answer-model",
+        "ZHIHENG_EXPECTED_EMBEDDING_PROVIDER_ID": "real-embedding-provider",
+        "ZHIHENG_EXPECTED_EMBEDDING_MODEL_ID": "real-embedding-model",
+        "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH": "/real/objects",
+    }
+    original = dict(private, PATH="/bin", ZHIHENG_DELIVERY_EVIDENCE="/evidence")
+    isolated = module.pytest_environment(original)
+    assert not private.keys() & isolated.keys()
+    assert isolated["ZHIHENG_DELIVERY_EVIDENCE"] == "/evidence"
+    assert all(original[key] == value for key, value in private.items())
+
+
+def test_runtime_checkout_is_preserved_for_real_restart_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ZHIHENG_RUNTIME_CHECKOUT", "/isolated/checkout")
+    assert collector().clean_environment()["ZHIHENG_RUNTIME_CHECKOUT"] == "/isolated/checkout"

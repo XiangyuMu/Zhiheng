@@ -97,6 +97,21 @@ def clean_environment() -> dict[str, str]:
     return cleaned
 
 
+def pytest_environment(env: dict[str, str]) -> dict[str, str]:
+    """Keep real acceptance routes and storage out of synthetic test fixtures."""
+    result = dict(env)
+    for key in (
+        "ZHIHENG_PDF_PARSER_BACKEND",
+        "ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID",
+        "ZHIHENG_EXPECTED_ANSWER_MODEL_ID",
+        "ZHIHENG_EXPECTED_EMBEDDING_PROVIDER_ID",
+        "ZHIHENG_EXPECTED_EMBEDDING_MODEL_ID",
+        "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH",
+    ):
+        result.pop(key, None)
+    return result
+
+
 def real_pdf_preflight() -> list[str]:
     required = [
         "ZHIHENG_TEST_USERNAME",
@@ -739,52 +754,19 @@ def main() -> int:
         )
         step_env = env
         if name == "pytest":
-            # Unit/integration fixtures assert the application default parser;
-            # the MinerU backend is configured only for real PDF stages below.
-            step_env = dict(env)
-            step_env.pop("ZHIHENG_PDF_PARSER_BACKEND", None)
-            # Route identities are acceptance-only inputs.  Keeping them out of
-            # the generic pytest process prevents fixture payloads from being
-            # interpreted as real-provider evidence and makes the full gate
-            # independent of whichever provider is configured for the run.
-            for key in (
-                "ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID",
-                "ZHIHENG_EXPECTED_ANSWER_MODEL_ID",
-                "ZHIHENG_EXPECTED_EMBEDDING_PROVIDER_ID",
-                "ZHIHENG_EXPECTED_EMBEDDING_MODEL_ID",
-                "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH",
-            ):
-                step_env.pop(key, None)
+            step_env = pytest_environment(env)
         runtime_restart: dict[str, Any] | None = None
         if name == "pdf-parse":
             restart_command = os.environ.get("ZHIHENG_RESTART_WORKER_COMMAND")
             if restart_command:
-                restart_started = time.monotonic()
-                restart_log = output / "pdf-worker-restart.log"
-                try:
-                    completed = subprocess.run(
-                        ["bash", "-lc", restart_command],
-                        cwd=repo,
-                        env=env,
-                        stdout=restart_log.open("w"),
-                        stderr=subprocess.STDOUT,
-                        timeout=60,
-                        check=False,
-                    )
-                    runtime_restart = {
-                        "status": "passed" if completed.returncode == 0 else "failed",
-                        "exit_code": completed.returncode,
-                        "seconds": round(time.monotonic() - restart_started, 3),
-                        "log": str(restart_log),
-                    }
-                except (OSError, subprocess.TimeoutExpired) as error:
-                    runtime_restart = {
-                        "status": "failed",
-                        "exit_code": None,
-                        "seconds": round(time.monotonic() - restart_started, 3),
-                        "error": str(error),
-                        "log": str(restart_log),
-                    }
+                runtime_restart = execute(
+                    repo, output, "pdf-worker-restart",
+                    ["bash", "-lc", restart_command], 60, env,
+                )
+                runtime_restart.pop("command", None)
+                runtime_restart["command_sha256"] = hashlib.sha256(
+                    restart_command.encode("utf-8")
+                ).hexdigest()
                 if runtime_restart["status"] != "passed":
                     result = {
                         "name": name,
