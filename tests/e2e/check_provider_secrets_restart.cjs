@@ -212,6 +212,24 @@ with sqlite3.connect(sys.argv[1]) as db:
     assert(!JSON.stringify(state.body).includes("ZHIHENG_PRIVATE_ISSUE40_LEGACY"));
     const csrf = await page.evaluate(() => document.cookie.split(";").map((v) => v.trim())
       .find((v) => v.startsWith("zhiheng_csrf="))?.slice(13) || "");
+    // The preceding provider-model restart scenario deliberately clears the
+    // default route while cleaning up its fixture. Restore this scenario's
+    // own text route through the real HTTP contract before exercising the
+    // provider restart. Otherwise the answer endpoint is correctly allowed
+    // to fall back to evidence-only output, making this test depend on stage
+    // ordering rather than proving provider recovery.
+    const defaults = await page.evaluate(async ({ providerId, csrf }) => {
+      const status = await fetch("/v1/model-config/status", { credentials: "same-origin" });
+      const current = await status.json();
+      const response = await fetch("/v1/model-config/defaults", {
+        method: "PUT", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf,
+          "If-Match": current.defaults.etag, "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ text: { provider_id: providerId, model_id: "model-a" } }),
+      });
+      return { status: response.status, body: await response.json() };
+    }, { providerId: provider.provider_id, csrf });
+    assert.equal(defaults.status, 200, JSON.stringify(defaults.body));
     if (expectMigrated) {
       assert.equal(provider.secret_status, "configured");
       const updated = await page.evaluate(async ({ providerId, etag, csrf, providerUrl }) => {
