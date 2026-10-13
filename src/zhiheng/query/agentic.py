@@ -37,7 +37,6 @@ from zhiheng.retrieval.contracts import (
 )
 
 
-
 class SubqueryPlannerPort(Protocol):
     def plan_subqueries(
         self,
