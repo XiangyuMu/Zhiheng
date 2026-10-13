@@ -531,7 +531,7 @@ def test_openai_embeddings_transport_uses_embeddings_wire_format(
             return None
 
         def json(self) -> dict[str, object]:
-            return {"data": [{"embedding": [1, 2.5]}]}
+            return {"data": [{"index": 0, "embedding": [1, 2.5]}]}
 
     captured: dict[str, object] = {}
 
@@ -556,6 +556,40 @@ def test_openai_embeddings_transport_uses_embeddings_wire_format(
     ) == [[1.0, 2.5]]
     assert captured["url"] == "https://api.openai.com/v1/embeddings"
     assert captured["json"] == {"model": "text-embedding-3-small", "input": ["hello"]}
+
+
+def test_openai_embeddings_transport_reorders_indexed_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "data": [
+                    {"index": 1, "embedding": [2, 0]},
+                    {"index": 0, "embedding": [1, 0]},
+                ]
+            }
+
+    monkeypatch.setattr(
+        "zhiheng.models._transports.httpx.post", lambda *args, **kwargs: FakeResponse()
+    )
+    monkeypatch.setenv("ZHIHENG_PRIVATE_OPENAI_API_KEY", "openai-secret")
+    embeddings = OpenAIEmbeddingsTransport(EnvironmentSecretStore())
+    assert embeddings.embed(
+        route=TransportRoute(
+            provider_id="provider-openai",
+            provider_kind="openai",
+            model_id="text-embedding-3-small",
+            endpoint_url="https://api.openai.com/v1",
+            endpoint_origin="https://api.openai.com",
+            policy_revision="rev-1",
+            secret_ref="env:ZHIHENG_PRIVATE_OPENAI_API_KEY",
+        ),
+        texts=["first", "second"],
+    ) == [[1.0, 0.0], [2.0, 0.0]]
 
 
 def test_model_gateway_commits_dispatching_before_network_and_sends_only_redacted_payload(

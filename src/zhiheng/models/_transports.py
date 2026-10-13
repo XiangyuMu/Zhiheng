@@ -334,7 +334,18 @@ class OpenAIEmbeddingsTransport:
         data = response.json().get("data")
         if not isinstance(data, list):
             raise ValueError("embedding response format is invalid")
-        return [list(map(float, item["embedding"])) for item in data if isinstance(item, dict)]
+        indexed: list[tuple[int, list[float]]] = []
+        for item in data:
+            if not isinstance(item, dict) or not isinstance(item.get("index"), int):
+                raise ValueError("embedding response item index is invalid")
+            embedding = item.get("embedding")
+            if not isinstance(embedding, list):
+                raise ValueError("embedding response item is invalid")
+            indexed.append((item["index"], list(map(float, embedding))))
+        expected_indexes = list(range(len(texts)))
+        if len(indexed) != len(texts) or sorted(index for index, _ in indexed) != expected_indexes:
+            raise ValueError("embedding response indexes do not match input")
+        return [embedding for _, embedding in sorted(indexed)]
 
 
 def _response_output_text(payload: object) -> str:
