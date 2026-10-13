@@ -107,6 +107,20 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     const providers = await api("/v1/model-config/providers");
     const provider = providers.find((item) => item.display_name === "Issue 40 Browser Provider");
     assert(provider && provider.secret_status === "configured");
+    const csrf = await page.evaluate(() => document.cookie.split(";").map((v) => v.trim())
+      .find((v) => v.startsWith("zhiheng_csrf="))?.slice(13) || "");
+    const modelEtag = provider.model_records.find((item) => item.model_id === "model-a")?.etag;
+    assert(modelEtag, "created Provider must expose the model ETag");
+    const modelConfirmation = await page.evaluate(async ({ providerId, csrf, modelEtag }) => {
+      const response = await fetch(`/v1/model-config/providers/${providerId}/models/model-a`, {
+        method: "PATCH", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf,
+          "If-Match": modelEtag, "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ confirmed_capabilities: ["text"], protocol: "chat_completions" }),
+      });
+      return { status: response.status, body: await response.json() };
+    }, { providerId: provider.provider_id, csrf, modelEtag });
+    assert.equal(modelConfirmation.status, 200, JSON.stringify(modelConfirmation.body));
     assert(!JSON.stringify(providers).includes(syntheticKey));
     evidence.create = { provider_id: provider.provider_id, secret_status: provider.secret_status, fingerprint: provider.secret_fingerprint };
     const connectivity = await api(`/v1/model-config/providers/${provider.provider_id}/connectivity-test`, { method: "POST" });
