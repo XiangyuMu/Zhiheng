@@ -233,6 +233,9 @@ class HybridRetriever:
                                 "SELECT 1 FROM event_memories e "
                                 "JOIN event_memory_versions v "
                                 "ON v.event_memory_id = e.id AND v.id = :source_version_id "
+                                "AND v.version_no = (SELECT max(current_v.version_no) "
+                                "FROM event_memory_versions current_v "
+                                "WHERE current_v.event_memory_id = e.id) "
                                 "JOIN event_memory_evidence ev ON ev.event_version_id = v.id "
                                 "WHERE e.id = :source_id AND e.status = 'formal_current'"
                             ),
