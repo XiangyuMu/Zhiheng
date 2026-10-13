@@ -755,7 +755,51 @@ def main() -> int:
                 "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH",
             ):
                 step_env.pop(key, None)
+        runtime_restart: dict[str, Any] | None = None
+        if name == "pdf-parse":
+            restart_command = os.environ.get("ZHIHENG_RESTART_WORKER_COMMAND")
+            if restart_command:
+                restart_started = time.monotonic()
+                restart_log = output / "pdf-worker-restart.log"
+                try:
+                    completed = subprocess.run(
+                        ["bash", "-lc", restart_command],
+                        cwd=repo,
+                        env=env,
+                        stdout=restart_log.open("w"),
+                        stderr=subprocess.STDOUT,
+                        timeout=60,
+                        check=False,
+                    )
+                    runtime_restart = {
+                        "status": "passed" if completed.returncode == 0 else "failed",
+                        "exit_code": completed.returncode,
+                        "seconds": round(time.monotonic() - restart_started, 3),
+                        "log": str(restart_log),
+                    }
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    runtime_restart = {
+                        "status": "failed",
+                        "exit_code": None,
+                        "seconds": round(time.monotonic() - restart_started, 3),
+                        "error": str(error),
+                        "log": str(restart_log),
+                    }
+                if runtime_restart["status"] != "passed":
+                    result = {
+                        "name": name,
+                        "command": command,
+                        "status": "failed",
+                        "exit_code": runtime_restart.get("exit_code"),
+                        "seconds": runtime_restart["seconds"],
+                        "runtime_restart": runtime_restart,
+                    }
+                    report["steps"].append(result)
+                    (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+                    break
         result = execute(repo, output, name, command, timeout, step_env)
+        if runtime_restart is not None:
+            result["runtime_restart"] = runtime_restart
         report["steps"].append(result)
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         if (
