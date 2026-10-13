@@ -6,7 +6,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from inspect import Parameter, signature
-from typing import Protocol
+from typing import Any, Protocol
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -23,6 +23,7 @@ from zhiheng.retrieval.contracts import (
     RetrievalRunRepositoryPort,
     RetrievalSource,
 )
+from zhiheng.retrieval.qualification import formal_searchable_sql
 from zhiheng.retrieval.repository import LexicalRetriever, RetrievalRunRepository, VectorRetriever
 
 
@@ -203,41 +204,38 @@ class HybridRetriever:
             candidates.extend(vector_hits)
 
         if filters is not None and filters.title:
-            allowed_chunk_ids = {
-                str(row[0])
-                for row in session.execute(
-                    text("SELECT id FROM chunks WHERE title = :title"),
-                    {"title": filters.title},
-                ).all()
-            }
-            candidates = [
-                candidate for candidate in candidates if candidate.chunk_id in allowed_chunk_ids
-            ]
-            # An explicit source title scopes the query to the complete source.
-            # Add its remaining serving chunks so a title-only hit (for example
-            # a PDF cover block) cannot hide the substantive pages.
+            # Resolve the explicit title before applying the retrieval limit.
+            # Otherwise a source with many similarly named chunks can be
+            # absent from the lexical/vector top-k and become impossible to
+            # answer even though it is formally searchable.
+            source_rows = session.execute(
+                text(
+                    "SELECT ko.id AS source_id, ko.current_version_id AS source_version_id "
+                    "FROM knowledge_objects ko "
+                    f"WHERE ko.title = :title AND {formal_searchable_sql('ko')}"
+                ),
+                {"title": filters.title},
+            ).mappings().all()
             identities = {
-                (candidate.source_type, candidate.source_id, candidate.source_version_id)
-                for candidate in candidates
+                ("knowledge_object", str(row["source_id"]), str(row["source_version_id"]))
+                for row in source_rows
             }
-            # A title can be reused by multiple sources.  Without a candidate
-            # identity there is no safe way to choose which source to expand.
-            if len(identities) > 1:
-                # Never answer an ambiguous title query with a mixture of
-                # same-named sources.  The caller can retry with an explicit
-                # object/version constraint.
+            if len(identities) != 1:
+                # Never answer an ambiguous or unavailable title query with a
+                # mixture of same-named sources.
                 candidates = []
                 identities = set()
-            template = candidates[0] if len(identities) == 1 else None
-            known = {candidate.chunk_id for candidate in candidates}
-            if template is None:
-                rows = session.execute(
-                    text(
-                        "SELECT id, source_type, source_id, source_version_id, "
-                        "confirmation_generation FROM chunks WHERE 1 = 0"
-                    )
-                ).mappings()
+            identity = next(iter(identities), None)
+            rows: Any
+            if identity is None:
+                rows = []
             else:
+                candidates = [
+                    candidate
+                    for candidate in candidates
+                    if (candidate.source_type, candidate.source_id, candidate.source_version_id)
+                    == identity
+                ]
                 rows = session.execute(
                     text(
                         "SELECT id, source_type, source_id, source_version_id, "
@@ -247,11 +245,12 @@ class HybridRetriever:
                     ),
                     {
                         "title": filters.title,
-                        "source_type": template.source_type,
-                        "source_id": template.source_id,
-                        "source_version_id": template.source_version_id,
+                        "source_type": identity[0],
+                        "source_id": identity[1],
+                        "source_version_id": identity[2],
                     },
                 ).mappings()
+            known = {candidate.chunk_id for candidate in candidates}
             for index, row in enumerate(rows, start=1):
                 chunk_id = str(row["id"])
                 if chunk_id in known:
@@ -263,7 +262,7 @@ class HybridRetriever:
                         source_version_id=str(row["source_version_id"]),
                         chunk_id=chunk_id,
                         confirmation_generation=int(row["confirmation_generation"]),
-                        generation=None if template is None else template.generation,
+                        generation=None,
                         rank=index,
                         score=0.0,
                         retriever=RetrievalSource.LEXICAL,
