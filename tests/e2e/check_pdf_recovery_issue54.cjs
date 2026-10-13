@@ -320,6 +320,40 @@ async function assertFailureUi(page, task, expectedErrorCode, expectRetry) {
   }
 }
 
+async function waitForFormalSearchable(page, task, label, deadline) {
+  const query = 'MannequinVideos';
+  while (Date.now() < deadline) {
+    const result = await page.evaluate(async (q) => {
+      const response = await fetch(`/v1/knowledge/search?q=${encodeURIComponent(q)}&limit=100`, {
+        signal: AbortSignal.timeout(10_000),
+      });
+      return { http: response.status, body: await response.json() };
+    }, query);
+    assert.equal(result.http, 200, `${label} searchable query failed`);
+    const hit = (result.body.items || []).find((item) => (
+      item.evidence_object_id === task.evidence_object_id
+      && item.source_sha256 === task.source_sha256
+      && item.searchable === true
+    ));
+    if (hit) {
+      const detail = await page.evaluate(async (id) => {
+        const response = await fetch(`/v1/knowledge/${encodeURIComponent(id)}`, {
+          signal: AbortSignal.timeout(10_000),
+        });
+        return { http: response.status, body: await response.json() };
+      }, hit.knowledge_object_id);
+      assert.equal(detail.http, 200, `${label} searchable detail failed`);
+      assert.equal(detail.body.searchable, true);
+      assert.equal(detail.body.evidence_object_id, task.evidence_object_id);
+      assert.equal(detail.body.retrieval_generation?.index_status, 'active');
+      assert(detail.body.retrieval_generation?.physical_index_ref);
+      return { hit, detail: detail.body };
+    }
+    await page.waitForTimeout(1_000);
+  }
+  throw Error(`${label} did not reach formal searchable qualification within its budget`);
+}
+
 async function runRestartScenario(page, file, kind) {
   const command = kind === 'worker'
     ? process.env.ZHIHENG_RESTART_WORKER_COMMAND
@@ -406,8 +440,20 @@ async function runRestartScenario(page, file, kind) {
   assert.equal(parseAttempts.length, 1, `${kind} restart recovery must not duplicate PDF parse attempts`);
   assert.equal(parseAttempts[0].id, parserAttempt);
   assert.equal(parseAttempts[0].manifest_sha256, parsed.manifest_sha256);
+  const searchable = await waitForFormalSearchable(
+    page,
+    parsed,
+    `${kind} restart searchable qualification`,
+    receiptAt + 300_000,
+  );
   scenario.terminal = parsed;
   scenario.final_snapshot = finalSnapshot;
+  scenario.searchable = {
+    knowledge_object_id: searchable.hit.knowledge_object_id,
+    evidence_object_id: searchable.hit.evidence_object_id,
+    physical_index_ref: searchable.detail.retrieval_generation.physical_index_ref,
+    index_status: searchable.detail.retrieval_generation.index_status,
+  };
   scenario.elapsed_ms = Date.now() - receiptAt;
   assert(scenario.elapsed_ms <= 300_000, `${kind} restart parse plus recovery exceeded the 5 minute budget`);
   scenario.status = 'passed';
@@ -432,6 +478,7 @@ async function runFaultInjections(page, file) {
         ZHIHENG_ISSUE54_EXPECTED_ERROR_CODE: scenario.expected_error_code,
       }),
     });
+    const started = Date.now();
     const taskReceipt = await uploadPdfTask(page, file, `Issue 54 fault ${name} ${crypto.randomUUID()}`);
     const initialScenarioSnapshot = await waitForActiveLease(
       page,
@@ -445,7 +492,6 @@ async function runFaultInjections(page, file) {
       evidence_object_id: taskReceipt.evidence_object_id,
       source_sha256: taskReceipt.source_sha256,
     };
-    const started = Date.now();
     const record = {
       name,
       category: scenario.category,
@@ -506,7 +552,9 @@ async function runFaultInjections(page, file) {
         if (scenario.expected_retry_count !== undefined) {
           const snapshot = dbSnapshot(record.task_id, `fault-${name}-terminal`);
           const attempts = (snapshot?.jobs || []).map((job) => Number(job.attempts || 0));
-          assert(attempts.some((value) => value >= Number(scenario.expected_retry_count)), `${name} did not observe expected retry count`);
+          const expectedRetries = Number(scenario.expected_retry_count);
+          assert(attempts.some((value) => value === expectedRetries), `${name} did not observe exact retry count`);
+          assert(attempts.every((value) => value <= expectedRetries), `${name} exceeded retry budget`);
           record.observed.retry_count = Math.max(...attempts);
         }
         if (scenario.assert_polling_stopped) {
@@ -550,6 +598,17 @@ async function runFaultInjections(page, file) {
             source_sha256: recovered.source_sha256,
             manifest_sha256: recovered.manifest_sha256,
           };
+          const searchable = await waitForFormalSearchable(
+            page,
+            recovered,
+            `fault-${name} manual retry searchable qualification`,
+            started + 300_000,
+          );
+          record.retry_result.searchable = {
+            knowledge_object_id: searchable.hit.knowledge_object_id,
+            physical_index_ref: searchable.detail.retrieval_generation.physical_index_ref,
+            index_status: searchable.detail.retrieval_generation.index_status,
+          };
           dbSnapshot(record.task_id, `fault-${name}-retry-complete`);
         } else if (scenario.expect_retry_endpoint) {
           const retry = await api(page, `/v1/knowledge/pdf-imports/${encodeURIComponent(record.task_id)}/retry`, {
@@ -567,6 +626,7 @@ async function runFaultInjections(page, file) {
         }
       }
       record.elapsed_ms = Date.now() - started;
+      assert(record.elapsed_ms <= 300_000, `${name} parse plus index exceeded the 5 minute budget`);
       record.status = 'passed';
     } catch (error) {
       record.elapsed_ms = Date.now() - started;

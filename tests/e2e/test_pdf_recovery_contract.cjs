@@ -225,6 +225,12 @@ function restartScenario(kind, taskId, attemptId, manifestSha) {
       manifest_sha256: manifestSha,
       manifest_uri: `file:///objects/${manifestSha}.json`,
     },
+    searchable: {
+      knowledge_object_id: `${taskId}-knowledge`,
+      evidence_object_id: `${taskId}-evidence`,
+      index_status: "active",
+      physical_index_ref: `sqlite_vec:${taskId}`,
+    },
     final_snapshot: {
       attempts: [{ id: attemptId, manifest_sha256: manifestSha }],
     },

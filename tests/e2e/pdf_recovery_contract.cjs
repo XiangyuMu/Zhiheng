@@ -160,6 +160,12 @@ function validateRestartScenario(scenario, expectedSourceSha) {
   assert.equal(terminal.attempt_id, attemptId, `${scenario.kind} restart changed parser attempt identity`);
   const manifestSha = nonEmptyString(terminal.manifest_sha256, `${scenario.kind} restart terminal.manifest_sha256`);
   nonEmptyString(terminal.manifest_uri, `${scenario.kind} restart terminal.manifest_uri`);
+  const searchable = scenario.searchable;
+  assert(searchable && typeof searchable === "object" && !Array.isArray(searchable), `${scenario.kind} restart searchable proof is required`);
+  assert.equal(searchable.evidence_object_id, evidenceObjectId, `${scenario.kind} searchable evidence mismatch`);
+  assert.equal(searchable.index_status, "active", `${scenario.kind} searchable index is not active`);
+  nonEmptyString(searchable.knowledge_object_id, `${scenario.kind} searchable knowledge_object_id`);
+  nonEmptyString(searchable.physical_index_ref, `${scenario.kind} searchable physical_index_ref`);
   const attempts = scenario.final_snapshot?.attempts;
   assert(Array.isArray(attempts), `${scenario.kind} restart final snapshot attempts must be a list`);
   assert.equal(attempts.length, 1, `${scenario.kind} restart must not duplicate parse attempts`);

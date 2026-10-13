@@ -279,6 +279,7 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                     "status": "passed",
                     "receipt": {
                         "task_id": f"restart-{kind}", "source_sha256": "source",
+                        "evidence_object_id": f"evidence-{kind}",
                         "parser_attempt_id": f"attempt-{kind}",
                     },
                     "active_lease_before_restart": {
@@ -297,7 +298,15 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                     } if kind == "gateway" else {}),
                     "terminal": {
                         "state": "parsed", "task_id": f"restart-{kind}",
+                        "evidence_object_id": f"evidence-{kind}",
                         "source_sha256": "source", "manifest_sha256": f"manifest-{kind}",
+                        "manifest_uri": f"file:///objects/{kind}/manifest.json",
+                    },
+                    "searchable": {
+                        "knowledge_object_id": f"knowledge-{kind}",
+                        "evidence_object_id": f"evidence-{kind}",
+                        "index_status": "active",
+                        "physical_index_ref": f"sqlite_vec:{kind}",
                     },
                 }
                 for kind in ("worker", "gateway")
