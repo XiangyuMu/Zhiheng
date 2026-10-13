@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from inspect import Parameter, signature
@@ -35,6 +36,8 @@ from zhiheng.retrieval.contracts import (
     HybridRetrievalResult,
     RetrievalFilters,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class SubqueryPlannerPort(Protocol):
@@ -438,7 +441,11 @@ class BoundedAgenticRagService:
                 release_context=release_context,
                 retrieval_run_ids=retrieval_run_ids,
             )
-        except Exception:
+        except Exception as exc:
+            _LOGGER.exception(
+                "answer model generation failed",
+                extra={"error_type": type(exc).__name__, "error_message": str(exc)},
+            )
             return self._final_evidence_only(
                 session,
                 manifest=manifest,
