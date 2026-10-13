@@ -177,11 +177,11 @@ def execute(
             )
         finally:
             # A child can outlive its leader. Always terminate the complete session.
-            with contextlib.suppress(ProcessLookupError):
+            with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(process.pid, signal.SIGTERM)
             with contextlib.suppress(subprocess.TimeoutExpired):
                 process.wait(timeout=5)
-            with contextlib.suppress(ProcessLookupError):
+            with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(process.pid, signal.SIGKILL)
             process.wait()
         result["exit_code"] = process.returncode
@@ -401,6 +401,25 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                 ):
                     raise ValueError("Issue 54 terminal recovery is not bound to scenario")
                 require_nonempty(terminal.get("manifest_sha256"), "Issue 54 terminal manifest")
+                searchable = require_dict(
+                    scenario.get("searchable"), "Issue 54 searchable qualification"
+                )
+                if (
+                    searchable.get("evidence_object_id") != receipt.get("evidence_object_id")
+                    or searchable.get("index_status") != "active"
+                ):
+                    raise ValueError("Issue 54 restart lacks active searchable qualification")
+                require_nonempty(
+                    searchable.get("knowledge_object_id"),
+                    "Issue 54 searchable knowledge object",
+                )
+                require_nonempty(
+                    searchable.get("physical_index_ref"),
+                    "Issue 54 searchable physical index",
+                )
+                elapsed_ms = scenario.get("elapsed_ms")
+                if not isinstance(elapsed_ms, (int, float)) or elapsed_ms > 300_000:
+                    raise ValueError("Issue 54 restart exceeded parse plus index budget")
                 lease = require_dict(
                     scenario.get("active_lease_before_restart"),
                     "Issue 54 active lease proof",
@@ -505,9 +524,9 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                     raise ValueError("Issue 54 fault command proof is missing observation")
                 if fault.get("category") == "auto_retry_exhausted" and (
                     not isinstance(observed_state.get("retry_count"), int)
-                    or observed_state["retry_count"] < 3
+                    or observed_state["retry_count"] != 3
                 ):
-                    raise ValueError("Issue 54 auto retry exhaustion is not proven")
+                    raise ValueError("Issue 54 auto retry count is not exactly three attempts")
                 if fault.get("category") == "manual_ui_retry":
                     retry_result = require_dict(
                         fault.get("retry_result"), "Issue 54 manual retry result"
@@ -522,6 +541,16 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                     require_nonempty(
                         retry_result.get("manifest_sha256"),
                         "Issue 54 manual retry manifest_sha256",
+                    )
+                    searchable = require_dict(
+                        retry_result.get("searchable"),
+                        "Issue 54 manual retry searchable qualification",
+                    )
+                    if searchable.get("index_status") != "active":
+                        raise ValueError("Issue 54 manual retry index is not active")
+                    require_nonempty(
+                        searchable.get("physical_index_ref"),
+                        "Issue 54 manual retry physical index",
                     )
         elif issue == 55:
             answers = require_object_list(payload.get("answers"), "Issue 55 answers")

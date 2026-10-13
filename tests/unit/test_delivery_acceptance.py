@@ -198,6 +198,10 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                 "attempt_id": "retry-attempt",
                 "source_sha256": "source",
                 "manifest_sha256": "retry-manifest",
+                "searchable": {
+                    "index_status": "active",
+                    "physical_index_ref": "sqlite_vec:retry",
+                },
             }
         fault_rows.append(row)
     answer_base = {
@@ -308,6 +312,7 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                         "index_status": "active",
                         "physical_index_ref": f"sqlite_vec:{kind}",
                     },
+                    "elapsed_ms": 1000,
                 }
                 for kind in ("worker", "gateway")
             ],
