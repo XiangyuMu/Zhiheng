@@ -249,6 +249,7 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
             },
             "parsed": {
                 "state": "parsed",
+                "backend": "mineru",
                 "attempt_id": "attempt",
                 "evidence_object_id": "evidence",
                 "source_sha256": "source",
@@ -293,6 +294,7 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                     "model_revision": "rev",
                     "dimension": 1024,
                     "purpose": "retrieval",
+                    "index_status": "active",
                     "physical_index_ref": "sqlite_vec:1",
                 },
             },
@@ -351,6 +353,7 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                     "proof": {
                         "kind": kind,
                         "task_id": f"restart-{kind}",
+                        "sha": "same-sha",
                         "observed_identity": f"{kind}-identity",
                         "ready": True,
                     },
@@ -504,6 +507,40 @@ def test_stage_evidence_requires_manual_retry_and_answer_audit(tmp_path: Path) -
     answers[0].pop("answer_audit_id")
     write_payloads(tmp_path, payloads)
     with pytest.raises(ValueError, match="answer audit"):
+        module.validate_stage_evidence(tmp_path, evidence_matrix(), "same-sha")
+
+
+@pytest.mark.parametrize(
+    ("issue", "mutate", "message"),
+    [
+        (52, lambda payloads: payloads[52]["parsed"].__setitem__("backend", "deepdoc"), "MinerU"),
+        (
+            53,
+            lambda payloads: payloads[53]["detail"]["retrieval_generation"].__setitem__(
+                "index_status", "building"
+            ),
+            "active",
+        ),
+        (
+            54,
+            lambda payloads: payloads[54]["restarts"][0]["proof"].__setitem__(
+                "sha", "old-sha"
+            ),
+            "final SHA",
+        ),
+    ],
+)
+def test_stage_evidence_rejects_unqualified_pdf_proofs(
+    tmp_path: Path,
+    issue: int,
+    mutate: Any,
+    message: str,
+) -> None:
+    module = collector()
+    payloads = copy.deepcopy(valid_payloads())
+    mutate(payloads)
+    write_payloads(tmp_path, payloads)
+    with pytest.raises(ValueError, match=message):
         module.validate_stage_evidence(tmp_path, evidence_matrix(), "same-sha")
 
 

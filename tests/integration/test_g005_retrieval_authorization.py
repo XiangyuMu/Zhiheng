@@ -459,3 +459,91 @@ def test_vector_retriever_filters_against_serving_view(tmp_path: Path) -> None:
         )
 
     assert [hit.chunk_id for hit in hits] == [kept_chunk]
+
+
+class _FixedLexical:
+    def __init__(self, candidate: RetrievalCandidate) -> None:
+        self._candidate = candidate
+
+    def search(
+        self,
+        session: Session,
+        query: str,
+        *,
+        limit: int,
+        filters: RetrievalFilters | None = None,
+    ) -> list[RetrievalCandidate]:
+        del session, query, limit, filters
+        return [self._candidate]
+
+
+class _EmptyVector:
+    def search(
+        self,
+        session: Session,
+        query_embedding: Sequence[float],
+        *,
+        generation_id: str,
+        limit: int,
+        filters: RetrievalFilters | None = None,
+    ) -> list[RetrievalCandidate]:
+        del session, query_embedding, generation_id, limit, filters
+        return []
+
+
+def test_title_filter_expands_before_top_k_and_finds_formal_source(tmp_path: Path) -> None:
+    """A titled source remains findable when lexical top-k excludes it."""
+    session_factory = _migrated_session_factory(tmp_path)
+    artifacts = stored_text_artifacts(tmp_path, "标题限定的正式内容应当可检索。")
+
+    with session_scope(session_factory) as session:
+        decoy_chunk = _ingest(
+            session,
+            artifacts=stored_text_artifacts(tmp_path / "decoy", "无关内容。"),
+            title="无关资料",
+            text_value="无关内容。",
+        )
+        target_chunk = _ingest(
+            session,
+            artifacts=artifacts,
+            title="目标资料",
+            text_value="标题限定的正式内容应当可检索。",
+        )
+        decoy = _candidate_from_chunk(session, decoy_chunk)
+        retriever = HybridRetriever(lexical=_FixedLexical(decoy), vector=_EmptyVector())
+
+        result = retriever.search_offline(
+            session,
+            "目标资料",
+            limit=1,
+            filters=RetrievalFilters(title="目标资料"),
+        )
+
+        assert [chunk.chunk_id for chunk in result.manifest.chunks] == [target_chunk]
+
+
+def test_title_filter_rejects_ambiguous_duplicate_titles(tmp_path: Path) -> None:
+    session_factory = _migrated_session_factory(tmp_path)
+
+    with session_scope(session_factory) as session:
+        _ingest(
+            session,
+            artifacts=stored_text_artifacts(tmp_path / "first", "第一份同名资料。"),
+            title="重复标题",
+            text_value="第一份同名资料。",
+        )
+        _ingest(
+            session,
+            artifacts=stored_text_artifacts(tmp_path / "second", "第二份同名资料。"),
+            title="重复标题",
+            text_value="第二份同名资料。",
+        )
+
+        result = HybridRetriever(vector=_EmptyVector()).search_offline(
+            session,
+            "重复标题",
+            limit=5,
+            filters=RetrievalFilters(title="重复标题"),
+        )
+
+        assert result.manifest.chunks == ()

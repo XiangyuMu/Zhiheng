@@ -313,6 +313,8 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
             parsed = require_dict(payload.get("parsed"), "Issue 52 parsed")
             if parsed.get("state") not in {"parsed", "succeeded"}:
                 raise ValueError("Issue 52 evidence does not prove a parsed terminal state")
+            if parsed.get("backend") != "mineru":
+                raise ValueError("Issue 52 evidence does not prove MinerU parsing")
             require_nonempty(parsed.get("attempt_id"), "Issue 52 parsed.attempt_id")
             if parsed.get("evidence_object_id") != receipt_body.get("evidence_object_id"):
                 raise ValueError("Issue 52 parsed evidence object is not bound to receipt")
@@ -365,6 +367,8 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
             generation = require_dict(
                 detail.get("retrieval_generation"), "Issue 53 retrieval_generation"
             )
+            if generation.get("index_status") != "active":
+                raise ValueError("Issue 53 retrieval generation is not active")
             require_nonempty(generation.get("model_id"), "Issue 53 retrieval model_id")
             provider_id = require_nonempty(
                 generation.get("provider_id"), "Issue 53 retrieval provider_id"
@@ -472,6 +476,8 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                     or proof.get("task_id") != scenario_receipt.get("task_id")
                 ):
                     raise ValueError("Issue 54 restart proof is not bound to current task")
+                if proof.get("sha") != sha:
+                    raise ValueError("Issue 54 restart proof is not bound to final SHA")
                 if proof.get("ready") is not True and proof.get("observed_ready") is not True:
                     raise ValueError("Issue 54 restart proof is missing readiness")
                 if not (

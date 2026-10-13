@@ -208,28 +208,49 @@ class HybridRetriever:
             # Otherwise a source with many similarly named chunks can be
             # absent from the lexical/vector top-k and become impossible to
             # answer even though it is formally searchable.
-            source_rows = session.execute(
+            # Resolve the title from the chunk projection so event-memory
+            # sources remain eligible alongside knowledge objects.  Knowledge
+            # objects still need their stricter formal qualification; other
+            # source types are passed to the normal authorizer below.
+            title_rows = session.execute(
                 text(
-                    "SELECT ko.id AS source_id, ko.current_version_id AS source_version_id "
-                    "FROM knowledge_objects ko "
-                    f"WHERE ko.title = :title AND {formal_searchable_sql('ko')}"
+                    "SELECT DISTINCT source_type, source_id, source_version_id "
+                    "FROM chunks WHERE title = :title AND status = 'ready'"
                 ),
                 {"title": filters.title},
             ).mappings().all()
-            identities = {
-                ("knowledge_object", str(row["source_id"]), str(row["source_version_id"]))
-                for row in source_rows
-            }
+            identities: set[tuple[str, str, str]] = set()
+            for row in title_rows:
+                candidate_identity = (
+                    str(row["source_type"]),
+                    str(row["source_id"]),
+                    str(row["source_version_id"]),
+                )
+                if candidate_identity[0] != "knowledge_object":
+                    identities.add(candidate_identity)
+                    continue
+                qualified = session.execute(
+                    text(
+                        "SELECT 1 FROM knowledge_objects ko "
+                        f"WHERE ko.id = :source_id AND ko.current_version_id = :source_version_id "
+                        f"AND {formal_searchable_sql('ko')}"
+                    ),
+                    {
+                        "source_id": candidate_identity[1],
+                        "source_version_id": candidate_identity[2],
+                    },
+                ).first()
+                if qualified is not None:
+                    identities.add(candidate_identity)
+            identity: tuple[str, str, str] | None = None
             if len(identities) != 1:
                 # Never answer an ambiguous or unavailable title query with a
                 # mixture of same-named sources.
                 candidates = []
-                identities = set()
-            identity = next(iter(identities), None)
-            rows: list[Mapping[str, object]]
-            if identity is None:
-                rows = []
             else:
+                identity = next(iter(identities))
+            rows: list[dict[str, object]] = []
+            if identity is not None:
                 candidates = [
                     candidate
                     for candidate in candidates
@@ -254,17 +275,17 @@ class HybridRetriever:
                     ).mappings()
                 ]
             known = {candidate.chunk_id for candidate in candidates}
-            for index, row in enumerate(rows, start=1):
-                chunk_id = str(row["id"])
+            for index, db_row in enumerate(rows, start=1):
+                chunk_id = str(db_row["id"])
                 if chunk_id in known:
                     continue
                 candidates.append(
                     RetrievalCandidate(
-                        source_type=str(row["source_type"]),
-                        source_id=str(row["source_id"]),
-                        source_version_id=str(row["source_version_id"]),
+                        source_type=str(db_row["source_type"]),
+                        source_id=str(db_row["source_id"]),
+                        source_version_id=str(db_row["source_version_id"]),
                         chunk_id=chunk_id,
-                        confirmation_generation=int(str(row["confirmation_generation"])),
+                        confirmation_generation=int(str(db_row["confirmation_generation"])),
                         generation=None,
                         rank=index,
                         score=0.0,
