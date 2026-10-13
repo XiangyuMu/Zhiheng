@@ -8,6 +8,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { chromium } = require('playwright');
+const { containsAccountNumber } = require('./answer_safety.cjs');
 const [base, output, ...files] = process.argv.slice(2);
 if (!base || !output || files.length !== 2 || !['localhost', '127.0.0.1'].includes(new URL(base).hostname)) throw Error('Expected local URL, private output directory and two files');
 if (fs.existsSync(output)) throw Error('Evidence output directory must be new; preserve prior runs');
@@ -25,6 +26,7 @@ const saveReport = () => fs.writeFileSync(
   JSON.stringify(report, null, 2),
   { mode: 0o600 },
 );
+
 (async () => {
   let browser;
   let page;
@@ -319,7 +321,7 @@ const saveReport = () => fs.writeFileSync(
         if (!/(没有|不足|无法|未提供|未找到|证据)/.test(answer.answer)) {
           throw Error('negative answer did not state evidence insufficiency');
         }
-        if (/(\d{10,}|银行卡|银行账户).*(\d{6,})/.test(answer.answer)) {
+        if (containsAccountNumber(answer.answer)) {
           throw Error('negative answer appears to fabricate an account number');
         }
       }
