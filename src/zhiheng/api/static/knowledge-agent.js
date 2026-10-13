@@ -1514,7 +1514,9 @@ function openProviderEditor(provider) {
 $("provider-kind").addEventListener("change", () => {
   const definition = state.providerRegistry.find((item) => item.provider_id === $("provider-kind").value);
   if (!definition || state.providerEditing) return;
-  $("provider-name").value = definition.display_name;
+  const currentName = $("provider-name").value.trim();
+  const isRegistryName = state.providerRegistry.some((item) => item.display_name === currentName);
+  if (!currentName || isRegistryName) $("provider-name").value = definition.display_name;
   $("provider-base-url").value = definition.default_base_url;
   showToast(definition.implementation_status === "unsupported" ? "该 Provider 已登记但当前协议暂不支持" : `已载入 ${definition.display_name} 预设`);
 });
