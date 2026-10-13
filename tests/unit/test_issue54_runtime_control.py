@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -104,6 +105,7 @@ def test_proxy_forwards_real_submission_then_injects_status_fault(tmp_path: Path
         )
         assert submission.status == 202
         assert json.loads(submission.read())["task_id"] == "upstream-1"
+        time.sleep(0.6)
         status = urlopen(f"{base}/tasks/upstream-1", timeout=5)
         assert status.status == 200
         assert json.loads(status.read())["status"] == "failed"

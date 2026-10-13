@@ -219,6 +219,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                             return
                         armed_value["fault_task_id"] = current_task_id or upstream_task_id
                         armed_value["active"] = True
+                        armed_value["active_at"] = time.time()
                 self.server.control.observe(
                     self.command,
                     path,
@@ -228,7 +229,17 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self.server.control.update(activate)
                 self._send(*forwarded)
                 return
-            if task_id and armed.get("active") and path.startswith(f"/tasks/{task_id}"):
+            active_at = armed.get("active_at")
+            fault_ready = (
+                isinstance(active_at, (int, float))
+                and time.time() - active_at >= 0.5
+            )
+            if (
+                task_id
+                and armed.get("active")
+                and fault_ready
+                and path.startswith(f"/tasks/{task_id}")
+            ):
                 fault = _fault_response(str(armed.get("category")), path)
         if fault is None:
             response = self.server.forward(self.command, path, body, self.headers)
