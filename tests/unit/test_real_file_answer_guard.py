@@ -4,7 +4,6 @@ import json
 import subprocess
 from pathlib import Path
 
-
 ROOT = Path(__file__).parents[2]
 GUARD = ROOT / "tests" / "e2e" / "answer_safety.cjs"
 
