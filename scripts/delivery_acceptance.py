@@ -736,7 +736,13 @@ def main() -> int:
             if name == "mineru-warmup"
             else args.timeout + 30
         )
-        result = execute(repo, output, name, command, timeout, env)
+        step_env = env
+        if name == "pytest":
+            # Unit/integration fixtures assert the application default parser;
+            # the MinerU backend is configured only for real PDF stages below.
+            step_env = dict(env)
+            step_env.pop("ZHIHENG_PDF_PARSER_BACKEND", None)
+        result = execute(repo, output, name, command, timeout, step_env)
         report["steps"].append(result)
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         if (
