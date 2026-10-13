@@ -177,6 +177,7 @@ with sqlite3.connect(sys.argv[1]) as db:
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
         answer: "restored provider answer",
+        answerability: "supported",
         claims: [],
         conflicts: [],
         assumptions: [],
