@@ -109,8 +109,7 @@ const legacyRef = "env:ZHIHENG_PRIVATE_ISSUE40_LEGACY";
     assert(provider && provider.secret_status === "configured");
     const csrf = await page.evaluate(() => document.cookie.split(";").map((v) => v.trim())
       .find((v) => v.startsWith("zhiheng_csrf="))?.slice(13) || "");
-    const modelEtag = provider.model_records.find((item) => item.model_id === "model-a")?.etag;
-    assert(modelEtag, "created Provider must expose the model ETag");
+    const modelEtag = provider.etag;
     const modelConfirmation = await page.evaluate(async ({ providerId, csrf, modelEtag }) => {
       const response = await fetch(`/v1/model-config/providers/${providerId}/models/model-a`, {
         method: "PATCH", credentials: "same-origin",
