@@ -492,9 +492,14 @@ def _filter_authorized_chunks(
     knowledge_ids = sorted(
         {str(chunk.source_id) for chunk in chunks if chunk.source_type == "knowledge_object"}
     )
-    event_ids = sorted(
-        {str(chunk.source_id) for chunk in chunks if chunk.source_type == "event_memory"}
+    event_pairs = sorted(
+        {
+            (str(chunk.source_id), str(chunk.source_version_id))
+            for chunk in chunks
+            if chunk.source_type == "event_memory"
+        }
     )
+    event_ids = sorted({source_id for source_id, _version_id in event_pairs})
     conditions = ["ko.id IN (SELECT value FROM json_each(:retrieval_ids))"]
     params: dict[str, object] = {
         "retrieval_ids": json.dumps(knowledge_ids, ensure_ascii=False)
@@ -525,14 +530,14 @@ def _filter_authorized_chunks(
         if knowledge_ids
         else set()
     )
-    allowed_events: set[str] = set()
+    allowed_events: set[tuple[str, str]] = set()
     if event_ids and filters.domain_id is None:
         event_conditions = ["e.id IN (SELECT value FROM json_each(:event_ids))"]
         event_params: dict[str, object] = {
             "event_ids": json.dumps(event_ids, ensure_ascii=False)
         }
         if filters.title is not None:
-            event_conditions.append("e.title = :event_title")
+            event_conditions.append("v.title = :event_title")
             event_params["event_title"] = filters.title
         for name, operator, value in (
             ("created_at", ">=", filters.created_from),
@@ -545,9 +550,16 @@ def _filter_authorized_chunks(
                 event_conditions.append(f"e.{name} {operator} :{key}")
                 event_params[key] = value.isoformat()
         allowed_events = {
-            str(row[0])
+            (str(row[0]), str(row[1]))
             for row in session.execute(
-                text("SELECT e.id FROM event_memories e WHERE " + " AND ".join(event_conditions)),
+                text(
+                    "SELECT e.id, v.id FROM event_memories e "
+                    "JOIN event_memory_versions v ON v.event_memory_id = e.id "
+                    "AND v.version_no = (SELECT max(current_v.version_no) "
+                    "FROM event_memory_versions current_v "
+                    "WHERE current_v.event_memory_id = e.id) "
+                    "WHERE " + " AND ".join(event_conditions)
+                ),
                 event_params,
             )
         }
@@ -555,5 +567,8 @@ def _filter_authorized_chunks(
         chunk
         for chunk in chunks
         if (chunk.source_type == "knowledge_object" and chunk.source_id in allowed_knowledge)
-        or (chunk.source_type == "event_memory" and chunk.source_id in allowed_events)
+        or (
+            chunk.source_type == "event_memory"
+            and (chunk.source_id, chunk.source_version_id) in allowed_events
+        )
     ]
