@@ -268,10 +268,6 @@ with sqlite3.connect(sys.argv[1]) as db:
         return { status: response.status, body: await response.json() };
       });
       evidence.answer = answer.body;
-      evidence.answer_audits = await page.evaluate(async ({ providerId }) => {
-        const response = await fetch(`/v1/model-config/audits?provider_id=${providerId}`);
-        return { status: response.status, body: await response.json() };
-      }, { providerId: provider.provider_id });
       assert.equal(answer.status, 200, JSON.stringify(answer.body));
       assert.match(answer.body.answer, /restored provider answer/);
       assert.deepEqual(receivedAuth.at(-1), "Bearer issue40-browser-legacy-key");

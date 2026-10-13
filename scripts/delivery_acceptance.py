@@ -742,6 +742,17 @@ def main() -> int:
             # the MinerU backend is configured only for real PDF stages below.
             step_env = dict(env)
             step_env.pop("ZHIHENG_PDF_PARSER_BACKEND", None)
+            # Route identities are acceptance-only inputs.  Keeping them out of
+            # the generic pytest process prevents fixture payloads from being
+            # interpreted as real-provider evidence and makes the full gate
+            # independent of whichever provider is configured for the run.
+            for key in (
+                "ZHIHENG_EXPECTED_ANSWER_PROVIDER_ID",
+                "ZHIHENG_EXPECTED_ANSWER_MODEL_ID",
+                "ZHIHENG_EXPECTED_EMBEDDING_PROVIDER_ID",
+                "ZHIHENG_EXPECTED_EMBEDDING_MODEL_ID",
+            ):
+                step_env.pop(key, None)
         result = execute(repo, output, name, command, timeout, step_env)
         report["steps"].append(result)
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
