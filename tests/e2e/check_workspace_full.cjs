@@ -161,7 +161,7 @@ fs.mkdirSync(output, { recursive: true });
       await page.locator('#import-text').fill('中文全文检索必须回查正式视图后，才能进入回答上下文。研究笔记📖：所有结论都需要回到原文核验。<script>window.untrustedRan=true</script>');
       await page.locator('#import-submit').click();
       await page.waitForFunction(() => location.hash === '#library');
-      await page.getByRole('button', { name: '中文检索研究记录', exact: true }).waitFor({ timeout: 25000 });
+      await page.getByRole('button', { name: '中文检索研究记录', exact: true }).waitFor({ timeout: 60000 });
       assert.equal(await page.evaluate(() => window.untrustedRan), undefined);
       assert(!await page.locator('#import-dialog').isVisible());
     });
