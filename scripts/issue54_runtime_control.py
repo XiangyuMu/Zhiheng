@@ -214,7 +214,10 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 def activate(value: dict[str, Any]) -> None:
                     armed_value = value.get("armed")
                     if isinstance(armed_value, dict) and upstream_task_id:
-                        armed_value["fault_task_id"] = upstream_task_id
+                        current_task_id = armed_value.get("fault_task_id")
+                        if current_task_id and current_task_id != upstream_task_id:
+                            return
+                        armed_value["fault_task_id"] = current_task_id or upstream_task_id
                         armed_value["active"] = True
                 self.server.control.observe(
                     self.command,
