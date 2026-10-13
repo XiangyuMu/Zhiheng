@@ -227,6 +227,22 @@ class HybridRetriever:
                     str(row["source_version_id"]),
                 )
                 if candidate_identity[0] != "knowledge_object":
+                    if candidate_identity[0] == "event_memory":
+                        event_ready = session.execute(
+                            text(
+                                "SELECT 1 FROM event_memories e "
+                                "JOIN event_memory_versions v "
+                                "ON v.event_memory_id = e.id AND v.id = :source_version_id "
+                                "JOIN event_memory_evidence ev ON ev.event_version_id = v.id "
+                                "WHERE e.id = :source_id AND e.status = 'formal_current'"
+                            ),
+                            {
+                                "source_id": candidate_identity[1],
+                                "source_version_id": candidate_identity[2],
+                            },
+                        ).first()
+                        if event_ready is None:
+                            continue
                     identities.add(candidate_identity)
                     continue
                 qualified = session.execute(
@@ -473,9 +489,16 @@ def _filter_authorized_chunks(
 ) -> list[AuthorizedChunk]:
     if not chunks or filters is None or filters.is_empty():
         return list(chunks)
-    ids = sorted({str(chunk.source_id) for chunk in chunks})
+    knowledge_ids = sorted(
+        {str(chunk.source_id) for chunk in chunks if chunk.source_type == "knowledge_object"}
+    )
+    event_ids = sorted(
+        {str(chunk.source_id) for chunk in chunks if chunk.source_type == "event_memory"}
+    )
     conditions = ["ko.id IN (SELECT value FROM json_each(:retrieval_ids))"]
-    params: dict[str, object] = {"retrieval_ids": json.dumps(ids, ensure_ascii=False)}
+    params: dict[str, object] = {
+        "retrieval_ids": json.dumps(knowledge_ids, ensure_ascii=False)
+    }
     if filters.domain_id is not None:
         conditions.append("ko.primary_domain_id = :retrieval_domain_id")
         params["retrieval_domain_id"] = filters.domain_id
@@ -491,11 +514,46 @@ def _filter_authorized_chunks(
             params[key] = value.isoformat()
     from sqlalchemy import text
 
-    allowed = {
-        str(row[0])
-        for row in session.execute(
-            text("SELECT ko.id FROM knowledge_objects ko WHERE " + " AND ".join(conditions)),
-            params,
-        )
-    }
-    return [chunk for chunk in chunks if chunk.source_id in allowed]
+    allowed_knowledge = (
+        {
+            str(row[0])
+            for row in session.execute(
+                text("SELECT ko.id FROM knowledge_objects ko WHERE " + " AND ".join(conditions)),
+                {**params, "retrieval_ids": json.dumps(knowledge_ids, ensure_ascii=False)},
+            )
+        }
+        if knowledge_ids
+        else set()
+    )
+    allowed_events: set[str] = set()
+    if event_ids and filters.domain_id is None:
+        event_conditions = ["e.id IN (SELECT value FROM json_each(:event_ids))"]
+        event_params: dict[str, object] = {
+            "event_ids": json.dumps(event_ids, ensure_ascii=False)
+        }
+        if filters.title is not None:
+            event_conditions.append("e.title = :event_title")
+            event_params["event_title"] = filters.title
+        for name, operator, value in (
+            ("created_at", ">=", filters.created_from),
+            ("created_at", "<=", filters.created_to),
+            ("updated_at", ">=", filters.updated_from),
+            ("updated_at", "<=", filters.updated_to),
+        ):
+            if value is not None:
+                key = f"event_{name}_{operator[0]}"
+                event_conditions.append(f"e.{name} {operator} :{key}")
+                event_params[key] = value.isoformat()
+        allowed_events = {
+            str(row[0])
+            for row in session.execute(
+                text("SELECT e.id FROM event_memories e WHERE " + " AND ".join(event_conditions)),
+                event_params,
+            )
+        }
+    return [
+        chunk
+        for chunk in chunks
+        if (chunk.source_type == "knowledge_object" and chunk.source_id in allowed_knowledge)
+        or (chunk.source_type == "event_memory" and chunk.source_id in allowed_events)
+    ]

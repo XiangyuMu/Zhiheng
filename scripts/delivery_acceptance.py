@@ -369,13 +369,18 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
             )
             if generation.get("index_status") != "active":
                 raise ValueError("Issue 53 retrieval generation is not active")
-            require_nonempty(generation.get("model_id"), "Issue 53 retrieval model_id")
             provider_id = require_nonempty(
                 generation.get("provider_id"), "Issue 53 retrieval provider_id"
             )
             expected_provider = os.environ.get("ZHIHENG_EXPECTED_EMBEDDING_PROVIDER_ID")
             if expected_provider and provider_id != expected_provider:
                 raise ValueError("Issue 53 embedding provider differs from the configured route")
+            model_id = require_nonempty(
+                generation.get("model_id"), "Issue 53 retrieval model_id"
+            )
+            expected_model = os.environ.get("ZHIHENG_EXPECTED_EMBEDDING_MODEL_ID")
+            if expected_model and model_id != expected_model:
+                raise ValueError("Issue 53 embedding model differs from the configured route")
             require_nonempty(
                 generation.get("model_revision"), "Issue 53 retrieval model_revision"
             )
