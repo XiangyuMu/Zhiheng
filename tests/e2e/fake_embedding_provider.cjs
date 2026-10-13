@@ -12,7 +12,7 @@ const server = https.createServer({ cert: fs.readFileSync(certPath), key: fs.rea
   }
   if (request.method === 'POST' && request.url === '/embeddings') {
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ data: [{ embedding: [1, ...Array(1023).fill(0)] }] }));
+    response.end(JSON.stringify({ data: [{ index: 0, embedding: [1, ...Array(1023).fill(0)] }] }));
     return;
   }
   response.writeHead(404, { 'content-type': 'application/json' });
