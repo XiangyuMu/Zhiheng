@@ -74,6 +74,30 @@ def test_collector_bounds_hung_step(tmp_path: Path) -> None:
     assert result["seconds"] < 10
 
 
+def test_collector_preserves_process_group_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = collector()
+    original_killpg = module.os.killpg
+
+    def deny_cleanup(pid: int, signal_number: int) -> None:
+        if signal_number == module.signal.SIGTERM:
+            raise PermissionError("cleanup denied")
+        original_killpg(pid, signal_number)
+
+    monkeypatch.setattr(module.os, "killpg", deny_cleanup)
+    result = module.execute(
+        tmp_path,
+        tmp_path,
+        "cleanup-failure",
+        [sys.executable, "-c", "print('done')"],
+        5,
+        module.clean_environment(),
+    )
+    assert result["status"] == "failed"
+    assert "SIGTERM: cleanup denied" in result["cleanup_error"]
+
+
 @pytest.mark.parametrize("profile,backend", [("pdf", "mineru"), ("deepdoc", "deepdoc")])
 def test_parser_profile_maps_to_supported_application_backend(profile: str, backend: str) -> None:
     assert collector().parser_backend(profile) == backend

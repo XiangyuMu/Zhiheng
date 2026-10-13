@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import hashlib
 import json
 import math
@@ -176,14 +175,31 @@ def execute(
                 "timeout" if isinstance(error, subprocess.TimeoutExpired) else "interrupted"
             )
         finally:
-            # A child can outlive its leader. Always terminate the complete session.
-            with contextlib.suppress(ProcessLookupError, PermissionError):
+            # A child can outlive its leader. Terminate the complete session,
+            # while preserving cleanup failures in the acceptance evidence.
+            cleanup_errors: list[str] = []
+            try:
                 os.killpg(process.pid, signal.SIGTERM)
-            with contextlib.suppress(subprocess.TimeoutExpired):
+            except ProcessLookupError:
+                pass
+            except OSError as error:
+                cleanup_errors.append(f"SIGTERM: {error}")
+            try:
                 process.wait(timeout=5)
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except OSError as error:
+                    cleanup_errors.append(f"SIGKILL: {error}")
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    cleanup_errors.append("process group remained alive after SIGKILL")
+            if cleanup_errors:
+                result["status"] = "failed"
+                result["cleanup_error"] = "; ".join(cleanup_errors)
         result["exit_code"] = process.returncode
         result["seconds"] = round(time.monotonic() - started, 3)
     return result
@@ -445,10 +461,10 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                 if before == after:
                     raise ValueError("Issue 54 restart process identity did not change")
                 proof = require_dict(restart.get("proof"), "Issue 54 restart proof")
-                scenario = scenario_by_kind.get(restart.get("kind"))
+                restart_scenario = scenario_by_kind.get(restart.get("kind"))
                 scenario_receipt = (
-                    require_dict(scenario.get("receipt"), "Issue 54 scenario receipt")
-                    if scenario
+                    require_dict(restart_scenario.get("receipt"), "Issue 54 scenario receipt")
+                    if restart_scenario
                     else {}
                 )
                 if (

@@ -6,7 +6,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from inspect import Parameter, signature
-from typing import Any, Protocol
+from typing import Protocol
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -226,7 +226,7 @@ class HybridRetriever:
                 candidates = []
                 identities = set()
             identity = next(iter(identities), None)
-            rows: Any
+            rows: list[Mapping[str, object]]
             if identity is None:
                 rows = []
             else:
@@ -236,20 +236,23 @@ class HybridRetriever:
                     if (candidate.source_type, candidate.source_id, candidate.source_version_id)
                     == identity
                 ]
-                rows = session.execute(
-                    text(
-                        "SELECT id, source_type, source_id, source_version_id, "
-                        "confirmation_generation FROM chunks WHERE title = :title "
-                        "AND source_type = :source_type AND source_id = :source_id "
-                        "AND source_version_id = :source_version_id AND status = 'ready'"
-                    ),
-                    {
-                        "title": filters.title,
-                        "source_type": identity[0],
-                        "source_id": identity[1],
-                        "source_version_id": identity[2],
-                    },
-                ).mappings()
+                rows = [
+                    dict(row)
+                    for row in session.execute(
+                        text(
+                            "SELECT id, source_type, source_id, source_version_id, "
+                            "confirmation_generation FROM chunks WHERE title = :title "
+                            "AND source_type = :source_type AND source_id = :source_id "
+                            "AND source_version_id = :source_version_id AND status = 'ready'"
+                        ),
+                        {
+                            "title": filters.title,
+                            "source_type": identity[0],
+                            "source_id": identity[1],
+                            "source_version_id": identity[2],
+                        },
+                    ).mappings()
+                ]
             known = {candidate.chunk_id for candidate in candidates}
             for index, row in enumerate(rows, start=1):
                 chunk_id = str(row["id"])
@@ -261,7 +264,7 @@ class HybridRetriever:
                         source_id=str(row["source_id"]),
                         source_version_id=str(row["source_version_id"]),
                         chunk_id=chunk_id,
-                        confirmation_generation=int(row["confirmation_generation"]),
+                        confirmation_generation=int(str(row["confirmation_generation"])),
                         generation=None,
                         rank=index,
                         score=0.0,
