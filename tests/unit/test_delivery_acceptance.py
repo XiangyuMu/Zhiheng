@@ -7,7 +7,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -501,3 +501,89 @@ def test_runtime_checkout_is_preserved_for_real_restart_commands(
 ) -> None:
     monkeypatch.setenv("ZHIHENG_RUNTIME_CHECKOUT", "/isolated/checkout")
     assert collector().clean_environment()["ZHIHENG_RUNTIME_CHECKOUT"] == "/isolated/checkout"
+
+
+def test_executor_timeout_reaps_shell_descendants(tmp_path: Path) -> None:
+    import shlex
+    import subprocess
+    import time
+
+    module = collector()
+    pid_file = tmp_path / "child.pid"
+    child = "import time; print('child ready', flush=True); time.sleep(60)"
+    command = (
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(child)} & "
+        f"echo $! > {shlex.quote(str(pid_file))}; wait"
+    )
+    result = module.execute(
+        tmp_path, tmp_path, "descendant", ["bash", "-c", command], 1,
+        module.clean_environment(),
+    )
+    assert result["status"] == "timeout"
+    pid = int(pid_file.read_text())
+    state = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True,
+    )
+    assert state.returncode != 0 or state.stdout.strip().startswith("Z")
+    log = tmp_path / "descendant.log"
+    original = log.read_bytes()
+    assert b"child ready" in original
+    time.sleep(0.05)
+    assert log.read_bytes() == original
+
+
+@pytest.mark.parametrize("outcome", ["success", "nonzero", "timeout"])
+def test_restart_result_is_private_and_failure_stops_pdf_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str,
+) -> None:
+    import hashlib
+    import shlex
+
+    module = collector()
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    output = tmp_path / "evidence"
+    marker = "SYNTHETIC_PRIVATE_RESTART_ARGUMENT"
+    code = {
+        "success": "raise SystemExit(0)",
+        "nonzero": "raise SystemExit(7)",
+        "timeout": "import time; time.sleep(60)",
+    }[outcome]
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(code)} {marker}"
+    monkeypatch.setenv("ZHIHENG_RESTART_WORKER_COMMAND", command)
+    monkeypatch.setattr(sys, "argv", ["delivery", "--output", str(output)])
+    monkeypatch.setattr(module, "git", lambda root, *args: (
+        str(repo) if args == ("rev-parse", "--show-toplevel") else
+        "same-sha" if args == ("rev-parse", "HEAD") else ""
+    ))
+    monkeypatch.setattr(module, "load_pdf_evidence_matrix", lambda root: evidence_matrix())
+    monkeypatch.setattr(module, "mineru_command", lambda *args: ["synthetic"])
+    calls: list[str] = []
+    execute = module.execute
+
+    def run(root: Path, dest: Path, name: str, argv: list[str],
+            timeout: float | None, env: dict[str, str]) -> dict[str, Any]:
+        calls.append(name)
+        if name == "pdf-worker-restart":
+            return cast(dict[str, Any], execute(root, dest, name, argv, 0.3, env))
+        return {"name": name, "command": argv, "status": "passed", "exit_code": 0,
+                "seconds": 0.01}
+
+    monkeypatch.setattr(module, "execute", run)
+    module.main()
+    serialized = (output / "report.json").read_text()
+    assert marker not in serialized
+    report = json.loads(serialized)
+    step = next(s for s in report["steps"] if s["name"] == "pdf-parse")
+    restart = step["runtime_restart"]
+    assert "command" not in restart
+    assert restart["command_sha256"] == hashlib.sha256(command.encode()).hexdigest()
+    assert restart["status"] == {
+        "success": "passed", "nonzero": "failed", "timeout": "timeout",
+    }[outcome]
+    assert ("pdf-parse" in calls) == (outcome == "success")
+    if outcome == "nonzero":
+        assert restart["exit_code"] == 7
+    if outcome != "success":
+        assert report["status"] == "failed"
+        assert "pdf-search" not in calls
