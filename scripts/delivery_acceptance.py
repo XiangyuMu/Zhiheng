@@ -74,6 +74,7 @@ def clean_environment() -> dict[str, str]:
         "ZHIHENG_PDF_EXPECTATION_FILE",
         "ZHIHENG_REAL_FILE_A",
         "ZHIHENG_REAL_FILE_B",
+        "ZHIHENG_RUNTIME_CHECKOUT",
         "ZHIHENG_RESTART_WORKER_COMMAND",
         "ZHIHENG_RESTART_GATEWAY_COMMAND",
         "ZHIHENG_RESTART_WORKER_IDENTITY_COMMAND",
@@ -751,6 +752,7 @@ def main() -> int:
                 "ZHIHENG_EXPECTED_ANSWER_MODEL_ID",
                 "ZHIHENG_EXPECTED_EMBEDDING_PROVIDER_ID",
                 "ZHIHENG_EXPECTED_EMBEDDING_MODEL_ID",
+                "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH",
             ):
                 step_env.pop(key, None)
         result = execute(repo, output, name, command, timeout, step_env)
