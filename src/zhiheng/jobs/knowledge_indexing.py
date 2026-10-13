@@ -8,7 +8,7 @@ import os
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
@@ -22,7 +22,6 @@ from zhiheng.knowledge import KnowledgeRepository
 from zhiheng.knowledge.pdf_worker import ParserTerminalFailure
 from zhiheng.models.configuration import embedding_route
 from zhiheng.models.embeddings import (
-    EmbeddingTransportError,
     OpenAIEmbeddingsTransport,
     TransportRoute,
 )
@@ -38,6 +37,7 @@ KNOWLEDGE_JOB_LEASE_SECONDS = 90
 KNOWLEDGE_JOB_HEARTBEAT_SECONDS = 15
 
 logger = logging.getLogger(__name__)
+PROVIDER_EMBED_BATCH_SIZE = 32
 
 
 class TextEmbeddingPort(Protocol):
@@ -137,6 +137,8 @@ class ProviderTextEmbedder:
         dimension: int,
         normalize: bool,
     ) -> list[Sequence[float]]:
+        if not texts:
+            return []
         transport_route = TransportRoute(
             provider_id=self._route["provider_id"],
             provider_kind=self._route["provider_kind"],
@@ -146,16 +148,22 @@ class ProviderTextEmbedder:
             policy_revision=model_revision,
             secret_ref=self._route["secret_ref"] or None,
         )
-        vectors = self._transport.embed(route=transport_route, texts=texts)
-        if len(vectors) != len(texts) or any(len(vector) != dimension for vector in vectors):
-            raise ValueError("embedding response dimension does not match configured index")
-        if not normalize:
-            return cast(list[Sequence[float]], vectors)
-        normalized: list[Sequence[float]] = []
-        for vector in vectors:
-            norm = math.sqrt(sum(value * value for value in vector)) or 1.0
-            normalized.append([value / norm for value in vector])
-        return normalized
+        unique_texts = list(dict.fromkeys(texts))
+        vectors_by_text: dict[str, Sequence[float]] = {}
+        for offset in range(0, len(unique_texts), PROVIDER_EMBED_BATCH_SIZE):
+            batch = unique_texts[offset : offset + PROVIDER_EMBED_BATCH_SIZE]
+            vectors = self._transport.embed(route=transport_route, texts=batch)
+            if len(vectors) != len(batch) or any(
+                len(vector) != dimension for vector in vectors
+            ):
+                raise ValueError("embedding response dimension does not match configured index")
+            for source_text, vector in zip(batch, vectors, strict=True):
+                if normalize:
+                    norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+                    vectors_by_text[source_text] = [value / norm for value in vector]
+                else:
+                    vectors_by_text[source_text] = vector
+        return [vectors_by_text[source_text] for source_text in texts]
 
 
 class BgeM3TextEmbedder:
@@ -826,29 +834,13 @@ class KnowledgeIndexJobExecutor:
             self._chunk_text_by_id(session_factory, chunk.chunk_id) for chunk in serving_chunks
         ]
         if isinstance(embedder, ProviderTextEmbedder):
-            try:
-                vectors = embedder.embed_texts(
-                    chunk_texts,
-                    model_id=embedding_model_id,
-                    model_revision=embedding_model_revision,
-                    dimension=self._settings.embedding_dimension,
-                    normalize=self._settings.embedding_normalize,
-                )
-            except EmbeddingTransportError:
-                logger.warning(
-                    "provider rejected batch embedding request; retrying per text",
-                    extra={"chunk_count": len(chunk_texts)},
-                )
-                vectors = [
-                    embedder.embed_text(
-                        chunk_text,
-                        model_id=embedding_model_id,
-                        model_revision=embedding_model_revision,
-                        dimension=self._settings.embedding_dimension,
-                        normalize=self._settings.embedding_normalize,
-                    )
-                    for chunk_text in chunk_texts
-                ]
+            vectors = embedder.embed_texts(
+                chunk_texts,
+                model_id=embedding_model_id,
+                model_revision=embedding_model_revision,
+                dimension=self._settings.embedding_dimension,
+                normalize=self._settings.embedding_normalize,
+            )
         else:
             vectors = [
                 embedder.embed_text(
