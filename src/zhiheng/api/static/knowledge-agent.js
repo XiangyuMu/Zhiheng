@@ -468,16 +468,6 @@ function fileKind(file) {
 async function submitImportBatch(items) {
   if (!items.length) return null;
   try {
-    for (const item of items) {
-      if (!item.task_id && item.source_id) {
-        try {
-          const processing = await fetchJson(`/v1/knowledge/${encodeURIComponent(item.source_id)}/processing`);
-          if (processing.job_id) item.task_id = processing.job_id;
-        } catch (_) {
-          // The batch remains visible even when the optional projection is not available.
-        }
-      }
-    }
     const response = await mutate("/v1/knowledge/import-batches", {
       items: items.map((item) => ({
         source_id: item.source_id || item.task_id,
