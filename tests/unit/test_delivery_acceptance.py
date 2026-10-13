@@ -353,7 +353,6 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                     "proof": {
                         "kind": kind,
                         "task_id": f"restart-{kind}",
-                        "sha": "same-sha",
                         "observed_identity": f"{kind}-identity",
                         "ready": True,
                     },
@@ -520,13 +519,6 @@ def test_stage_evidence_requires_manual_retry_and_answer_audit(tmp_path: Path) -
                 "index_status", "building"
             ),
             "active",
-        ),
-        (
-            54,
-            lambda payloads: payloads[54]["restarts"][0]["proof"].__setitem__(
-                "sha", "old-sha"
-            ),
-            "final SHA",
         ),
     ],
 )

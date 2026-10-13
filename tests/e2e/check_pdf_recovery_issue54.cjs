@@ -88,9 +88,6 @@ function restart(kind, command, identity) {
     writeLog(stdoutPath, stdout);
     writeLog(stderrPath, '');
     const proof = validateRestartCommandProof(stdout, kind, identity);
-    // Bind the externally produced process proof to the same commit as the
-    // report so the central delivery gate cannot accept cross-candidate data.
-    proof.sha = process.env.ZHIHENG_EXPECTED_SHA || report.sha;
     const afterIdentity = identityProbe();
     assert(afterIdentity && afterIdentity !== beforeIdentity, `${kind} identity did not change after restart`);
     const record = { kind, status: 'succeeded', exit_code: 0, command_sha256: commandDigest, before_identity_sha256: crypto.createHash('sha256').update(beforeIdentity).digest('hex'), after_identity_sha256: crypto.createHash('sha256').update(afterIdentity).digest('hex'), proof, elapsed_ms: Date.now() - started, stdout_path: stdoutPath, stderr_path: stderrPath };

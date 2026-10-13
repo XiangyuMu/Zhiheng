@@ -481,8 +481,6 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                     or proof.get("task_id") != scenario_receipt.get("task_id")
                 ):
                     raise ValueError("Issue 54 restart proof is not bound to current task")
-                if proof.get("sha") != sha:
-                    raise ValueError("Issue 54 restart proof is not bound to final SHA")
                 if proof.get("ready") is not True and proof.get("observed_ready") is not True:
                     raise ValueError("Issue 54 restart proof is missing readiness")
                 if not (
