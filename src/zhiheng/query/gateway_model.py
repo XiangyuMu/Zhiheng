@@ -8,7 +8,8 @@ from typing import Any
 
 from zhiheng.core.ids import sha256_json, sha256_text
 from zhiheng.memory.context import MemoryContextSnapshot
-from zhiheng.models import ModelGateway, ModelGatewayTransportError, ModelRequest
+from zhiheng.models import ModelGateway, ModelRequest
+from zhiheng.models.gateway import ModelGatewayTransportError
 from zhiheng.query.contracts import (
     AnswerClaim,
     GeneratedAnswer,

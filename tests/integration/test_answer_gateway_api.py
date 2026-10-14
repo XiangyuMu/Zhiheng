@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from alembic import command
@@ -234,7 +235,7 @@ def test_answer_api_revoke_after_claim_remains_privacy_denied(
     with session_scope(session_factory) as session:
         _insert_provider(session)
 
-    gateway = client.app.state.model_gateway
+    gateway = cast(Any, client.app).state.model_gateway
     original_revalidate = gateway._revalidate_dispatch_credential
 
     def revoke_then_revalidate(route: object) -> None:
