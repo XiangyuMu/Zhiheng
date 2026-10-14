@@ -21,6 +21,15 @@ def git(repo: Path, *args: str) -> str:
     return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
 
 
+def file_digest(path: Path) -> str:
+    """Return the SHA-256 digest of a file without loading it all at once."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def parser_backend(profile: str) -> str:
     backends = {"pdf": "mineru", "deepdoc": "deepdoc"}
     if profile not in backends:
@@ -271,7 +280,12 @@ def mineru_warmup_timeout() -> float:
     return value
 
 
-def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str) -> None:
+def validate_stage_evidence(
+    output: Path,
+    matrix: list[dict[str, Any]],
+    sha: str,
+    expected_pdf_sha256: str | None = None,
+) -> None:
     """Require each real PDF stage to leave a passed report bound to this SHA."""
     def require_dict(value: Any, label: str) -> dict[str, Any]:
         if not isinstance(value, dict):
@@ -311,6 +325,10 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
             raise ValueError(f"Issue {issue} evidence report did not pass")
         if payload.get("sha") != sha:
             raise ValueError(f"Issue {issue} evidence report is not bound to {sha}")
+        if issue in {52, 53, 54} and expected_pdf_sha256 is not None:
+            source = require_dict(payload.get("input"), f"Issue {issue} input")
+            if source.get("sha256") != expected_pdf_sha256:
+                raise ValueError(f"Issue {issue} input is not bound to the accepted PDF")
         if issue == 52:
             source = require_dict(payload.get("input"), "Issue 52 input")
             source_sha = require_nonempty(source.get("sha256"), "Issue 52 input.sha256")
@@ -604,6 +622,18 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                 or failure.get("boundary") != "model_transport"
             ):
                 raise ValueError("Issue 55 failure proof must be passed, injected and same-SHA")
+            command = failure.get("command")
+            if (
+                not isinstance(command, list)
+                or not command
+                or not all(isinstance(item, str) and item for item in command)
+                or not isinstance(failure.get("input_digest"), str)
+                or len(failure["input_digest"]) != 64
+                or not isinstance(failure.get("elapsed_ms"), (int, float))
+                or failure["elapsed_ms"] <= 0
+                or failure.get("exit_code") != 0
+            ):
+                raise ValueError("Issue 55 failure evidence metadata is incomplete")
             cases = require_object_list(failure.get("cases"), "Issue 55 failure cases")
             expected_failures = {
                 "invalid_output": (
@@ -622,8 +652,13 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                     raise ValueError("Issue 55 failure lacks bounded dispatch or visible UI")
                 for field in ("audit_id", "provider_id", "model_id", "diagnostic_code"):
                     require_nonempty(case.get(field), f"Issue 55 failure {field}")
+                require_nonempty(
+                    case.get("response_diagnostic_code"),
+                    "Issue 55 failure response_diagnostic_code",
+                )
                 if (
                     case["diagnostic_code"] != expected_failures[case["kind"]][1]
+                    or case["response_diagnostic_code"] != expected_failures[case["kind"]][1]
                     or case.get("audit_status") != expected_failures[case["kind"]][2]
                 ):
                     raise ValueError("Issue 55 failure diagnosis or audit status does not match")
@@ -732,6 +767,8 @@ def main() -> int:
     create_evidence_directory(output)
     sha = git(repo, "rev-parse", "HEAD")
     evidence_matrix = load_pdf_evidence_matrix(repo)
+    pdf_path = Path(os.environ.get("ZHIHENG_PDF_FILE", ""))
+    expected_pdf_sha256 = file_digest(pdf_path) if pdf_path.is_file() else None
     env = clean_environment()
     env["ZHIHENG_ACCEPTANCE_OUTPUT"] = str(output / "browser")
     env["ZHIHENG_DELIVERY_EVIDENCE"] = str(output / "recovery")
@@ -900,6 +937,7 @@ def main() -> int:
             output,
             [item for item in evidence_matrix if int(item["issue"]) != 56],
             sha,
+            expected_pdf_sha256,
         )
         report["stage_evidence"] = "passed"
     except ValueError as error:
@@ -922,7 +960,7 @@ def main() -> int:
     # row in the evidence matrix. The final write below replaces this copy.
     write_report(output, report)
     try:
-        validate_stage_evidence(output, evidence_matrix, sha)
+        validate_stage_evidence(output, evidence_matrix, sha, expected_pdf_sha256)
     except ValueError as error:
         report["stage_evidence"] = "failed"
         report["stage_evidence_error"] = str(error)

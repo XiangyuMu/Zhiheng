@@ -687,11 +687,24 @@ def failure_evidence() -> dict[str, Any]:
     return {
         "status": "passed", "sha": "same-sha", "injected": True,
         "boundary": "model_transport",
+        "command": ["node", "tests/e2e/check_answer_failures_issue55.cjs"],
+        "input_digest": "a" * 64,
+        "elapsed_ms": 123,
+        "exit_code": 0,
         "cases": [
-            {"kind": kind, "status": "passed", "stop_reason": stop,
-             "diagnostic_code": code, "audit_id": kind, "provider_id": "provider",
-             "model_id": "model", "dispatch_count": 1, "ui_visible": True,
-             "audit_status": "succeeded" if kind == "invalid_output" else "failed"}
+            {
+                "kind": kind,
+                "status": "passed",
+                "stop_reason": stop,
+                "diagnostic_code": code,
+                "audit_id": kind,
+                "provider_id": "provider",
+                "response_diagnostic_code": code,
+                "model_id": "model",
+                "dispatch_count": 1,
+                "ui_visible": True,
+                "audit_status": "succeeded" if kind == "invalid_output" else "failed",
+            }
             for kind, stop, code in (
                 ("invalid_output", "invalid_model_output", "answer_model_invalid_output"),
                 ("transport_failure", "model_failed", "provider_error"),
@@ -701,7 +714,21 @@ def failure_evidence() -> dict[str, Any]:
 
 
 @pytest.mark.parametrize(
-    "change", ["missing", "sha", "unbounded", "ui", "audit", "wrong_diagnostic", "audit_status"],
+    "change",
+    [
+        "missing",
+        "sha",
+        "unbounded",
+        "ui",
+        "audit",
+        "wrong_diagnostic",
+        "wrong_response_diagnostic",
+        "audit_status",
+        "command",
+        "input_digest",
+        "elapsed_ms",
+        "exit_code",
+    ],
 )
 def test_issue55_requires_same_sha_bounded_failure_proof(tmp_path: Path, change: str) -> None:
     module = collector()
@@ -722,8 +749,31 @@ def test_issue55_requires_same_sha_bounded_failure_proof(tmp_path: Path, change:
             failure["cases"][0]["audit_id"] = ""
         if change == "wrong_diagnostic":
             failure["cases"][1]["diagnostic_code"] = "wrong_but_nonempty"
+        if change == "wrong_response_diagnostic":
+            failure["cases"][1]["response_diagnostic_code"] = "wrong_but_nonempty"
         if change == "audit_status":
             failure["cases"][1].pop("audit_status")
+        if change == "command":
+            failure["command"] = []
+        if change == "input_digest":
+            failure["input_digest"] = "short"
+        if change == "elapsed_ms":
+            failure["elapsed_ms"] = 0
+        if change == "exit_code":
+            failure["exit_code"] = 1
         failure_path.write_text(json.dumps(failure))
     with pytest.raises(ValueError, match="Issue 55"):
         module.validate_stage_evidence(tmp_path, evidence_matrix(), "same-sha")
+
+
+def test_pdf_stages_require_one_input_digest(tmp_path: Path) -> None:
+    module = collector()
+    payloads = valid_payloads()
+    write_payloads(tmp_path, payloads)
+    with pytest.raises(ValueError, match="accepted PDF"):
+        module.validate_stage_evidence(
+            tmp_path,
+            evidence_matrix(),
+            "same-sha",
+            expected_pdf_sha256="b" * 64,
+        )

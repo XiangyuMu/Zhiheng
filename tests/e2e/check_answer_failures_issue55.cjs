@@ -9,6 +9,7 @@ const fs = require("node:fs");
 const https = require("node:https");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
+const crypto = require("node:crypto");
 const { chromium } = require("playwright");
 
 const base = process.argv[2];
@@ -53,6 +54,7 @@ print(json.dumps(dict(row) if row else None))
 }
 
 (async () => {
+  const startedAt = Date.now();
   let browser;
   let context;
   let providerServer;
@@ -65,6 +67,12 @@ print(json.dumps(dict(row) if row else None))
     boundary: "model_transport",
     cases: [],
     browserErrors,
+    command: process.argv.slice(1),
+    input_digest: crypto.createHash("sha256")
+      .update(JSON.stringify({ boundary: "model_transport", injectedAnswers }))
+      .digest("hex"),
+    exit_code: null,
+    elapsed_ms: 0,
   };
 
   function writeReport(extra = {}) {
@@ -240,7 +248,8 @@ print(json.dumps(dict(row) if row else None))
       const dispatchCount = providerDispatches.length;
       assert(providerDispatches.every((item) => item.kind === kind), `${kind} dispatch kind mismatch`);
       const audit = auditDiagnostic(body.answer_audit_id);
-      const diagnosticCode = body.answer_safety_reason_code || audit?.diagnostic_code || null;
+      const responseDiagnosticCode = body.answer_safety_reason_code || null;
+      const diagnosticCode = audit?.diagnostic_code || null;
       assert.equal(body.stop_reason, expectedStopReason, JSON.stringify(body));
       assert.equal(body.answer_provider_id, providerId, JSON.stringify(body));
       assert.equal(body.answer_model_id, modelId, JSON.stringify(body));
@@ -251,7 +260,8 @@ print(json.dumps(dict(row) if row else None))
       assert.equal(audit.provider_id, providerId, `${kind} audit provider`);
       assert.equal(audit.model_id, modelId, `${kind} audit model`);
       assert.equal(audit.status, expectedAuditStatus, `${kind} audit status`);
-      assert.equal(diagnosticCode, expectedDiagnostic, `${kind} diagnostic code`);
+      assert.equal(responseDiagnosticCode, expectedDiagnostic, `${kind} response diagnostic code`);
+      assert.equal(diagnosticCode, expectedDiagnostic, `${kind} audit diagnostic code`);
       assert.equal(uiStopReason, expectedUiLabel, `${kind} UI stop reason`);
       assert.equal(answerText, body.answer, `${kind} UI answer text`);
       assert(!answerText.includes(injectedAnswers[kind]), `${kind} leaked injected answer`);
@@ -266,6 +276,7 @@ print(json.dumps(dict(row) if row else None))
         status: "passed",
         stop_reason: body.stop_reason,
         diagnostic_code: diagnosticCode,
+        response_diagnostic_code: responseDiagnosticCode,
         audit_id: body.answer_audit_id,
         provider_id: body.answer_provider_id,
         model_id: body.answer_model_id,
@@ -297,10 +308,14 @@ print(json.dumps(dict(row) if row else None))
     );
     assert.equal(browserErrors.length, 0, browserErrors.join("; "));
     report.status = "passed";
+    report.exit_code = 0;
+    report.elapsed_ms = Date.now() - startedAt;
     report.provider_url = providerUrl;
     report.calls = calls;
     writeReport();
   } catch (error) {
+    report.exit_code = 1;
+    report.elapsed_ms = Date.now() - startedAt;
     writeReport({ failure: error.stack || String(error), calls });
     throw error;
   } finally {

@@ -231,6 +231,13 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     or not payload["sha"].strip()
                     or not isinstance(cases, list)
                     or len(cases) != len(ANSWER_FAILURE_CASES)
+                    or not isinstance(payload.get("command"), list)
+                    or not payload["command"]
+                    or not isinstance(payload.get("input_digest"), str)
+                    or len(payload["input_digest"]) != 64
+                    or not isinstance(payload.get("elapsed_ms"), (int, float))
+                    or payload["elapsed_ms"] <= 0
+                    or payload.get("exit_code") != 0
                 ):
                     result["error"] = "Issue #55 answer failure report shape is invalid"
                     results[name] = result
@@ -250,6 +257,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         case.get("status") != "passed"
                         or case.get("stop_reason") != stop_reason
                         or case.get("diagnostic_code") != diagnostic_code
+                        or case.get("response_diagnostic_code") != diagnostic_code
                         or not isinstance(case.get("audit_id"), str)
                         or not case["audit_id"].strip()
                         or not isinstance(case.get("provider_id"), str)
