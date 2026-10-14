@@ -105,12 +105,19 @@ def test_proxy_forwards_real_submission_then_injects_status_fault(tmp_path: Path
         )
         assert submission.status == 202
         assert json.loads(submission.read())["task_id"] == "upstream-1"
-        time.sleep(0.6)
-        status = urlopen(f"{base}/tasks/upstream-1", timeout=5)
-        assert status.status == 200
-        assert json.loads(status.read())["status"] == "failed"
+        deadline = time.monotonic() + 5
+        while True:
+            status = urlopen(f"{base}/tasks/upstream-1", timeout=5)
+            assert status.status == 200
+            payload = json.loads(status.read())
+            if payload["status"] == "failed":
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"proxy did not inject fault: {payload}")
+            time.sleep(0.05)
         observations = control.read()["observations"]
-        assert [item["status"] for item in observations] == [202, 200]
+        assert observations[0]["status"] == 202
+        assert all(item["status"] == 200 for item in observations[1:])
     finally:
         proxy.shutdown()
         proxy.server_close()
