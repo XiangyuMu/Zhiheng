@@ -215,6 +215,10 @@ def validate_checks(output: Path) -> dict[str, Any]:
             if status:
                 result["child_status"] = status
             if name == "answer_failures_issue55":
+                if browser_errors:
+                    result["error"] = "browserErrors must be empty"
+                    results[name] = result
+                    continue
                 result["injected"] = payload.get("injected")
                 result["boundary"] = payload.get("boundary")
                 result["cases"] = payload.get("cases")

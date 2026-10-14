@@ -464,6 +464,24 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
     assert "workspace-full/screen.png" in report["artifacts"]
 
 
+def test_browser_acceptance_report_rejects_issue55_browser_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_checks(tmp_path, "answer-failures-issue55/report.json", {
+        **complete_answer_failure_report(),
+        "browserErrors": ["unexpected page error"],
+    })
+
+    code, report = run_report(tmp_path, monkeypatch, exit_code=0)
+
+    assert code == 1
+    assert report["status"] == "failed"
+    assert report["browser_evidence"]["answer_failures_issue55"]["error"] == (
+        "browserErrors must be empty"
+    )
+
+
 @pytest.mark.parametrize(
     ("relative", "content", "expected_error"),
     [

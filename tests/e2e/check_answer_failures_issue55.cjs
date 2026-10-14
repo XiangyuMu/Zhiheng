@@ -95,7 +95,7 @@ print(json.dumps(dict(row) if row else None))
               : "unknown";
           calls.push({
             kind,
-            authorization: request.headers.authorization || "",
+            authorization_present: Boolean(request.headers.authorization),
             body_sha256: require("node:crypto").createHash("sha256").update(body).digest("hex"),
           });
           if (kind === "invalid_output") {
