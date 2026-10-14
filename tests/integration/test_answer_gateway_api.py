@@ -368,9 +368,13 @@ def test_answer_api_invalid_model_output_fails_closed_with_audit_metadata(
     assert payload["citations"]
     with session_scope(session_factory) as session:
         audit = session.execute(
-            text("SELECT id, provider_id, model_id, status FROM model_call_audits")
+            text(
+                "SELECT id, provider_id, model_id, status, diagnostic_code "
+                "FROM model_call_audits"
+            )
         ).mappings().one()
         assert audit["status"] == "succeeded"
+        assert audit["diagnostic_code"] == "answer_model_invalid_output"
         assert payload["answer_audit_id"] == audit["id"]
         assert payload["answer_provider_id"] == audit["provider_id"]
         assert payload["answer_model_id"] == audit["model_id"]

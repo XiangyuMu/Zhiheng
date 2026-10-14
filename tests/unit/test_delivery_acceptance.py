@@ -364,6 +364,18 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
         55: {
             "status": "passed",
             "sha": "same-sha",
+            "imports": [
+                {
+                    "file": "Comments.pdf",
+                    "sha256": "source",
+                    "knowledge": {
+                        "knowledge_object_id": "pdf",
+                        "knowledge_version_id": "pdf-version",
+                        "evidence_object_id": "pdf-evidence",
+                        "source_sha256": "source",
+                    },
+                }
+            ],
             "answers": [
                 {
                     **answer_base,
@@ -729,6 +741,8 @@ def failure_evidence() -> dict[str, Any]:
         "non_hex_digest",
         "elapsed_ms",
         "boolean_elapsed_ms",
+        "nan_elapsed_ms",
+        "huge_elapsed_ms",
         "exit_code",
         "boolean_exit_code",
     ],
@@ -766,6 +780,10 @@ def test_issue55_requires_same_sha_bounded_failure_proof(tmp_path: Path, change:
             failure["elapsed_ms"] = 0
         if change == "boolean_elapsed_ms":
             failure["elapsed_ms"] = True
+        if change == "nan_elapsed_ms":
+            failure["elapsed_ms"] = float("nan")
+        if change == "huge_elapsed_ms":
+            failure["elapsed_ms"] = 10**400
         if change == "exit_code":
             failure["exit_code"] = 1
         if change == "boolean_exit_code":
@@ -785,4 +803,44 @@ def test_pdf_stages_require_one_input_digest(tmp_path: Path) -> None:
             evidence_matrix(),
             "same-sha",
             expected_pdf_sha256="b" * 64,
+        )
+
+
+@pytest.mark.parametrize("value", [True, float("nan"), float("inf"), 10**400])
+def test_delivery_timing_rejects_non_finite_or_boolean_values(
+    tmp_path: Path, value: object
+) -> None:
+    module = collector()
+    payloads = valid_payloads()
+    payloads[54]["restart_scenarios"][0]["elapsed_ms"] = value
+    payloads[56]["steps"][0]["seconds"] = value
+    write_payloads(tmp_path, payloads)
+    with pytest.raises(ValueError, match="Issue 54"):
+        module.validate_stage_evidence(tmp_path, evidence_matrix(), "same-sha")
+
+
+def test_issue55_pdf_answer_must_bind_to_accepted_pdf(tmp_path: Path) -> None:
+    module = collector()
+    payloads = valid_payloads()
+    expected = "a" * 64
+
+    def replace_source(value: object) -> object:
+        if isinstance(value, dict):
+            return {key: replace_source(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [replace_source(item) for item in value]
+        return expected if value == "source" else value
+
+    payloads = cast(
+        dict[int, dict[str, Any]],
+        {issue: replace_source(payload) for issue, payload in payloads.items()},
+    )
+    payloads[55]["imports"][0]["sha256"] = "b" * 64
+    write_payloads(tmp_path, payloads)
+    with pytest.raises(ValueError, match="Issue 55 PDF import"):
+        module.validate_stage_evidence(
+            tmp_path,
+            evidence_matrix(),
+            "same-sha",
+            expected_pdf_sha256=expected,
         )

@@ -86,6 +86,10 @@ class GatewayAnswerModel:
                 max_output_tokens=max_output_tokens,
             )
         except ValueError as exc:
+            self._gateway.mark_response_diagnostic(
+                response.audit_id,
+                "answer_model_invalid_output",
+            )
             raise InvalidModelOutputError(
                 audit_id=response.audit_id,
                 provider_id=self._provider_id,

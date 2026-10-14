@@ -489,6 +489,24 @@ def test_browser_acceptance_report_rejects_issue55_browser_errors(
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("command", [123]),
+        ("input_digest", "z" * 64),
+        ("elapsed_ms", float("nan")),
+        ("elapsed_ms", float("inf")),
+        ("elapsed_ms", 10**400),
+        ("exit_code", False),
+    ],
+)
+def test_issue55_metadata_rejects_malformed_values(field: str, value: object) -> None:
+    module = reporter()
+    payload = complete_answer_failure_report()
+    payload[field] = value
+    assert not module.valid_issue55_metadata(payload)
+
+
+@pytest.mark.parametrize(
     ("relative", "content", "expected_error"),
     [
         ("relations/checks.json", "{", "malformed json"),

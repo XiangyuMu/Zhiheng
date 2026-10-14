@@ -193,6 +193,32 @@ def load_checks(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return payload, None
 
 
+def is_finite_number(value: Any, *, minimum: float | None = None) -> bool:
+    if type(value) not in (int, float):
+        return False
+    try:
+        if not math.isfinite(value):
+            return False
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return minimum is None or value >= minimum
+
+
+def valid_issue55_metadata(payload: dict[str, Any]) -> bool:
+    command = payload.get("command")
+    return (
+        isinstance(command, list)
+        and bool(command)
+        and all(isinstance(item, str) and item for item in command)
+        and isinstance(payload.get("input_digest"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", payload["input_digest"]) is not None
+        and is_finite_number(payload.get("elapsed_ms"), minimum=0)
+        and payload["elapsed_ms"] > 0
+        and type(payload.get("exit_code")) is int
+        and payload.get("exit_code") == 0
+    )
+
+
 def validate_checks(output: Path) -> dict[str, Any]:
     results: dict[str, Any] = {}
     for name, relative in EXPECTED_CHECKS.items():
@@ -232,15 +258,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     or not payload["sha"].strip()
                     or not isinstance(cases, list)
                     or len(cases) != len(ANSWER_FAILURE_CASES)
-                    or not isinstance(payload.get("command"), list)
-                    or not payload["command"]
-                    or not isinstance(payload.get("input_digest"), str)
-                    or re.fullmatch(r"[0-9a-f]{64}", payload["input_digest"]) is None
-                    or type(payload.get("elapsed_ms")) not in (int, float)
-                    or not math.isfinite(payload["elapsed_ms"])
-                    or payload["elapsed_ms"] <= 0
-                    or type(payload.get("exit_code")) is not int
-                    or payload.get("exit_code") != 0
+                    or not valid_issue55_metadata(payload)
                 ):
                     result["error"] = "Issue #55 answer failure report shape is invalid"
                     results[name] = result

@@ -35,6 +35,19 @@ def is_sha256(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
+def is_finite_number(
+    value: Any, *, minimum: float | None = None, maximum: float | None = None
+) -> bool:
+    if type(value) not in (int, float):
+        return False
+    try:
+        if not math.isfinite(value):
+            return False
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return (minimum is None or value >= minimum) and (maximum is None or value <= maximum)
+
+
 def parser_backend(profile: str) -> str:
     backends = {"pdf": "mineru", "deepdoc": "deepdoc"}
     if profile not in backends:
@@ -478,7 +491,7 @@ def validate_stage_evidence(
                     "Issue 54 searchable physical index",
                 )
                 elapsed_ms = scenario.get("elapsed_ms")
-                if not isinstance(elapsed_ms, (int, float)) or elapsed_ms > 300_000:
+                if not is_finite_number(elapsed_ms, minimum=0, maximum=300_000):
                     raise ValueError("Issue 54 restart exceeded parse plus index budget")
                 lease = require_dict(
                     scenario.get("active_lease_before_restart"),
@@ -633,8 +646,7 @@ def validate_stage_evidence(
                 or not command
                 or not all(isinstance(item, str) and item for item in command)
                 or not is_sha256(failure.get("input_digest"))
-                or type(failure.get("elapsed_ms")) not in (int, float)
-                or not math.isfinite(failure["elapsed_ms"])
+                or not is_finite_number(failure.get("elapsed_ms"), minimum=0)
                 or failure["elapsed_ms"] <= 0
                 or type(failure.get("exit_code")) is not int
                 or failure.get("exit_code") != 0
@@ -669,6 +681,17 @@ def validate_stage_evidence(
                 ):
                     raise ValueError("Issue 55 failure diagnosis or audit status does not match")
             answers = require_object_list(payload.get("answers"), "Issue 55 answers")
+            imports = require_object_list(payload.get("imports"), "Issue 55 imports")
+            pdf_imports = [
+                item
+                for item in imports
+                if isinstance(item.get("file"), str) and item["file"].lower().endswith(".pdf")
+            ]
+            if (
+                expected_pdf_sha256 is not None
+                and (len(pdf_imports) != 1 or pdf_imports[0].get("sha256") != expected_pdf_sha256)
+            ):
+                raise ValueError("Issue 55 PDF import is not bound to the accepted PDF")
             by_kind = {item.get("kind"): item for item in answers}
             if set(by_kind) != {"text", "pdf", "negative"}:
                 raise ValueError("Issue 55 evidence must include text, PDF and negative answers")
@@ -703,6 +726,22 @@ def validate_stage_evidence(
                     or not isinstance(answer.get("bound_citation"), dict)
                 ):
                     raise ValueError("Issue 55 evidence does not prove cited positive answers")
+            if expected_pdf_sha256 is not None:
+                pdf_answer = by_kind["pdf"]
+                bound_source = pdf_answer["bound_source"]
+                imported_knowledge = require_dict(
+                    pdf_imports[0].get("knowledge"), "Issue 55 PDF import knowledge"
+                )
+                if bound_source.get("source_sha256") != expected_pdf_sha256:
+                    raise ValueError("Issue 55 PDF answer is not bound to the accepted PDF")
+                for field in (
+                    "knowledge_object_id",
+                    "knowledge_version_id",
+                    "evidence_object_id",
+                    "source_sha256",
+                ):
+                    if bound_source.get(field) != imported_knowledge.get(field):
+                        raise ValueError(f"Issue 55 PDF answer {field} is not bound to its import")
         elif issue == 56:
             steps = payload.get("steps")
             if (
@@ -724,8 +763,7 @@ def validate_stage_evidence(
             } != required_steps:
                 raise ValueError("Issue 56 evidence is missing required quality-gate steps")
             if any(
-                not isinstance(item.get("seconds"), (int, float))
-                or item["seconds"] < 0
+                not is_finite_number(item.get("seconds"), minimum=0)
                 or not isinstance(item.get("command"), list)
                 or not item["command"]
                 or any(not isinstance(part, str) or not part for part in item["command"])

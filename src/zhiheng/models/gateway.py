@@ -284,6 +284,21 @@ class ModelGateway:
             audit_id=audit_id,
         )
 
+    def mark_response_diagnostic(self, audit_id: str, diagnostic_code: str) -> None:
+        """Record post-transport answer validation without changing dispatch status."""
+        with self._session_factory() as session:
+            session.execute(
+                text(
+                    """
+                    UPDATE model_call_audits
+                    SET diagnostic_code = :diagnostic_code
+                    WHERE id = :audit_id AND status = 'succeeded'
+                    """
+                ),
+                {"audit_id": audit_id, "diagnostic_code": diagnostic_code},
+            )
+            session.commit()
+
     def _revalidate_dispatch_credential(self, route: _ProviderRoute) -> None:
         """Fence credential revocation between approval claim and network I/O."""
         with self._session_factory() as session:
