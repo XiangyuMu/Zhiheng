@@ -254,8 +254,8 @@ class ModelGateway:
             privacy,
         )
         started = time.monotonic()
+        self._revalidate_dispatch_credential(dispatch_route)
         try:
-            self._revalidate_dispatch_credential(dispatch_route)
             response = transport.complete(
                 route=_transport_route(dispatch_route),
                 payload=_ApprovedOutboundPayload(

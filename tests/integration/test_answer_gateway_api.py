@@ -220,6 +220,53 @@ def test_answer_api_external_model_disabled_returns_privacy_denied_zero_send(
         assert session.execute(text("SELECT count(*) FROM model_call_audits")).scalar_one() == 0
 
 
+def test_answer_api_revoke_after_claim_remains_privacy_denied(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "secret-value")
+    client, session_factory, transport = _gateway_client(
+        tmp_path,
+        external_models_enabled=True,
+    )
+    csrf = _login(client)
+    _seed(session_factory, tmp_path)
+    with session_scope(session_factory) as session:
+        _insert_provider(session)
+
+    gateway = client.app.state.model_gateway
+    original_revalidate = gateway._revalidate_dispatch_credential
+
+    def revoke_then_revalidate(route: object) -> None:
+        with session_scope(session_factory) as session:
+            session.execute(
+                text("UPDATE model_provider_configs SET enabled = 0 WHERE id = :provider_id"),
+                {"provider_id": "provider-openai"},
+            )
+        original_revalidate(route)
+
+    monkeypatch.setattr(gateway, "_revalidate_dispatch_credential", revoke_then_revalidate)
+    response = client.post(
+        "/v1/answers",
+        json={"query": "中文 全文 检索 正式 视图"},
+        headers=_headers(csrf, "answer-gateway-revoke-after-claim"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stop_reason"] == "privacy_denied"
+    assert transport.calls == []
+    assert "answer_audit_id" not in payload
+    assert "answer_provider_id" not in payload
+    assert "answer_model_id" not in payload
+    assert "answer_safety_reason_code" not in payload
+    with session_scope(session_factory) as session:
+        audit = session.execute(
+            text("SELECT status FROM model_call_audits")
+        ).scalar_one()
+        assert audit == "dispatching"
+
+
 def test_answer_api_transport_exception_fails_closed_with_failed_audit_and_replay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
