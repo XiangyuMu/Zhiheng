@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 try:
     from acceptance_contracts import (
         is_finite_number,
+        is_sha256,
         valid_issue55_answer_binding,
         valid_issue55_metadata,
         valid_issue55_pdf_binding,
@@ -29,6 +30,7 @@ except ModuleNotFoundError as error:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from acceptance_contracts import (
         is_finite_number,
+        is_sha256,
         valid_issue55_answer_binding,
         valid_issue55_metadata,
         valid_issue55_pdf_binding,
@@ -683,7 +685,7 @@ def validate_stage_evidence(
             ):
                 raise ValueError("Issue 55 PDF import is not bound to the accepted PDF")
             by_kind = {item.get("kind"): item for item in answers}
-            if set(by_kind) != {"text", "pdf", "negative"}:
+            if len(answers) != 3 or set(by_kind) != {"text", "pdf", "negative"}:
                 raise ValueError("Issue 55 evidence must include text, PDF and negative answers")
             if any(
                 item.get("status") != 200
@@ -721,6 +723,12 @@ def validate_stage_evidence(
                 imported_knowledge = require_dict(
                     pdf_imports[0].get("knowledge"), "Issue 55 PDF import knowledge"
                 )
+                if (
+                    not is_sha256(pdf_imports[0].get("sha256"))
+                    or pdf_imports[0].get("sha256") != expected_pdf_sha256
+                    or imported_knowledge.get("source_file_sha256") != expected_pdf_sha256
+                ):
+                    raise ValueError("Issue 55 PDF import file digest is not bound to knowledge")
                 if not valid_issue55_pdf_binding(
                     pdf_answer, imported_knowledge, expected_pdf_sha256
                 ):
@@ -738,7 +746,15 @@ def validate_stage_evidence(
             text_knowledge = require_dict(
                 text_imports[0].get("knowledge"), "Issue 55 text import knowledge"
             )
-            if not valid_issue55_answer_binding(by_kind["text"], text_knowledge):
+            text_digest = text_imports[0].get("sha256")
+            if (
+                not is_sha256(text_digest)
+                or text_knowledge.get("source_file_sha256") != text_digest
+            ):
+                raise ValueError("Issue 55 text import file digest is not bound to knowledge")
+            if not valid_issue55_answer_binding(
+                by_kind["text"], text_knowledge
+            ):
                 raise ValueError(
                     "Issue 55 text answer citation is not bound to the accepted import"
                 )

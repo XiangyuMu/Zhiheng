@@ -371,22 +371,24 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
             "imports": [
                 {
                     "file": "notes.txt",
-                    "sha256": "text-file-source",
+                    "sha256": "b" * 64,
                     "knowledge": {
                         "knowledge_object_id": "text",
                         "knowledge_version_id": "text-version",
                         "evidence_object_id": "text-evidence",
-                        "source_sha256": "text-source",
+                        "source_sha256": "c" * 64,
+                        "source_file_sha256": "b" * 64,
                     },
                 },
                 {
                     "file": "Comments.pdf",
-                    "sha256": "source",
+                    "sha256": "a" * 64,
                     "knowledge": {
                         "knowledge_object_id": "pdf",
                         "knowledge_version_id": "pdf-version",
                         "evidence_object_id": "pdf-evidence",
-                        "source_sha256": "source",
+                        "source_sha256": "a" * 64,
+                        "source_file_sha256": "a" * 64,
                     },
                 }
             ],
@@ -407,7 +409,7 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                     "claims_count": 1,
                     "bound_source": {
                         "knowledge_object_id": "text", "knowledge_version_id": "text-version",
-                        "evidence_object_id": "text-evidence", "source_sha256": "text-source",
+                        "evidence_object_id": "text-evidence", "source_sha256": "c" * 64,
                     },
                     "bound_citation": {
                         "citation_id": "text-citation", "source_id": "text",
@@ -424,7 +426,7 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                     "claims_count": 1,
                     "bound_source": {
                         "knowledge_object_id": "pdf", "knowledge_version_id": "pdf-version",
-                        "evidence_object_id": "pdf-evidence", "source_sha256": "source",
+                        "evidence_object_id": "pdf-evidence", "source_sha256": "a" * 64,
                     },
                     "bound_citation": {
                         "citation_id": "pdf-citation", "source_id": "pdf",
@@ -890,11 +892,21 @@ def test_issue55_pdf_answer_must_bind_to_accepted_pdf(tmp_path: Path) -> None:
 def test_issue55_pdf_answer_rejects_unrelated_citation_identity(tmp_path: Path) -> None:
     module = collector()
     payloads = valid_payloads()
+    def replace_source(value: object) -> object:
+        if isinstance(value, dict):
+            return {key: replace_source(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [replace_source(item) for item in value]
+        return "a" * 64 if value == "source" else value
+    payloads = cast(
+        dict[int, dict[str, Any]],
+        {issue: replace_source(payload) for issue, payload in payloads.items()},
+    )
     payloads[55]["answers"][2]["bound_citation"] = {"citation_id": "unrelated"}
     write_payloads(tmp_path, payloads)
     with pytest.raises(ValueError, match="Issue 55 PDF answer citation"):
         module.validate_stage_evidence(
-            tmp_path, evidence_matrix(), "same-sha", expected_pdf_sha256="source"
+            tmp_path, evidence_matrix(), "same-sha", expected_pdf_sha256="a" * 64
         )
 
 

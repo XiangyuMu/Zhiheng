@@ -181,6 +181,9 @@ const saveReport = () => fs.writeFileSync(
           media_type: pdf ? 'application/pdf' : 'text/plain',
         },
       });
+      // Keep the raw upload digest alongside the normalized knowledge digest.
+      // Text imports may normalize line endings before producing source_sha256.
+      item.knowledge.source_file_sha256 = item.sha256;
       imported[kind] = item;
       await page.screenshot({path:path.join(output,pdf?'pdf-import.png':'text-import.png'),fullPage:true});
     }
