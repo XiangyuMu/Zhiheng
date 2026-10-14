@@ -39,10 +39,14 @@ def valid_issue55_metadata(payload: dict[str, Any]) -> bool:
     )
 
 
-def valid_issue55_pdf_binding(
-    answer: dict[str, Any], imported_knowledge: dict[str, Any], expected_sha256: str
+def valid_issue55_answer_binding(
+    answer: dict[str, Any],
+    imported_knowledge: dict[str, Any],
+    expected_sha256: str | None = None,
+    *,
+    require_page: bool = False,
 ) -> bool:
-    """Validate that a PDF answer citation identifies the accepted import exactly."""
+    """Validate that an answer citation identifies its accepted import exactly."""
     source = answer.get("bound_source")
     citation = answer.get("bound_citation")
     if not isinstance(source, dict) or not isinstance(citation, dict):
@@ -52,7 +56,7 @@ def valid_issue55_pdf_binding(
     )
     if any(not isinstance(source.get(field), str) or not source[field] for field in source_fields):
         return False
-    if source.get("source_sha256") != expected_sha256:
+    if expected_sha256 is not None and source.get("source_sha256") != expected_sha256:
         return False
     if any(source.get(field) != imported_knowledge.get(field) for field in source_fields):
         return False
@@ -72,4 +76,13 @@ def valid_issue55_pdf_binding(
     if citation.get("evidence_object_id") != source["evidence_object_id"]:
         return False
     page_no = citation.get("page_no")
-    return type(page_no) is int and page_no >= 1
+    return not require_page or (type(page_no) is int and page_no >= 1)
+
+
+def valid_issue55_pdf_binding(
+    answer: dict[str, Any], imported_knowledge: dict[str, Any], expected_sha256: str
+) -> bool:
+    """Validate that a PDF answer citation identifies the accepted import exactly."""
+    return valid_issue55_answer_binding(
+        answer, imported_knowledge, expected_sha256, require_page=True
+    )

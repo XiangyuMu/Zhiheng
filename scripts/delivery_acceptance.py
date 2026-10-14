@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 try:
     from acceptance_contracts import (
         is_finite_number,
+        valid_issue55_answer_binding,
         valid_issue55_metadata,
         valid_issue55_pdf_binding,
     )
@@ -28,6 +29,7 @@ except ModuleNotFoundError as error:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from acceptance_contracts import (
         is_finite_number,
+        valid_issue55_answer_binding,
         valid_issue55_metadata,
         valid_issue55_pdf_binding,
     )
@@ -725,6 +727,21 @@ def validate_stage_evidence(
                     raise ValueError(
                         "Issue 55 PDF answer citation is not bound to the accepted import"
                     )
+            text_imports = [
+                item
+                for item in imports
+                if isinstance(item.get("file"), str)
+                and not item["file"].lower().endswith(".pdf")
+            ]
+            if len(text_imports) != 1:
+                raise ValueError("Issue 55 text import identity is missing")
+            text_knowledge = require_dict(
+                text_imports[0].get("knowledge"), "Issue 55 text import knowledge"
+            )
+            if not valid_issue55_answer_binding(by_kind["text"], text_knowledge):
+                raise ValueError(
+                    "Issue 55 text answer citation is not bound to the accepted import"
+                )
         elif issue == 56:
             steps = payload.get("steps")
             if (
