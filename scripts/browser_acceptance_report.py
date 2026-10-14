@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -234,9 +235,11 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     or not isinstance(payload.get("command"), list)
                     or not payload["command"]
                     or not isinstance(payload.get("input_digest"), str)
-                    or len(payload["input_digest"]) != 64
-                    or not isinstance(payload.get("elapsed_ms"), (int, float))
+                    or re.fullmatch(r"[0-9a-f]{64}", payload["input_digest"]) is None
+                    or type(payload.get("elapsed_ms")) not in (int, float)
+                    or not math.isfinite(payload["elapsed_ms"])
                     or payload["elapsed_ms"] <= 0
+                    or type(payload.get("exit_code")) is not int
                     or payload.get("exit_code") != 0
                 ):
                     result["error"] = "Issue #55 answer failure report shape is invalid"

@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -28,6 +29,10 @@ def file_digest(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def is_sha256(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
 def parser_backend(profile: str) -> str:
@@ -627,10 +632,11 @@ def validate_stage_evidence(
                 not isinstance(command, list)
                 or not command
                 or not all(isinstance(item, str) and item for item in command)
-                or not isinstance(failure.get("input_digest"), str)
-                or len(failure["input_digest"]) != 64
-                or not isinstance(failure.get("elapsed_ms"), (int, float))
+                or not is_sha256(failure.get("input_digest"))
+                or type(failure.get("elapsed_ms")) not in (int, float)
+                or not math.isfinite(failure["elapsed_ms"])
                 or failure["elapsed_ms"] <= 0
+                or type(failure.get("exit_code")) is not int
                 or failure.get("exit_code") != 0
             ):
                 raise ValueError("Issue 55 failure evidence metadata is incomplete")
@@ -768,7 +774,7 @@ def main() -> int:
     sha = git(repo, "rev-parse", "HEAD")
     evidence_matrix = load_pdf_evidence_matrix(repo)
     pdf_path = Path(os.environ.get("ZHIHENG_PDF_FILE", ""))
-    expected_pdf_sha256 = file_digest(pdf_path) if pdf_path.is_file() else None
+    expected_pdf_sha256: str | None = None
     env = clean_environment()
     env["ZHIHENG_ACCEPTANCE_OUTPUT"] = str(output / "browser")
     env["ZHIHENG_DELIVERY_EVIDENCE"] = str(output / "recovery")
@@ -786,6 +792,17 @@ def main() -> int:
         "requirements": "docs/testing/issue-52-56-evidence-matrix.json",
         "evidence_matrix": evidence_matrix,
     }
+    try:
+        expected_pdf_sha256 = file_digest(pdf_path) if pdf_path.is_file() else None
+    except OSError as error:
+        report["status"] = "failed"
+        report["failure"] = {
+            "stage": "pdf-input-digest",
+            "error": str(error),
+            "exit_code": 1,
+        }
+        write_report(output, report)
+        return 1
     steps = [
         ("dependencies", ["uv", "sync", "--frozen", "--extra", "dev"]),
         ("versions", ["uv", "pip", "freeze"]),

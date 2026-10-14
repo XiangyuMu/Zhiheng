@@ -726,8 +726,11 @@ def failure_evidence() -> dict[str, Any]:
         "audit_status",
         "command",
         "input_digest",
+        "non_hex_digest",
         "elapsed_ms",
+        "boolean_elapsed_ms",
         "exit_code",
+        "boolean_exit_code",
     ],
 )
 def test_issue55_requires_same_sha_bounded_failure_proof(tmp_path: Path, change: str) -> None:
@@ -757,10 +760,16 @@ def test_issue55_requires_same_sha_bounded_failure_proof(tmp_path: Path, change:
             failure["command"] = []
         if change == "input_digest":
             failure["input_digest"] = "short"
+        if change == "non_hex_digest":
+            failure["input_digest"] = "z" * 64
         if change == "elapsed_ms":
             failure["elapsed_ms"] = 0
+        if change == "boolean_elapsed_ms":
+            failure["elapsed_ms"] = True
         if change == "exit_code":
             failure["exit_code"] = 1
+        if change == "boolean_exit_code":
+            failure["exit_code"] = False
         failure_path.write_text(json.dumps(failure))
     with pytest.raises(ValueError, match="Issue 55"):
         module.validate_stage_evidence(tmp_path, evidence_matrix(), "same-sha")
