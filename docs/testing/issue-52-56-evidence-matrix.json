@@ -36,10 +36,12 @@
       "stage": "real-files",
       "requirements": [
         "positive text and PDF answers cite the imported source",
-        "negative question returns explicit insufficiency without unrelated claims or citations"
+        "negative question returns explicit insufficiency without unrelated claims or citations",
+        "separately labelled model transport fault injection proves safe diagnostics, audit binding, visible UI and one dispatch per request"
       ],
       "artifact": "real-files/browser-report.json",
-      "status": "required"
+      "status": "required",
+      "failure_artifact": "browser/answer-failures-issue55/report.json"
     },
     {
       "issue": 56,

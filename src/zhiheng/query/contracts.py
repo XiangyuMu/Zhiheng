@@ -35,6 +35,42 @@ class StopReason(StrEnum):
 Answerability = Literal["supported", "mixed", "insufficient"]
 
 
+class InvalidModelOutputError(ValueError):
+    """Typed failure for model responses that cannot be safely published."""
+
+    def __init__(
+        self,
+        *,
+        audit_id: str,
+        provider_id: str,
+        model_id: str,
+        reason_code: str = "answer_model_invalid_output",
+    ) -> None:
+        super().__init__("answer model returned invalid structured output")
+        self.audit_id = audit_id
+        self.provider_id = provider_id
+        self.model_id = model_id
+        self.reason_code = reason_code
+
+
+class ModelTransportFailedError(RuntimeError):
+    """Typed failure for provider calls that failed after audit creation."""
+
+    def __init__(
+        self,
+        *,
+        audit_id: str,
+        provider_id: str,
+        model_id: str,
+        reason_code: str,
+    ) -> None:
+        super().__init__("answer model provider call failed")
+        self.audit_id = audit_id
+        self.provider_id = provider_id
+        self.model_id = model_id
+        self.reason_code = reason_code
+
+
 @dataclass(frozen=True)
 class BudgetUsage:
     rounds: int = 0
@@ -116,6 +152,7 @@ class AnswerEnvelope:
     model_audit_id: str | None = None
     model_provider_id: str | None = None
     model_id: str | None = None
+    model_safety_reason_code: str | None = None
 
 
 @dataclass(frozen=True)

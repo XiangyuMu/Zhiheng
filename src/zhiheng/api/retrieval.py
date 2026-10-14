@@ -227,6 +227,10 @@ class AnswerResponse(BaseModel):
     answer_provider_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
     answer_model_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
     answer_audit_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    answer_safety_reason_code: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class LookupResponse(BaseModel):
@@ -467,6 +471,7 @@ def answer_question(
         response.answer_provider_id = getattr(result, "model_provider_id", None)
         response.answer_model_id = getattr(result, "model_id", None)
         response.answer_audit_id = getattr(result, "model_audit_id", None)
+        response.answer_safety_reason_code = getattr(result, "model_safety_reason_code", None)
     response.context_prompts = _contextual_prompts(
         session, query=payload.query, user_id=user_id, result=result
     )

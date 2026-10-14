@@ -241,6 +241,7 @@ uv run zhiheng-worker --role worker --idle-seconds 1 >"${OUTPUT_DIR}/worker-rest
 WORKER_PID=$!
 sleep 1
 run_stage "provider-restart" node tests/e2e/check_provider_secrets_restart.cjs "${BASE_URL}" "${OUTPUT_DIR}/provider-restart"
+run_stage "answer-failures-issue55" node tests/e2e/check_answer_failures_issue55.cjs "${BASE_URL}" "${OUTPUT_DIR}/answer-failures-issue55"
 
 CURRENT_STAGE="process-liveness"
 if ! kill -0 "${API_PID}" 2>/dev/null || ! kill -0 "${WORKER_PID}" 2>/dev/null; then

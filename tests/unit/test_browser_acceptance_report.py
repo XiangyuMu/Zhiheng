@@ -303,6 +303,47 @@ def complete_provider_restart_checks() -> dict[str, object]:
     }
 
 
+def complete_answer_failure_report() -> dict[str, object]:
+    return {
+        "status": "passed",
+        "sha": "abc123",
+        "injected": True,
+        "boundary": "model_transport",
+        "cases": [
+            {
+                "kind": "invalid_output",
+                "status": "passed",
+                "stop_reason": "invalid_model_output",
+                "diagnostic_code": "answer_model_invalid_output",
+                "audit_id": "audit-invalid",
+                "provider_id": "provider-55",
+                "model_id": "issue55-failure-model",
+                "dispatch_count": 1,
+                "ui_visible": True,
+                "ui_stop_reason_label": "回答未通过校验",
+                "screenshot": "invalid_output.png",
+                "audit_status": "succeeded",
+                "fabricated_answer_absent": True,
+            },
+            {
+                "kind": "transport_failure",
+                "status": "passed",
+                "stop_reason": "model_failed",
+                "diagnostic_code": "provider_error",
+                "audit_id": "audit-transport",
+                "provider_id": "provider-55",
+                "model_id": "issue55-failure-model",
+                "dispatch_count": 1,
+                "ui_visible": True,
+                "ui_stop_reason_label": "回答暂不可用",
+                "screenshot": "transport_failure.png",
+                "audit_status": "failed",
+                "fabricated_answer_absent": True,
+            },
+        ],
+    }
+
+
 def write_checks(output: Path, relative: str, payload: object) -> None:
     path = output / relative
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -404,11 +445,14 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             ],
             "browserErrors": [],
         })
+    write_checks(tmp_path, "answer-failures-issue55/report.json", complete_answer_failure_report())
     (tmp_path / "api.log").write_text("api ready")
     (tmp_path / "worker.log").write_text("worker ready")
     (tmp_path / "provider-secrets-issue40" / "provider-secrets.png").write_bytes(b"png")
     (tmp_path / "provider-migration-restart" / "provider-migration-restart.png").write_bytes(b"png")
     (tmp_path / "provider-restart" / "provider-restart.png").write_bytes(b"png")
+    (tmp_path / "answer-failures-issue55" / "invalid_output.png").write_bytes(b"png")
+    (tmp_path / "answer-failures-issue55" / "transport_failure.png").write_bytes(b"png")
     (tmp_path / "workspace-full" / "screen.png").write_bytes(b"png")
 
     code, report = run_report(tmp_path, monkeypatch, exit_code=0)

@@ -128,6 +128,11 @@ PROVIDER_MODEL_CHECKS = {
     "embedding": "DeepSeek embedding rejection and unsupported indexing stop polling",
 }
 
+ANSWER_FAILURE_CASES = {
+    "invalid_output": ("invalid_model_output", "answer_model_invalid_output", "succeeded"),
+    "transport_failure": ("model_failed", "provider_error", "failed"),
+}
+
 EXPECTED_CHECKS = {
     "workspace_full": Path("workspace-full/checks.json"),
     "relations": Path("relations/checks.json"),
@@ -145,6 +150,7 @@ EXPECTED_CHECKS = {
     "provider_restart": Path("provider-restart/checks.json"),
     "provider_models_issue47": Path("provider-models-issue47/evidence.json"),
     "provider_models_restart_issue47": Path("provider-models-restart/checks.json"),
+    "answer_failures_issue55": Path("answer-failures-issue55/report.json"),
 }
 
 
@@ -208,6 +214,61 @@ def validate_checks(output: Path) -> dict[str, Any]:
                 result["child_error"] = child_error
             if status:
                 result["child_status"] = status
+            if name == "answer_failures_issue55":
+                result["injected"] = payload.get("injected")
+                result["boundary"] = payload.get("boundary")
+                result["cases"] = payload.get("cases")
+                cases = payload.get("cases")
+                if (
+                    status != "passed"
+                    or payload.get("injected") is not True
+                    or payload.get("boundary") != "model_transport"
+                    or not isinstance(payload.get("sha"), str)
+                    or not payload["sha"].strip()
+                    or not isinstance(cases, list)
+                    or len(cases) != len(ANSWER_FAILURE_CASES)
+                ):
+                    result["error"] = "Issue #55 answer failure report shape is invalid"
+                    results[name] = result
+                    continue
+                case_by_kind = {case.get("kind"): case for case in cases if isinstance(case, dict)}
+                missing_cases = [kind for kind in ANSWER_FAILURE_CASES if kind not in case_by_kind]
+                if missing_cases:
+                    result["error"] = f"Issue #55 required cases missing: {missing_cases}"
+                    results[name] = result
+                    continue
+                for kind, (stop_reason, diagnostic_code, audit_status) in (
+                    ANSWER_FAILURE_CASES.items()
+                ):
+                    case = case_by_kind[kind]
+                    screenshot = output / relative.parent / str(case.get("screenshot", ""))
+                    if (
+                        case.get("status") != "passed"
+                        or case.get("stop_reason") != stop_reason
+                        or case.get("diagnostic_code") != diagnostic_code
+                        or not isinstance(case.get("audit_id"), str)
+                        or not case["audit_id"].strip()
+                        or not isinstance(case.get("provider_id"), str)
+                        or not case["provider_id"].strip()
+                        or not isinstance(case.get("model_id"), str)
+                        or not case["model_id"].strip()
+                        or case.get("dispatch_count") != 1
+                        or case.get("ui_visible") is not True
+                        or not isinstance(case.get("ui_stop_reason_label"), str)
+                        or not case["ui_stop_reason_label"].strip()
+                        or case.get("audit_status") != audit_status
+                        or case.get("fabricated_answer_absent") is not True
+                        or not screenshot.is_file()
+                        or screenshot.stat().st_size == 0
+                    ):
+                        result["error"] = f"Issue #55 case {kind} evidence is incomplete"
+                        results[name] = result
+                        break
+                if result.get("error"):
+                    continue
+                result["status"] = "passed"
+                results[name] = result
+                continue
             if not isinstance(checks, list) or not checks:
                 result["error"] = "checks must be a non-empty list"
             elif browser_errors:
@@ -624,6 +685,7 @@ def main() -> int:
             "node tests/e2e/check_provider_secrets_restart.cjs",
             "node tests/e2e/check_provider_models_issue47.cjs",
             "node tests/e2e/check_provider_models_restart_issue47.cjs",
+            "node tests/e2e/check_answer_failures_issue55.cjs",
             "node tests/e2e/check_review_center_issue9.cjs",
         ],
         "versions": {
@@ -700,6 +762,12 @@ def main() -> int:
                 "browser-visible surfaces",
                 "Provider remains unavailable after tamper, then recovers after key re-entry "
                 "and restart",
+            ],
+            "#55": [
+                "browser answer failures use a local injected Provider boundary",
+                "invalid model output stops as invalid_model_output with audit metadata",
+                "Provider 503 transport failure stops as model_failed with audit metadata",
+                "failure UI renders without fabricated Provider answer text",
             ],
         },
     }

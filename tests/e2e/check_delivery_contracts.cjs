@@ -100,6 +100,20 @@ const MINIMAL_PDF = Buffer.from(
   async function contextPrompts(query) {
     return apiJson(`/v1/personal-updates/context-prompts?query=${encodeURIComponent(query)}`);
   }
+  async function waitForPromptDecision(promptId, clickLocator) {
+    const expectedPath = `/v1/personal-updates/context-prompts/${encodeURIComponent(promptId)}/decision`;
+    const [response] = await Promise.all([
+      page.waitForResponse((item) => {
+        const url = new URL(item.url());
+        return url.pathname === expectedPath
+          && item.request().method() === "POST"
+          && item.status() === 200;
+      }),
+      clickLocator.click(),
+    ]);
+    await page.locator("#context-prompt-dialog").waitFor({ state: "hidden" });
+    return response;
+  }
   async function waitKnowledgeSearchable(knowledgeId) {
     let latest;
     for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -418,7 +432,7 @@ const MINIMAL_PDF = Buffer.from(
       const deferredPrompt = (await contextPrompts(deferredQuery)).items.find((item) => item.kind === "missing" && item.status === "pending");
       assert(deferredPrompt);
       assert.equal(deferredPrompt.status, "pending");
-      await page.locator("#context-prompt-defer").click();
+      await waitForPromptDecision(deferredPrompt.id, page.locator("#context-prompt-defer"));
       await page.locator("#toast").filter({ hasText: "待办" }).waitFor();
       const deferredState = (await contextPrompts(deferredQuery)).items
         .find((item) => item.id === deferredPrompt.id);
@@ -436,7 +450,7 @@ const MINIMAL_PDF = Buffer.from(
       const supplementPrompt = (await contextPrompts(supplementQuery)).items.find((item) => item.kind === "missing" && item.status === "pending");
       assert(supplementPrompt);
       await page.locator("#context-prompt-input").fill("偏好短反馈");
-      await page.locator("#context-prompt-supplement").click();
+      await waitForPromptDecision(supplementPrompt.id, page.locator("#context-prompt-supplement"));
       await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
       assert(!(await contextPrompts(supplementQuery)).items.some((item) => item.id === supplementPrompt.id));
       const supplementedMemory = await apiJson(`/v1/lookups/memory/${encodeURIComponent(supplementPrompt.state_key)}`);
@@ -448,7 +462,7 @@ const MINIMAL_PDF = Buffer.from(
       await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
       const skipPrompt = (await contextPrompts(skipQuery)).items.find((item) => item.kind === "missing" && item.status === "pending");
       assert(skipPrompt);
-      await page.locator("#context-prompt-skip").click();
+      await waitForPromptDecision(skipPrompt.id, page.locator("#context-prompt-skip"));
       await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
       assert(!(await contextPrompts(skipQuery)).items.some((item) => item.id === skipPrompt.id));
       evidence.missing_information = {

@@ -126,3 +126,24 @@ SHA cannot satisfy a final run.
 The final archive is acceptable only when migration/startup, quality gates,
 the real success path, the negative answer path, both restart paths, and the
 failure/retry observations all pass under the same SHA.
+
+### Model failure evidence (#55)
+
+The real-files report proves real DeepSeek success and negative answers. A separate
+`browser/answer-failures-issue55/report.json` proves failures using an explicitly
+labelled loopback HTTPS transport fixture against the real API and browser. It
+injects invalid structured output and HTTP failure, checks visible safe failure,
+one dispatch per request, diagnostic codes and audit/provider/model identities.
+Injected failure evidence never substitutes for the real DeepSeek success report.
+The collector requires both reports at the final SHA.
+
+Transport audit success means the external request completed, not that its output
+passed the answer contract. Invalid model output is recorded in the answer receipt
+as `invalid_model_output`, with `answer_safety_reason_code` and the originating
+`answer_audit_id`; raw model output is withheld. Transport failure retains its own
+failed audit and diagnostic. There is no automatic answer retry; a user can submit
+a new request, while idempotent replay does not dispatch the same request again.
+
+The collector creates a new evidence root with mode 0700 and its own reports and
+logs with mode 0600, even under a permissive shell umask. Existing run directories
+are rejected so failure evidence cannot be overwritten by a later attempt.

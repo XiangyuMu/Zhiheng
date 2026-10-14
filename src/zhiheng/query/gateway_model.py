@@ -8,8 +8,14 @@ from typing import Any
 
 from zhiheng.core.ids import sha256_json, sha256_text
 from zhiheng.memory.context import MemoryContextSnapshot
-from zhiheng.models import ModelGateway, ModelRequest
-from zhiheng.query.contracts import AnswerClaim, GeneratedAnswer, PersonalizationRef
+from zhiheng.models import ModelGateway, ModelGatewayTransportError, ModelRequest
+from zhiheng.query.contracts import (
+    AnswerClaim,
+    GeneratedAnswer,
+    InvalidModelOutputError,
+    ModelTransportFailedError,
+    PersonalizationRef,
+)
 from zhiheng.query.source_titles import unambiguous_source_title
 from zhiheng.retrieval.citations import CitationBuilder
 from zhiheng.retrieval.contracts import AuthorizedContextManifest, Citation
@@ -54,21 +60,36 @@ class GatewayAnswerModel:
             memory_context=memory_context,
             conversation_context=conversation_context,
         )
-        response = self._gateway.complete(
-            ModelRequest(
-                task_id=f"answer:{sha256_text(prompt)}",
+        try:
+            response = self._gateway.complete(
+                ModelRequest(
+                    task_id=f"answer:{sha256_text(prompt)}",
+                    provider_id=self._provider_id,
+                    model_id=self._model_id,
+                    payload=prompt,
+                    requires_local=_requires_local(memory_context),
+                )
+            )
+        except ModelGatewayTransportError as exc:
+            raise ModelTransportFailedError(
+                audit_id=exc.audit_id,
+                provider_id=exc.provider_id,
+                model_id=exc.model_id,
+                reason_code=exc.diagnostic_code,
+            ) from exc
+        try:
+            result = _parse_generated_answer(
+                response.text,
+                citations=wire_citations,
+                memory_context=memory_context,
+                max_output_tokens=max_output_tokens,
+            )
+        except ValueError as exc:
+            raise InvalidModelOutputError(
+                audit_id=response.audit_id,
                 provider_id=self._provider_id,
                 model_id=self._model_id,
-                payload=prompt,
-                requires_local=_requires_local(memory_context),
-            )
-        )
-        result = _parse_generated_answer(
-            response.text,
-            citations=wire_citations,
-            memory_context=memory_context,
-            max_output_tokens=max_output_tokens,
-        )
+            ) from exc
         result = _guard_negative_existence_response(query, result)
         return replace(
             result,

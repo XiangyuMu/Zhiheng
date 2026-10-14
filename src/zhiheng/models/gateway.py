@@ -134,6 +134,23 @@ class ModelResponse:
     audit_id: str
 
 
+class ModelGatewayTransportError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        audit_id: str,
+        provider_id: str,
+        model_id: str,
+        diagnostic_code: str,
+    ) -> None:
+        super().__init__(message)
+        self.audit_id = audit_id
+        self.provider_id = provider_id
+        self.model_id = model_id
+        self.diagnostic_code = diagnostic_code
+
+
 @dataclass(frozen=True)
 class _ProviderRoute:
     provider_id: str
@@ -250,8 +267,15 @@ class ModelGateway:
                 ),
             )
         except Exception as exc:
+            diagnostic_code = _diagnostic_code(exc)
             self._mark_failed(audit_id, exc, int((time.monotonic() - started) * 1000))
-            raise
+            raise ModelGatewayTransportError(
+                str(exc),
+                audit_id=audit_id,
+                provider_id=route.provider_id,
+                model_id=route.model_id,
+                diagnostic_code=diagnostic_code,
+            ) from exc
 
         self._mark_succeeded(audit_id, response, int((time.monotonic() - started) * 1000))
         return ModelResponse(

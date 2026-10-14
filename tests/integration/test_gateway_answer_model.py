@@ -18,7 +18,7 @@ from zhiheng.memory.context import MemoryContextEntry, MemoryContextSnapshot
 from zhiheng.models import ModelGateway
 from zhiheng.models._transports import TransportResponse, TransportRoute, _ApprovedOutboundPayload
 from zhiheng.privacy.gateway import DeterministicPatternAnalyzer, PiiFinding, PrivacyPipeline
-from zhiheng.query.contracts import PersonalizationRef
+from zhiheng.query.contracts import InvalidModelOutputError, PersonalizationRef
 from zhiheng.query.gateway_model import (
     GatewayAnswerModel,
     _guard_negative_existence_response,
@@ -204,7 +204,7 @@ def test_gateway_answer_model_rejects_unscoped_json_without_fallback(
     with session_scope(session_factory) as session:
         _insert_provider(session)
 
-    with pytest.raises(ValueError, match="citation outside authorized scope"):
+    with pytest.raises(InvalidModelOutputError) as error:
         GatewayAnswerModel(
             gateway=gateway,
             provider_id="provider-openai",
@@ -217,6 +217,11 @@ def test_gateway_answer_model_rejects_unscoped_json_without_fallback(
         )
 
     assert len(transport.calls) == 1
+    assert error.value.audit_id
+    assert error.value.provider_id == "provider-openai"
+    assert error.value.model_id == "gpt-test"
+    assert error.value.reason_code == "answer_model_invalid_output"
+    assert "citation outside authorized scope" in str(error.value.__cause__)
 
 
 def test_gateway_answer_model_requires_local_for_sensitive_memory(

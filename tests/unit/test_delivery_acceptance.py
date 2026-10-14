@@ -405,6 +405,9 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
 
 
 def write_payloads(root: Path, payloads: dict[int, dict[str, Any]]) -> None:
+    failure_path = root / "browser/answer-failures-issue55/report.json"
+    failure_path.parent.mkdir(parents=True, exist_ok=True)
+    failure_path.write_text(json.dumps(failure_evidence()))
     for item in evidence_matrix():
         path = root / str(item["artifact"])
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -654,3 +657,73 @@ def test_restart_result_is_private_and_failure_stops_pdf_parse(
     if outcome != "success":
         assert report["status"] == "failed"
         assert "pdf-search" not in calls
+
+
+def test_collector_creates_private_evidence_with_permissive_umask(tmp_path: Path) -> None:
+    import os
+    import stat
+
+    module = collector()
+    previous = os.umask(0)
+    try:
+        output = tmp_path / "private-run"
+        module.create_evidence_directory(output)
+        module.write_report(output, {"status": "failed"})
+        result = module.execute(
+            tmp_path, output, "failure", [sys.executable, "-c", "raise SystemExit(1)"],
+            5, module.clean_environment(),
+        )
+        assert result["exit_code"] == 1
+        assert stat.S_IMODE(output.stat().st_mode) == 0o700
+        for path in (output / "report.json", output / "failure.log"):
+            assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        with pytest.raises(FileExistsError):
+            module.create_evidence_directory(output)
+    finally:
+        os.umask(previous)
+
+
+def failure_evidence() -> dict[str, Any]:
+    return {
+        "status": "passed", "sha": "same-sha", "injected": True,
+        "boundary": "model_transport",
+        "cases": [
+            {"kind": kind, "status": "passed", "stop_reason": stop,
+             "diagnostic_code": code, "audit_id": kind, "provider_id": "provider",
+             "model_id": "model", "dispatch_count": 1, "ui_visible": True,
+             "audit_status": "succeeded" if kind == "invalid_output" else "failed"}
+            for kind, stop, code in (
+                ("invalid_output", "invalid_model_output", "answer_model_invalid_output"),
+                ("transport_failure", "model_failed", "provider_error"),
+            )
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "change", ["missing", "sha", "unbounded", "ui", "audit", "wrong_diagnostic", "audit_status"],
+)
+def test_issue55_requires_same_sha_bounded_failure_proof(tmp_path: Path, change: str) -> None:
+    module = collector()
+    write_payloads(tmp_path, valid_payloads())
+    failure_path = tmp_path / "browser/answer-failures-issue55/report.json"
+    failure_path.parent.mkdir(parents=True, exist_ok=True)
+    failure = failure_evidence()
+    if change == "missing":
+        failure_path.unlink(missing_ok=True)
+    else:
+        if change == "sha":
+            failure["sha"] = "old-sha"
+        if change == "unbounded":
+            failure["cases"][0]["dispatch_count"] = 10
+        if change == "ui":
+            failure["cases"][0]["ui_visible"] = False
+        if change == "audit":
+            failure["cases"][0]["audit_id"] = ""
+        if change == "wrong_diagnostic":
+            failure["cases"][1]["diagnostic_code"] = "wrong_but_nonempty"
+        if change == "audit_status":
+            failure["cases"][1].pop("audit_status")
+        failure_path.write_text(json.dumps(failure))
+    with pytest.raises(ValueError, match="Issue 55"):
+        module.validate_stage_evidence(tmp_path, evidence_matrix(), "same-sha")

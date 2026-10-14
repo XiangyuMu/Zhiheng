@@ -4,6 +4,7 @@ from zhiheng.models.gateway import (
     ImagePart,
     ModelContentPart,
     ModelGateway,
+    ModelGatewayTransportError,
     ModelRequest,
     ModelResponse,
     TextPart,
@@ -12,6 +13,7 @@ from zhiheng.models.gateway import (
 __all__ = [
     "ImagePart",
     "ModelGateway",
+    "ModelGatewayTransportError",
     "ModelContentPart",
     "ModelRequest",
     "ModelResponse",

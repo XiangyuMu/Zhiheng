@@ -142,6 +142,17 @@ def real_pdf_preflight() -> list[str]:
     return [sys.executable, "-c", code]
 
 
+def create_evidence_directory(output: Path) -> None:
+    # Refuse every existing run, including public directories and symlinks.
+    output.mkdir(parents=True, mode=0o700, exist_ok=False)
+
+
+def write_report(output: Path, report: dict[str, Any]) -> None:
+    descriptor = os.open(output / "report.json", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        stream.write(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+
+
 def execute(
     repo: Path,
     output: Path,
@@ -152,7 +163,8 @@ def execute(
 ) -> dict[str, Any]:
     started = time.monotonic()
     result: dict[str, Any] = {"name": name, "command": command, "status": "failed"}
-    with (output / f"{name}.log").open("wb") as log:
+    descriptor = os.open(output / f"{name}.log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "wb") as log:
         try:
             process = subprocess.Popen(
                 command,
@@ -578,6 +590,43 @@ def validate_stage_evidence(output: Path, matrix: list[dict[str, Any]], sha: str
                         "Issue 54 manual retry physical index",
                     )
         elif issue == 55:
+            failure_path = output / "browser/answer-failures-issue55/report.json"
+            try:
+                failure = require_dict(
+                    json.loads(failure_path.read_text(encoding="utf-8")),
+                    "Issue 55 failure evidence",
+                )
+            except (OSError, json.JSONDecodeError) as error:
+                raise ValueError("Issue 55 failure evidence is missing or invalid") from error
+            if (
+                failure.get("status") != "passed" or failure.get("sha") != sha
+                or failure.get("injected") is not True
+                or failure.get("boundary") != "model_transport"
+            ):
+                raise ValueError("Issue 55 failure proof must be passed, injected and same-SHA")
+            cases = require_object_list(failure.get("cases"), "Issue 55 failure cases")
+            expected_failures = {
+                "invalid_output": (
+                    "invalid_model_output", "answer_model_invalid_output", "succeeded",
+                ),
+                "transport_failure": ("model_failed", "provider_error", "failed"),
+            }
+            if len(cases) != 2 or {row.get("kind") for row in cases} != set(expected_failures):
+                raise ValueError("Issue 55 requires both invalid output and transport failure")
+            for case in cases:
+                if (
+                    case.get("status") != "passed" or case.get("ui_visible") is not True
+                    or case.get("stop_reason") != expected_failures[case["kind"]][0]
+                    or type(case.get("dispatch_count")) is not int or case["dispatch_count"] != 1
+                ):
+                    raise ValueError("Issue 55 failure lacks bounded dispatch or visible UI")
+                for field in ("audit_id", "provider_id", "model_id", "diagnostic_code"):
+                    require_nonempty(case.get(field), f"Issue 55 failure {field}")
+                if (
+                    case["diagnostic_code"] != expected_failures[case["kind"]][1]
+                    or case.get("audit_status") != expected_failures[case["kind"]][2]
+                ):
+                    raise ValueError("Issue 55 failure diagnosis or audit status does not match")
             answers = require_object_list(payload.get("answers"), "Issue 55 answers")
             by_kind = {item.get("kind"): item for item in answers}
             if set(by_kind) != {"text", "pdf", "negative"}:
@@ -680,7 +729,7 @@ def main() -> int:
     # Ignored developer configuration must not contaminate a supposedly clean run.
     if (repo / ".env").exists():
         parser.error("use an isolated checkout without .env")
-    output.mkdir(parents=True, exist_ok=False)
+    create_evidence_directory(output)
     sha = git(repo, "rev-parse", "HEAD")
     evidence_matrix = load_pdf_evidence_matrix(repo)
     env = clean_environment()
@@ -831,13 +880,13 @@ def main() -> int:
                         "runtime_restart": runtime_restart,
                     }
                     report["steps"].append(result)
-                    (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+                    write_report(output, report)
                     break
         result = execute(repo, output, name, command, timeout, step_env)
         if runtime_restart is not None:
             result["runtime_restart"] = runtime_restart
         report["steps"].append(result)
-        (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+        write_report(output, report)
         if (
             name == "dependencies"
             or name == "real-pdf-preflight"
@@ -871,7 +920,7 @@ def main() -> int:
     )
     # Write a complete preliminary delivery report before validating its own
     # row in the evidence matrix. The final write below replaces this copy.
-    (output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    write_report(output, report)
     try:
         validate_stage_evidence(output, evidence_matrix, sha)
     except ValueError as error:
@@ -892,7 +941,7 @@ def main() -> int:
         for path in sorted(output.rglob("*"))
         if path.is_file() and path != output / "report.json"
     }
-    (output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    write_report(output, report)
     print(json.dumps({"status": report["status"], "report": str(output / "report.json")}))
     return 0 if report["status"] == "passed" else 1
 

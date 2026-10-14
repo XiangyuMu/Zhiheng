@@ -19,7 +19,9 @@ from zhiheng.query.contracts import (
     EvidenceVerifierPort,
     GeneratedAnswer,
     HybridRetrievalPort,
+    InvalidModelOutputError,
     MemoryImpact,
+    ModelTransportFailedError,
     OfflineHybridRetrievalPort,
     PersonalizationRef,
     ReleaseBehaviorConfig,
@@ -92,6 +94,10 @@ class BoundedAgenticRagService:
         stop_reason: StopReason,
         release_context: ReleaseContext | None = None,
         retrieval_run_ids: tuple[str, ...] = (),
+        model_audit_id: str | None = None,
+        model_provider_id: str | None = None,
+        model_id: str | None = None,
+        model_safety_reason_code: str | None = None,
     ) -> AnswerEnvelope:
         if manifest is None:
             return _evidence_only(
@@ -101,6 +107,10 @@ class BoundedAgenticRagService:
                 stop_reason=stop_reason,
                 release_context=release_context,
                 retrieval_run_ids=retrieval_run_ids,
+                model_audit_id=model_audit_id,
+                model_provider_id=model_provider_id,
+                model_id=model_id,
+                model_safety_reason_code=model_safety_reason_code,
             )
         if not self._evidence_verifier.validate_manifest(session, manifest):
             return _evidence_only(
@@ -110,6 +120,10 @@ class BoundedAgenticRagService:
                 stop_reason=StopReason.CITATION_VALIDATION_FAILED,
                 release_context=release_context,
                 retrieval_run_ids=retrieval_run_ids,
+                model_audit_id=model_audit_id,
+                model_provider_id=model_provider_id,
+                model_id=model_id,
+                model_safety_reason_code=model_safety_reason_code,
             )
         if isinstance(session, Session) and not RetrievalAuthorizer().validate_manifest(
             session, manifest
@@ -121,6 +135,10 @@ class BoundedAgenticRagService:
                 stop_reason=StopReason.CITATION_VALIDATION_FAILED,
                 release_context=release_context,
                 retrieval_run_ids=retrieval_run_ids,
+                model_audit_id=model_audit_id,
+                model_provider_id=model_provider_id,
+                model_id=model_id,
+                model_safety_reason_code=model_safety_reason_code,
             )
         return _evidence_only(
             manifest=manifest,
@@ -129,6 +147,10 @@ class BoundedAgenticRagService:
             stop_reason=stop_reason,
             release_context=release_context,
             retrieval_run_ids=retrieval_run_ids,
+            model_audit_id=model_audit_id,
+            model_provider_id=model_provider_id,
+            model_id=model_id,
+            model_safety_reason_code=model_safety_reason_code,
         )
 
     def answer(
@@ -438,6 +460,34 @@ class BoundedAgenticRagService:
                 release_context=release_context,
                 retrieval_run_ids=retrieval_run_ids,
             )
+        except InvalidModelOutputError as exc:
+            return self._final_evidence_only(
+                session,
+                manifest=manifest,
+                route=route,
+                usage=_with_elapsed(usage, started),
+                stop_reason=StopReason.INVALID_MODEL_OUTPUT,
+                release_context=release_context,
+                retrieval_run_ids=retrieval_run_ids,
+                model_audit_id=exc.audit_id,
+                model_provider_id=exc.provider_id,
+                model_id=exc.model_id,
+                model_safety_reason_code=exc.reason_code,
+            )
+        except ModelTransportFailedError as exc:
+            return self._final_evidence_only(
+                session,
+                manifest=manifest,
+                route=route,
+                usage=_with_elapsed(usage, started),
+                stop_reason=StopReason.MODEL_FAILED,
+                release_context=release_context,
+                retrieval_run_ids=retrieval_run_ids,
+                model_audit_id=exc.audit_id,
+                model_provider_id=exc.provider_id,
+                model_id=exc.model_id,
+                model_safety_reason_code=exc.reason_code,
+            )
         except Exception:
             return self._final_evidence_only(
                 session,
@@ -721,6 +771,10 @@ def _evidence_only(
     stop_reason: StopReason,
     release_context: ReleaseContext | None = None,
     retrieval_run_ids: tuple[str, ...] = (),
+    model_audit_id: str | None = None,
+    model_provider_id: str | None = None,
+    model_id: str | None = None,
+    model_safety_reason_code: str | None = None,
 ) -> AnswerEnvelope:
     citations = _citations_for_manifest(manifest) if manifest is not None else ()
     insufficiencies = () if citations else ("知识库中没有足够的已授权证据支撑回答。",)
@@ -736,6 +790,10 @@ def _evidence_only(
         budget_usage=usage,
         release_context=release_context,
         retrieval_run_ids=retrieval_run_ids,
+        model_audit_id=model_audit_id,
+        model_provider_id=model_provider_id,
+        model_id=model_id,
+        model_safety_reason_code=model_safety_reason_code,
     )
 
 

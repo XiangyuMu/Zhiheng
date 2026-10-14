@@ -28,6 +28,8 @@ from zhiheng.privacy.gateway import DeterministicPatternAnalyzer, PrivacyPipelin
 class _AnswerJsonTransport:
     calls: list[str]
     evidence_insufficient: bool = False
+    invalid_response_text: str | None = None
+    raised_exception: Exception | None = None
 
     def complete(
         self,
@@ -37,6 +39,13 @@ class _AnswerJsonTransport:
     ) -> TransportResponse:
         del route
         self.calls.append(payload.text)
+        if self.raised_exception is not None:
+            raise self.raised_exception
+        if self.invalid_response_text is not None:
+            return TransportResponse(
+                text=self.invalid_response_text,
+                response_hash=sha256_text(payload.text),
+            )
         prompt = json.loads(payload.text)
         citation_id = prompt["KNOWLEDGE_EVIDENCE"][0]["citation_ids"][0]
         memory_ref_ids = [
@@ -206,8 +215,122 @@ def test_answer_api_external_model_disabled_returns_privacy_denied_zero_send(
     assert "answer_audit_id" not in response.json()
     assert "answer_provider_id" not in response.json()
     assert "answer_model_id" not in response.json()
+    assert "answer_safety_reason_code" not in response.json()
     with session_scope(session_factory) as session:
         assert session.execute(text("SELECT count(*) FROM model_call_audits")).scalar_one() == 0
+
+
+def test_answer_api_transport_exception_fails_closed_with_failed_audit_and_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "secret-value")
+    client, session_factory, transport = _gateway_client(
+        tmp_path,
+        external_models_enabled=True,
+    )
+    raw_provider_error = "HTTP 503 synthetic provider outage"
+    transport.raised_exception = RuntimeError(raw_provider_error)
+    csrf = _login(client)
+    _seed(session_factory, tmp_path)
+    with session_scope(session_factory) as session:
+        _insert_provider(session)
+
+    response = client.post(
+        "/v1/answers",
+        json={"query": "中文 全文 检索 正式 视图"},
+        headers=_headers(csrf, "answer-gateway-transport-failure"),
+    )
+    replay = client.post(
+        "/v1/answers",
+        json={"query": "中文 全文 检索 正式 视图"},
+        headers=_headers(csrf, "answer-gateway-transport-failure"),
+    )
+
+    assert response.status_code == 200
+    assert replay.status_code == 200
+    payload = response.json()
+    replay_payload = replay.json()
+    assert len(transport.calls) == 1
+    assert payload["stop_reason"] == "model_failed"
+    assert payload["answer_safety_reason_code"] == "provider_error"
+    assert payload["answer"] == "仅返回已授权证据，未生成模型答案。"
+    assert raw_provider_error not in response.text
+    assert payload["claims"] == []
+    assert payload["citations"]
+    with session_scope(session_factory) as session:
+        audit = session.execute(
+            text(
+                "SELECT id, provider_id, model_id, status, diagnostic_code "
+                "FROM model_call_audits"
+            )
+        ).mappings().one()
+        assert audit["status"] == "failed"
+        assert audit["diagnostic_code"] == "provider_error"
+        assert payload["answer_audit_id"] == audit["id"]
+        assert payload["answer_provider_id"] == audit["provider_id"]
+        assert payload["answer_model_id"] == audit["model_id"]
+    assert replay_payload["answer_audit_id"] == payload["answer_audit_id"]
+    assert replay_payload["answer_provider_id"] == payload["answer_provider_id"]
+    assert replay_payload["answer_model_id"] == payload["answer_model_id"]
+    assert replay_payload["answer_safety_reason_code"] == payload["answer_safety_reason_code"]
+    assert raw_provider_error not in replay.text
+
+
+def test_answer_api_invalid_model_output_fails_closed_with_audit_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "secret-value")
+    client, session_factory, transport = _gateway_client(
+        tmp_path,
+        external_models_enabled=True,
+    )
+    raw_model_answer = "RAW_MODEL_ANSWER_MUST_NOT_LEAK"
+    transport.invalid_response_text = json.dumps(
+        {"answer": raw_model_answer, "claims": []},
+        ensure_ascii=False,
+    )
+    csrf = _login(client)
+    _seed(session_factory, tmp_path)
+    with session_scope(session_factory) as session:
+        _insert_provider(session)
+
+    response = client.post(
+        "/v1/answers",
+        json={"query": "中文 全文 检索 正式 视图"},
+        headers=_headers(csrf, "answer-gateway-invalid-output"),
+    )
+    replay = client.post(
+        "/v1/answers",
+        json={"query": "中文 全文 检索 正式 视图"},
+        headers=_headers(csrf, "answer-gateway-invalid-output"),
+    )
+
+    assert response.status_code == 200
+    assert replay.status_code == 200
+    payload = response.json()
+    replay_payload = replay.json()
+    assert len(transport.calls) == 1
+    assert payload["stop_reason"] == "invalid_model_output"
+    assert payload["answer_safety_reason_code"] == "answer_model_invalid_output"
+    assert payload["answer"] == "仅返回已授权证据，未生成模型答案。"
+    assert raw_model_answer not in response.text
+    assert payload["claims"] == []
+    assert payload["citations"]
+    with session_scope(session_factory) as session:
+        audit = session.execute(
+            text("SELECT id, provider_id, model_id, status FROM model_call_audits")
+        ).mappings().one()
+        assert audit["status"] == "succeeded"
+        assert payload["answer_audit_id"] == audit["id"]
+        assert payload["answer_provider_id"] == audit["provider_id"]
+        assert payload["answer_model_id"] == audit["model_id"]
+    assert replay_payload["answer_audit_id"] == payload["answer_audit_id"]
+    assert replay_payload["answer_provider_id"] == payload["answer_provider_id"]
+    assert replay_payload["answer_model_id"] == payload["answer_model_id"]
+    assert replay_payload["answer_safety_reason_code"] == payload["answer_safety_reason_code"]
+    assert raw_model_answer not in replay.text
 
 
 def test_answer_api_rejects_retry_while_existing_receipt_is_started(

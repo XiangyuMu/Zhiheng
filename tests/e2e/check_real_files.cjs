@@ -321,7 +321,7 @@ const saveReport = () => fs.writeFileSync(
         if (!/(没有|不足|无法|未提供|未找到|证据)/.test(answer.answer)) {
           throw Error('negative answer did not state evidence insufficiency');
         }
-        if (containsAccountNumber(answer.answer)) {
+        if (containsAccountNumber(answer.answer, report.imports.map(item => item.title))) {
           throw Error('negative answer appears to fabricate an account number');
         }
       }
