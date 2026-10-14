@@ -917,3 +917,13 @@ def test_issue55_text_answer_rejects_unrelated_citation_identity(tmp_path: Path)
     write_payloads(tmp_path, payloads)
     with pytest.raises(ValueError, match="Issue 55 text answer citation"):
         module.validate_stage_evidence(tmp_path, evidence_matrix(), "same-sha")
+
+
+def test_issue55_text_answer_rejects_invalid_normalized_source_digest(tmp_path: Path) -> None:
+    module = collector()
+    payloads = valid_payloads()
+    payloads[55]["imports"][0]["knowledge"]["source_sha256"] = "not-a-sha256"
+    payloads[55]["answers"][1]["bound_source"]["source_sha256"] = "not-a-sha256"
+    write_payloads(tmp_path, payloads)
+    with pytest.raises(ValueError, match="Issue 55 text answer citation"):
+        module.validate_stage_evidence(tmp_path, evidence_matrix(), "same-sha")

@@ -56,6 +56,8 @@ def valid_issue55_answer_binding(
     )
     if any(not isinstance(source.get(field), str) or not source[field] for field in source_fields):
         return False
+    if not is_sha256(source["source_sha256"]):
+        return False
     if expected_sha256 is not None and source.get("source_sha256") != expected_sha256:
         return False
     if any(source.get(field) != imported_knowledge.get(field) for field in source_fields):
