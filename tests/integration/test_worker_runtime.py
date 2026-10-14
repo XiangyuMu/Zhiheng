@@ -16,7 +16,11 @@ from zhiheng.worker import main as worker_main
 
 
 def _settings() -> Settings:
-    return Settings(environment="test", database_url="sqlite:///synthetic-worker.sqlite")
+    return Settings(
+        environment="test",
+        database_url="sqlite:///synthetic-worker.sqlite",
+        pdf_parser_backend="none",
+    )
 
 
 def _db_error(payload: str = "personal payload must not be logged") -> OperationalError:

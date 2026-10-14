@@ -28,7 +28,7 @@ const processingNames = {
   ready: "已可检索", searchable: "已可检索", completed: "处理完成", retrying: "正在重试",
   parsed: "解析完成", succeeded: "处理完成", partial: "部分完成，尚不可检索",
   retryable_failed: "处理失败，可以重试", failed: "处理失败", dead: "处理失败", dead_letter: "处理失败，可以重试",
-  parse_failed: "解析失败，可以重试", unsupported: "当前服务版本不支持处理", cancelled: "处理已取消",
+  parse_failed: "解析失败，可以重试", unsupported: "当前部署未声明所需的部署能力", cancelled: "处理已取消",
 };
 const batchStatusNames = {
   queued: "排队中", processing: "处理中", succeeded: "已完成", partial: "部分完成",

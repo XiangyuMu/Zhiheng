@@ -4,6 +4,7 @@ import hashlib
 import json
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import pytest
 from alembic import command
@@ -205,7 +206,13 @@ def test_pdf_status_exposes_unsupported_worker_diagnostics(tmp_path: Path) -> No
     assert body["state"] == "unsupported"
     assert body["error_code"] == "unsupported_pdf_parser"
     assert "configure a parser service" in body["redacted_summary"]
-    assert body["retryable"] is False
+    assert body["retryable"] is True
+    retry = client.post(
+        f"/v1/knowledge/pdf-imports/{task['task_id']}/retry",
+        headers={**_headers(csrf, "pdf-unsupported-retry"), "If-Match": body["etag"]},
+    )
+    assert retry.status_code == 200
+    assert client.get(task["status_url"]).json()["state"] == "queued"
 
 
 def test_pdf_parser_failure_is_projected_to_retryable_task_status(tmp_path: Path) -> None:
@@ -632,3 +639,63 @@ def test_pdf_manifest_rejects_mismatched_source_hash(tmp_path: Path) -> None:
             ).scalar_one()
             == 0
         )
+
+
+def test_unsupported_pdf_retry_rebinds_to_the_declared_parser_backend(tmp_path: Path) -> None:
+    db_path = tmp_path / "rebind.db"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.upgrade(config, "head")
+
+    def settings(**values: Any) -> Settings:
+        return Settings(
+            _env_file=None,
+            environment="test",
+            database_url=f"sqlite:///{db_path}",
+            **values,
+        )
+
+    app = create_app(settings())
+    client = TestClient(app)
+    csrf = _login(client)
+    response = client.post(
+        "/v1/knowledge/pdf-imports",
+        params={"title": "未声明解析器 PDF", "primary_domain_id": "technology.ai"},
+        content=_pdf_bytes(),
+        headers={**_headers(csrf, "pdf-rebind"), "Content-Type": "application/pdf"},
+    )
+    assert response.status_code == 202
+    task = response.json()
+    assert client.get(task["status_url"]).json()["backend"] == "deepdoc"
+    session_factory = app.state.session_factory
+    with session_scope(session_factory) as session:
+        events = OutboxRepository().claim_pending(session, limit=10)
+        assert OutboxRepository().enqueue_jobs_for_events(session, events) == 1
+    process_knowledge_jobs_once(
+        session_factory,
+        KnowledgeIndexJobExecutor(settings()),
+        worker_id="pdf-rebind-worker",
+        pdf_executor=None,
+    )
+    body = client.get(task["status_url"]).json()
+    assert body["state"] == "unsupported"
+
+    app.state.knowledge_settings = settings(pdf_parser_backend="mineru")
+    retry = client.post(
+        f"/v1/knowledge/pdf-imports/{task['task_id']}/retry",
+        headers={**_headers(csrf, "pdf-rebind-retry"), "If-Match": body["etag"]},
+    )
+
+    assert retry.status_code == 200
+    assert client.get(task["status_url"]).json()["backend"] == "mineru"
+    with session_scope(session_factory) as session:
+        retry_payload = json.loads(
+            session.execute(
+                text(
+                    "SELECT payload_json FROM outbox_events "
+                    "WHERE aggregate_id=:task_id ORDER BY created_at DESC, rowid DESC LIMIT 1"
+                ),
+                {"task_id": task["task_id"]},
+            ).scalar_one()
+        )
+    assert retry_payload["backend"] == "mineru"
