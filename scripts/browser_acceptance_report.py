@@ -6,11 +6,19 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
+
+try:
+    from acceptance_contracts import valid_issue55_metadata
+except ModuleNotFoundError as error:
+    if error.name != "acceptance_contracts":
+        raise
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from acceptance_contracts import valid_issue55_metadata
 
 REQUIRED_CHECKS = {
     "taxonomy": "taxonomy migration preserves each item until its own approval",
@@ -193,30 +201,6 @@ def load_checks(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return payload, None
 
 
-def is_finite_number(value: Any, *, minimum: float | None = None) -> bool:
-    if type(value) not in (int, float):
-        return False
-    try:
-        if not math.isfinite(value):
-            return False
-    except (OverflowError, TypeError, ValueError):
-        return False
-    return minimum is None or value >= minimum
-
-
-def valid_issue55_metadata(payload: dict[str, Any]) -> bool:
-    command = payload.get("command")
-    return (
-        isinstance(command, list)
-        and bool(command)
-        and all(isinstance(item, str) and item for item in command)
-        and isinstance(payload.get("input_digest"), str)
-        and re.fullmatch(r"[0-9a-f]{64}", payload["input_digest"]) is not None
-        and is_finite_number(payload.get("elapsed_ms"), minimum=0)
-        and payload["elapsed_ms"] > 0
-        and type(payload.get("exit_code")) is int
-        and payload.get("exit_code") == 0
-    )
 
 
 def validate_checks(output: Path) -> dict[str, Any]:

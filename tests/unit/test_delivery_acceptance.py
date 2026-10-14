@@ -11,6 +11,10 @@ from typing import Any, cast
 
 import pytest
 
+SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
 
 def collector() -> Any:
     path = Path(__file__).resolve().parents[2] / "scripts/delivery_acceptance.py"
@@ -392,7 +396,12 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                     "citation_payload_count": 1,
                     "claims_count": 1,
                     "bound_source": {"knowledge_object_id": "text"},
-                    "bound_citation": {"citation_id": "text-citation"},
+                    "bound_citation": {
+                        "citation_id": "text-citation", "source_id": "text",
+                        "source_version_id": "text-version", "evidence_object_id": "text-evidence",
+                        "content_version_id": "text-content", "content_span_id": "text-span",
+                        "page_no": 1,
+                    },
                 },
                 {
                     **answer_base,
@@ -400,8 +409,16 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                     "citations": 1,
                     "citation_payload_count": 1,
                     "claims_count": 1,
-                    "bound_source": {"knowledge_object_id": "pdf"},
-                    "bound_citation": {"citation_id": "pdf-citation"},
+                    "bound_source": {
+                        "knowledge_object_id": "pdf", "knowledge_version_id": "pdf-version",
+                        "evidence_object_id": "pdf-evidence", "source_sha256": "source",
+                    },
+                    "bound_citation": {
+                        "citation_id": "pdf-citation", "source_id": "pdf",
+                        "source_version_id": "pdf-version", "evidence_object_id": "pdf-evidence",
+                        "content_version_id": "pdf-content", "content_span_id": "pdf-span",
+                        "page_no": 1,
+                    },
                 },
             ],
         },
@@ -807,15 +824,26 @@ def test_pdf_stages_require_one_input_digest(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("value", [True, float("nan"), float("inf"), 10**400])
-def test_delivery_timing_rejects_non_finite_or_boolean_values(
+def test_issue54_timing_rejects_non_finite_or_boolean_values(
     tmp_path: Path, value: object
 ) -> None:
     module = collector()
     payloads = valid_payloads()
     payloads[54]["restart_scenarios"][0]["elapsed_ms"] = value
-    payloads[56]["steps"][0]["seconds"] = value
     write_payloads(tmp_path, payloads)
     with pytest.raises(ValueError, match="Issue 54"):
+        module.validate_stage_evidence(tmp_path, evidence_matrix(), "same-sha")
+
+
+@pytest.mark.parametrize("value", [True, float("nan"), float("inf"), 10**400])
+def test_issue56_timing_rejects_non_finite_or_boolean_values(
+    tmp_path: Path, value: object
+) -> None:
+    module = collector()
+    payloads = valid_payloads()
+    payloads[56]["steps"][0]["seconds"] = value
+    write_payloads(tmp_path, payloads)
+    with pytest.raises(ValueError, match="Issue 56"):
         module.validate_stage_evidence(tmp_path, evidence_matrix(), "same-sha")
 
 
@@ -843,4 +871,15 @@ def test_issue55_pdf_answer_must_bind_to_accepted_pdf(tmp_path: Path) -> None:
             evidence_matrix(),
             "same-sha",
             expected_pdf_sha256=expected,
+        )
+
+
+def test_issue55_pdf_answer_rejects_unrelated_citation_identity(tmp_path: Path) -> None:
+    module = collector()
+    payloads = valid_payloads()
+    payloads[55]["answers"][2]["bound_citation"] = {"citation_id": "unrelated"}
+    write_payloads(tmp_path, payloads)
+    with pytest.raises(ValueError, match="Issue 55 PDF answer citation"):
+        module.validate_stage_evidence(
+            tmp_path, evidence_matrix(), "same-sha", expected_pdf_sha256="source"
         )

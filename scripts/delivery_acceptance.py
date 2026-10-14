@@ -8,7 +8,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -16,6 +15,22 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+try:
+    from acceptance_contracts import (
+        is_finite_number,
+        valid_issue55_metadata,
+        valid_issue55_pdf_binding,
+    )
+except ModuleNotFoundError as error:
+    if error.name != "acceptance_contracts":
+        raise
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from acceptance_contracts import (
+        is_finite_number,
+        valid_issue55_metadata,
+        valid_issue55_pdf_binding,
+    )
 
 
 def git(repo: Path, *args: str) -> str:
@@ -29,23 +44,6 @@ def file_digest(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def is_sha256(value: Any) -> bool:
-    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
-
-
-def is_finite_number(
-    value: Any, *, minimum: float | None = None, maximum: float | None = None
-) -> bool:
-    if type(value) not in (int, float):
-        return False
-    try:
-        if not math.isfinite(value):
-            return False
-    except (OverflowError, TypeError, ValueError):
-        return False
-    return (minimum is None or value >= minimum) and (maximum is None or value <= maximum)
 
 
 def parser_backend(profile: str) -> str:
@@ -640,17 +638,7 @@ def validate_stage_evidence(
                 or failure.get("boundary") != "model_transport"
             ):
                 raise ValueError("Issue 55 failure proof must be passed, injected and same-SHA")
-            command = failure.get("command")
-            if (
-                not isinstance(command, list)
-                or not command
-                or not all(isinstance(item, str) and item for item in command)
-                or not is_sha256(failure.get("input_digest"))
-                or not is_finite_number(failure.get("elapsed_ms"), minimum=0)
-                or failure["elapsed_ms"] <= 0
-                or type(failure.get("exit_code")) is not int
-                or failure.get("exit_code") != 0
-            ):
+            if not valid_issue55_metadata(failure):
                 raise ValueError("Issue 55 failure evidence metadata is incomplete")
             cases = require_object_list(failure.get("cases"), "Issue 55 failure cases")
             expected_failures = {
@@ -728,20 +716,15 @@ def validate_stage_evidence(
                     raise ValueError("Issue 55 evidence does not prove cited positive answers")
             if expected_pdf_sha256 is not None:
                 pdf_answer = by_kind["pdf"]
-                bound_source = pdf_answer["bound_source"]
                 imported_knowledge = require_dict(
                     pdf_imports[0].get("knowledge"), "Issue 55 PDF import knowledge"
                 )
-                if bound_source.get("source_sha256") != expected_pdf_sha256:
-                    raise ValueError("Issue 55 PDF answer is not bound to the accepted PDF")
-                for field in (
-                    "knowledge_object_id",
-                    "knowledge_version_id",
-                    "evidence_object_id",
-                    "source_sha256",
+                if not valid_issue55_pdf_binding(
+                    pdf_answer, imported_knowledge, expected_pdf_sha256
                 ):
-                    if bound_source.get(field) != imported_knowledge.get(field):
-                        raise ValueError(f"Issue 55 PDF answer {field} is not bound to its import")
+                    raise ValueError(
+                        "Issue 55 PDF answer citation is not bound to the accepted import"
+                    )
         elif issue == 56:
             steps = payload.get("steps")
             if (
