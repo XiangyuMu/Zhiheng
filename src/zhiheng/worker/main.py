@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import math
 import os
@@ -32,6 +33,11 @@ from zhiheng.jobs import (
     process_classification_jobs_once,
     process_knowledge_jobs_once,
     process_memory_extraction_jobs_once,
+)
+from zhiheng.jobs.deployment_capabilities import (
+    deployment_capabilities,
+    deployment_capabilities_configured,
+    probe_pdf_parsing,
 )
 from zhiheng.recovery import startup_recovery_barrier
 
@@ -251,6 +257,11 @@ def main(argv: list[str] | None = None) -> int:
         type=_positive_seconds,
         default=DEFAULT_BACKOFF_SECONDS,
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="print deployment capabilities as JSON, probe declared services, and exit",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -262,6 +273,19 @@ def main(argv: list[str] | None = None) -> int:
             extra={"error_class": exc.__class__.__name__},
         )
         return 2
+
+    if args.check:
+        return check_deployment_capabilities(settings)
+
+    logging.basicConfig(level=settings.log_level.upper())
+
+    capabilities = deployment_capabilities(settings)
+    if not deployment_capabilities_configured(capabilities):
+        logger.error(
+            "worker deployment capabilities are not configured %s", json.dumps(capabilities)
+        )
+        return 2
+    logger.info("worker deployment capabilities %s", json.dumps(capabilities))
 
     log_startup(settings)
     if args.once:
@@ -286,6 +310,23 @@ def main(argv: list[str] | None = None) -> int:
         idle_seconds=args.idle_seconds,
         backoff_seconds=args.backoff_seconds,
     )
+
+
+def check_deployment_capabilities(settings: Settings) -> int:
+    """Print capabilities; exit 1 for an invalid declaration, 2 for an unreachable service."""
+
+    capabilities = deployment_capabilities(settings)
+    if not deployment_capabilities_configured(capabilities):
+        print(json.dumps(capabilities, ensure_ascii=False))
+        return 1
+    pdf_parsing = capabilities["pdf_parsing"]
+    reachable = True
+    if pdf_parsing["declared"] != "none":
+        reachable, detail = probe_pdf_parsing(settings)
+        pdf_parsing["reachable"] = reachable
+        pdf_parsing["detail"] = detail
+    print(json.dumps(capabilities, ensure_ascii=False))
+    return 0 if reachable else 2
 
 
 def _resolve_role(role: WorkerRole | str | None = None) -> WorkerRole:

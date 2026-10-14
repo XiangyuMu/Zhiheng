@@ -299,7 +299,12 @@ async def upload_pdf(
     backend: Literal["deepdoc", "mineru"] | None = None,
 ) -> PdfTaskResponse | JSONResponse:
     settings: Settings = request.app.state.knowledge_settings
-    selected_backend = backend or settings.pdf_parser_backend
+    # Without a declared parser the task keeps the historical deepdoc label; the
+    # worker then settles it as ``unsupported`` (ADR 0005).
+    configured_backend = settings.pdf_parser_backend
+    selected_backend = backend or (
+        configured_backend if configured_backend in {"deepdoc", "mineru"} else "deepdoc"
+    )
     if selected_backend not in {"deepdoc", "mineru"}:
         raise HTTPException(status_code=400, detail="unsupported PDF parser backend")
     if request.headers.get("content-type", "").split(";", 1)[0].lower() != "application/pdf":
@@ -528,7 +533,7 @@ def get_pdf_task(
             else None
         ),
         payload=(
-            {"failure_code": failure_code, "failure_stage": "parse", "retryable": False}
+            {"failure_code": failure_code, "failure_stage": "parse", "retryable": True}
             if failure_code and raw_state == "unsupported"
             else {
                 "failure_code": failure_code,
@@ -637,6 +642,7 @@ def get_pdf_manifest(
 @router.post("/v1/knowledge/pdf-imports/{task_id}/retry")
 def retry_pdf_task(
     task_id: str,
+    request: Request,
     session_factory: SessionFactoryDep,
     _user_id: AuthDep,
     if_match: IfMatchDep,
@@ -648,8 +654,16 @@ def retry_pdf_task(
         ).first()
         if row is None:
             raise HTTPException(status_code=404, detail="PDF task not found")
-        if str(row[0]) not in {"failed", "partial", "dead"}:
+        if str(row[0]) not in {"failed", "partial", "dead", "unsupported"}:
             raise HTTPException(status_code=409, detail="PDF task is not retryable")
+        declared_backend = request.app.state.knowledge_settings.pdf_parser_backend
+        if str(row[0]) == "unsupported" and declared_backend in {"deepdoc", "mineru"}:
+            # The task was labelled before a parser was declared; parse it with
+            # the backend this deployment declares now.
+            session.execute(
+                text("UPDATE pdf_tasks SET backend=:backend WHERE id=:id"),
+                {"backend": declared_backend, "id": task_id},
+            )
         pdf_repository.retry_task(session, task_id)
     return {"task_id": task_id, "state": "queued"}
 

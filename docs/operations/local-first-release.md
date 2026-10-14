@@ -55,6 +55,7 @@ values = {
     'ZHIHENG_EXTERNAL_MODELS_ENABLED': 'false',
     'ZHIHENG_API_HOST': '127.0.0.1',
     'ZHIHENG_API_PORT': '8000',
+    'ZHIHENG_PDF_PARSER_BACKEND': 'none',
 }
 with config.open('x') as f:
     f.write(''.join(f'export {k}={shlex.quote(v)}\n' for k, v in values.items()))
@@ -86,15 +87,46 @@ export ZHIHENG_LOCAL_ROOT="$HOME/.local/share/zhiheng"
 uv run --frozen zhiheng-worker --role worker --idle-seconds 1
 ```
 
+Worker 启动时会打印一行部署能力 JSON；PDF 解析未声明或声明不完整时拒绝启动。
+随时可用 `uv run --frozen zhiheng-worker --check` 检查：退出码 `0` 正常，`1` 声明不合法，
+`2` 声明合法但解析服务不可达。
+
 第三个终端可执行 `curl --fail http://127.0.0.1:8000/healthz`。打开
 `http://127.0.0.1:8000/login`，首次创建账户（密码至少 12 字符），后续使用原账户登录。
 浏览器流程：研究页 → 导入 → 粘贴文本并提交 → 等待后台任务完成 → 知识库搜索 → 点击资料/引用回到原文。
 只有 `succeeded` 且原文对象、索引指针存在时才可检索；资料列表出现不等于处理完成。
 
 审核中心处理结论草稿、前提、分类和关系；分类中心逐条确认迁移；相关冲突或缺失信息弹窗可延期、跳过或补充。
-PDF 无可选解析器时应显示 `unsupported` 和原因。404 停止轮询，5xx/网络错误有限重试后提示暂时无法确认，
+PDF 解析声明为 `none` 时，PDF 导入显示 `unsupported` 和原因；启用解析器后可在界面上重试。404 停止轮询，5xx/网络错误有限重试后提示暂时无法确认，
 不能将它们视为导入成功。需要诊断时保留 API 和 Worker 输出，不手动修改任务状态。
 停止服务时分别在终端 A/B 按 Ctrl-C，等待退出；数据库未迁移或恢复检查失败时两者都会拒绝启动。
+
+### 启用 PDF 解析（MinerU）
+
+PDF 解析是部署能力，需要 MinerU 容器和一个与本实例共用对象存储的网关。网关令牌只放在文件里：
+
+```sh
+export ZHIHENG_LOCAL_ROOT="$HOME/.local/share/zhiheng"
+. "$ZHIHENG_LOCAL_ROOT/local.env"
+umask 077
+[ -f "$ZHIHENG_LOCAL_ROOT/mineru-gateway.token" ] || \
+  uv run python -c 'import secrets; print(secrets.token_urlsafe(32))' > "$ZHIHENG_LOCAL_ROOT/mineru-gateway.token"
+# 终端 C：MinerU 容器已在 127.0.0.1:19392 提供服务
+MINERU_UPSTREAM_URL=http://127.0.0.1:19392 \
+MINERU_GATEWAY_TOKEN_FILE="$ZHIHENG_LOCAL_ROOT/mineru-gateway.token" \
+MINERU_GATEWAY_STATE_PATH="$ZHIHENG_LOCAL_ROOT/mineru-gateway.sqlite3" \
+  uv run --frozen python deploy/pdf-parser/mineru_gateway.py
+```
+
+再把 `local.env` 中的声明改为：
+
+```sh
+export ZHIHENG_PDF_PARSER_BACKEND=mineru
+export ZHIHENG_PDF_MINERU_URL=http://127.0.0.1:9392
+export ZHIHENG_PDF_MINERU_TOKEN_FILE="$ZHIHENG_LOCAL_ROOT/mineru-gateway.token"
+```
+
+重启 Worker，确认 `zhiheng-worker --check` 退出码为 `0`，再在界面上重试此前 `unsupported` 的 PDF 导入。
 
 ## 4. 完整备份与独立账本保管
 
