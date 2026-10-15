@@ -699,3 +699,45 @@ def test_unsupported_pdf_retry_rebinds_to_the_declared_parser_backend(tmp_path: 
             ).scalar_one()
         )
     assert retry_payload["backend"] == "mineru"
+
+
+def test_pdf_parse_lease_exhausted_by_a_dead_worker_fails_the_task(tmp_path: Path) -> None:
+    client, session_factory = _client(tmp_path)
+    csrf = _login(client)
+    response = client.post(
+        "/v1/knowledge/pdf-imports",
+        params={"title": "Worker 中途退出 PDF", "primary_domain_id": "technology.ai"},
+        content=_pdf_bytes(),
+        headers={**_headers(csrf, "pdf-lease-exhausted"), "Content-Type": "application/pdf"},
+    )
+    assert response.status_code == 202
+    task = response.json()
+    with session_scope(session_factory) as session:
+        events = OutboxRepository().claim_pending(session, limit=10)
+        assert OutboxRepository().enqueue_jobs_for_events(session, events) == 1
+        # The worker holding the final attempt died: its lease expired unrenewed.
+        session.execute(
+            text(
+                "UPDATE jobs SET status='processing', attempts=max_attempts, "
+                "lease_owner='dead-worker', available_at=datetime('now', '-2 minutes'), "
+                "lease_expires_at=datetime('now', '-1 minute') "
+                "WHERE job_type='knowledge.parse_pdf'"
+            )
+        )
+
+    process_knowledge_jobs_once(
+        session_factory,
+        KnowledgeIndexJobExecutor(Settings(environment="test")),
+        worker_id="pdf-lease-reclaimer",
+        pdf_executor=None,
+    )
+
+    with session_scope(session_factory) as session:
+        assert (
+            session.execute(text("SELECT status FROM jobs WHERE job_type='knowledge.parse_pdf'"))
+            .scalar_one()
+            == "dead"
+        )
+    body = client.get(task["status_url"]).json()
+    assert body["state"] == "failed"
+    assert body["retryable"] is True
