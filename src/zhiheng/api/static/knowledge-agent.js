@@ -664,9 +664,13 @@ function renderProcessing() {
   $("processing-section").hidden = !state.processing.size;
   const entries = [...state.processing.values()];
   const active = entries.filter((entry) => !entry.terminal).length;
+  const unfinished = entries.filter((entry) => entry.terminal && !entry.ready && entry.state !== "parsed").length;
+  $("processing-title").textContent = active ? "正在准备资料" : unfinished ? "资料处理未完成" : "资料已准备好";
   $("processing-summary").textContent = active
-    ? `${active} 份资料正在处理；完成后会自动进入资料库和检索。`
-    : "最近提交的资料已完成处理，可打开详情查看原文定位。";
+    ? `${active} 份资料正在处理；完成后会自动进入资料库和检索。${unfinished ? `另有 ${unfinished} 份处理未完成。` : ""}`
+    : unfinished
+      ? `${unfinished} 份资料处理未完成，暂不能检索。可以重试、补充资料，或在资料库中删除。`
+      : "最近提交的资料已完成处理，可打开详情查看原文定位。";
   $("processing-list").replaceChildren(...Array.from(state.processing, ([id, entry]) => {
     const li = node("li", undefined, `processing-item processing-${entry.kind || "knowledge"} processing-${entry.state || "pending"}`);
     const text = node("div", undefined, "processing-main");
@@ -681,14 +685,14 @@ function renderProcessing() {
       actions.append(action("查看已解析页面", () => loadPdfDetail(entry), "link-button"));
     } else if (entry.ready) {
       actions.append(action("围绕此资料提问", () => askAbout(entry.title), "link-button"));
-    } else {
+    } else if (!entry.terminal) {
       actions.append(action("刷新进度", () => entry.kind === "pdf" ? pollPdfTask(id) : pollProcessing(id), "secondary small"));
     }
     // A terminal failed/dead PDF remains manually retryable even after the
     // bounded automatic retry budget is exhausted. The API accepts these
     // durable terminal states, so keep the recovery action visible when the
     // persisted retryable flag is false.
-    const canRetry = entry.retryable || (entry.terminal && ["failed", "dead"].includes(entry.state));
+    const canRetry = entry.retryable || (entry.terminal && ["failed", "dead", "dead_letter"].includes(entry.state));
     if (canRetry && entry.terminal) actions.append(action("重试", (event) => retryImportTask(id, entry, event.currentTarget), "secondary small"));
     if (entry.terminal) actions.append(action("补充资料", () => openDialog("import-dialog"), "secondary small"));
     if (entry.kind === "pdf" && entry.terminal) actions.append(action("查看详情", () => loadPdfDetail(entry), "quiet small"));
@@ -702,7 +706,7 @@ function renderProcessing() {
 function entryLabel(entry) {
   if (entry.kind === "pdf" && entry.label) return entry.label;
   if (entry.kind === "pdf") return processingNames[entry.state] || entry.state || "正在解析 PDF";
-  if (entry.failure && entry.terminal) return entry.failure.redacted_summary || "处理失败";
+  if (entry.failure && entry.terminal) return processingNames[entry.state] || "处理失败";
   return entry.label || processingNames[entry.status] || "资料处理中";
 }
 function pdfStats(entry) {
