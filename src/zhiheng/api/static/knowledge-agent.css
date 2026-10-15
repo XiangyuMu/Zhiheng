@@ -276,7 +276,7 @@ mark { background: #fbebbb; color: #463618; padding: 2px 0; }
   .first-material { padding: 14px; flex-wrap: wrap; gap: 10px; } .first-material .file-symbol { display: none; } .first-material button { margin-left: 0; }
   .starter-grid { grid-template-columns: 1fr; } button.starter { grid-template-columns: 24px minmax(0,1fr); padding: 14px; } .starter small { font-size: 12px; }
   .source-list { grid-template-columns: 1fr; } .section-heading { gap: 10px; } .recent-questions .section-heading { flex-wrap: wrap; }
-  .material-row { padding: 16px; gap: 12px; } .material-row > .badge { display: none; } .list-summary { font-size: 11px; } .library-toolbar { gap: 8px; }
+  .material-row { padding: 16px; gap: 12px; flex-wrap: wrap; } .material-row > .badge { display: none; } .material-body { flex: 1 1 calc(100% - 90px); } .material-actions { margin-left: 74px; } .list-summary { font-size: 11px; } .library-toolbar { gap: 8px; }
   .import-workbench { padding: 18px; } .batch-filters { grid-template-columns: 1fr; } .batch-row { align-items: flex-start; flex-direction: column; gap: 10px; } .batch-row > button { align-self: flex-start; }
   .library-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } .library-filters .filter-check { padding-top: 8px; }
   .panel { padding: 20px; } .setting-row { align-items: flex-start; gap: 12px; flex-wrap: wrap; } .reader-dialog { width: 100%; border-radius: 0; padding: 24px; }
