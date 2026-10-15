@@ -119,7 +119,7 @@ def test_library_lists_failed_knowledge_with_readable_reason(tmp_path: Path) -> 
     assert item["failure_summary"] == "embedding service unavailable"
 
 
-def test_library_status_filters_partition_items_and_counts_match(tmp_path: Path) -> None:
+def test_library_status_filters_select_by_readiness_and_counts_match(tmp_path: Path) -> None:
     client, session_factory = _client(tmp_path)
     _login(client)
     ready_id = _ready(session_factory, tmp_path)
@@ -129,7 +129,7 @@ def test_library_status_filters_partition_items_and_counts_match(tmp_path: Path)
     expected = {
         None: {ready_id, processing_id, failed_id},
         "active": {ready_id},
-        "processing": {processing_id},
+        "processing": {processing_id, failed_id},
         "failed": {failed_id},
     }
     for status, ids in expected.items():

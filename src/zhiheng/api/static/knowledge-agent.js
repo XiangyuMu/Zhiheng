@@ -991,7 +991,8 @@ function materialReadiness(item) {
 function lifecycleFilter(item, filter) {
   if (!filter) return true;
   if (filter === "active") return materialReadiness(item) === "ready" && item.lifecycle_status !== "soft_deleted";
-  if (filter === "processing" || filter === "failed") return materialReadiness(item) === filter && item.lifecycle_status !== "soft_deleted";
+  if (filter === "processing") return materialReadiness(item) !== "ready" && item.lifecycle_status !== "soft_deleted";
+  if (filter === "failed") return materialReadiness(item) === "failed" && item.lifecycle_status !== "soft_deleted";
   return item.lifecycle_status === filter;
 }
 function updateBulkToolbar(items) {
