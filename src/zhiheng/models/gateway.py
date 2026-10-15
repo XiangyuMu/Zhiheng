@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
+import httpx
 from sqlalchemy import text
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, sessionmaker
@@ -937,6 +938,22 @@ def _transport_route(route: _ProviderRoute) -> TransportRoute:
     )
 
 
+# Connection-level failures (EPIPE, ECONNRESET, truncated responses) whose
+# messages carry no "connect" token; without these they surface as provider_error.
+_TRANSPORT_NETWORK_ERRORS = (
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+)
+_TRANSPORT_NETWORK_MARKERS = (
+    "broken pipe",
+    "reset by peer",
+    "connection reset",
+    "errno 32]",
+    "errno 104]",
+)
+
+
 def _diagnostic_code(exc: Exception) -> str:
     message = str(exc).lower()
     class_name = exc.__class__.__name__.lower()
@@ -956,6 +973,10 @@ def _diagnostic_code(exc: Exception) -> str:
         return "model_unavailable"
     if "tls" in message or "ssl" in message or "certificate" in message:
         return "tls_error"
+    if isinstance(exc, _TRANSPORT_NETWORK_ERRORS) or any(
+        marker in message for marker in _TRANSPORT_NETWORK_MARKERS
+    ):
+        return "network_error"
     if (
         "connect" in message
         or "dns" in message
