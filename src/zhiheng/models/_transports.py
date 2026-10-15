@@ -11,6 +11,25 @@ from zhiheng.core.ids import sha256_text
 from zhiheng.models.errors import EmbeddingTransportError
 from zhiheng.secrets import EnvironmentSecretStore, SecretResolver
 
+# Connection-level failures (EPIPE, ECONNRESET, truncated responses) whose
+# messages carry no "connect" token.
+_CONNECTION_ERRORS = (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError)
+_CONNECTION_ERROR_MARKERS = (
+    "broken pipe",
+    "reset by peer",
+    "connection reset",
+    "errno 32]",
+    "errno 104]",
+)
+
+
+def is_transport_connection_error(exc: BaseException) -> bool:
+    """Whether a transport failure is a dropped or reset connection."""
+    message = str(exc).lower()
+    return isinstance(exc, _CONNECTION_ERRORS) or any(
+        marker in message for marker in _CONNECTION_ERROR_MARKERS
+    )
+
 
 @dataclass(frozen=True)
 class DiscoveredModel:
