@@ -941,9 +941,13 @@ def search_knowledge(
         if query_text is not None:
             params["fts_query"] = segment_for_fts(query_text.strip())
     readiness_sql = _knowledge_readiness_sql("ko")
-    if readiness:
-        conditions.append(f"({readiness_sql}) = :readiness")
-        params["readiness"] = "ready" if readiness == "active" else readiness
+    if readiness == "active":
+        conditions.append(f"({readiness_sql}) = 'ready'")
+    elif readiness == "processing":
+        # "Processing" covers everything not yet ready, including failures.
+        conditions.append(f"({readiness_sql}) <> 'ready'")
+    elif readiness == "failed":
+        conditions.append(f"({readiness_sql}) = 'failed'")
     if domain_id:
         conditions.append("ko.primary_domain_id = :domain_id")
         params["domain_id"] = domain_id
