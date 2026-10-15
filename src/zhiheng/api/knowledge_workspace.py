@@ -293,6 +293,37 @@ def read_current_knowledge(
         )
 
 
+@router.get("/v1/knowledge/{knowledge_object_id}/versions")
+def list_knowledge_versions(
+    knowledge_object_id: str,
+    session_factory: SessionFactoryDep,
+    user_id: AuthDep,
+) -> dict[str, Any]:
+    with session_scope(session_factory) as session:
+        rows = (
+            session.execute(
+                text(
+                    f"""
+                SELECT kv.id AS version_id, kv.version_no, kv.created_at, kv.summary,
+                       kv.id = ko.current_version_id AS is_current
+                FROM knowledge_objects ko
+                JOIN knowledge_versions kv ON kv.knowledge_object_id = ko.id
+                WHERE ko.id = :knowledge_object_id
+                  AND ko.lifecycle_status <> 'privacy_erased'
+                  AND {_owned_clause()}
+                ORDER BY kv.version_no DESC
+                """
+                ),
+                {"knowledge_object_id": knowledge_object_id, "user_id": user_id},
+            )
+            .mappings()
+            .all()
+        )
+    if not rows:
+        raise HTTPException(status_code=404, detail="knowledge not found")
+    return {"items": [{**row, "is_current": bool(row["is_current"])} for row in rows]}
+
+
 @router.get("/v1/knowledge/{knowledge_object_id}/versions/{version_id}/reader")
 def read_knowledge_version(
     knowledge_object_id: str,

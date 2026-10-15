@@ -409,7 +409,7 @@ class ClassificationRepository:
                        ko.lifecycle_status, ko.object_kind, ko.updated_at
                 FROM knowledge_objects ko
                 WHERE ko.owner_user_id = :user_id
-                  AND ko.lifecycle_status <> 'privacy_erased'
+                  AND ko.lifecycle_status NOT IN ('privacy_erased', 'soft_deleted')
                   AND NOT EXISTS (
                     SELECT 1 FROM knowledge_classifications kc
                     WHERE kc.knowledge_object_id = ko.id

@@ -1234,7 +1234,7 @@ class KnowledgeRepository:
             text(
                 """
                 UPDATE knowledge_objects
-                SET lifecycle_status = 'soft_deleted'
+                SET lifecycle_status = 'soft_deleted', updated_at = CURRENT_TIMESTAMP
                 WHERE id = :knowledge_object_id
                 """
             ),

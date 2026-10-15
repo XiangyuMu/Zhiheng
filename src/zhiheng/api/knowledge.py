@@ -823,6 +823,33 @@ def list_user_knowledge(
         )
 
 
+@router.get("/v1/knowledge/trash")
+def list_knowledge_trash(
+    session_factory: SessionFactoryDep,
+    user_id: AuthDep,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """List deleted knowledge in the recycle bin, most recently deleted first."""
+
+    with session_scope(session_factory) as session:
+        rows = session.execute(
+            text(
+                """
+                SELECT id AS knowledge_object_id, title, primary_domain_id, object_kind,
+                       updated_at AS deleted_at
+                FROM knowledge_objects
+                WHERE lifecycle_status = 'soft_deleted'
+                  AND (owner_user_id = :user_id OR owner_user_id IS NULL)
+                ORDER BY updated_at DESC, id DESC
+                LIMIT :limit OFFSET :offset
+                """
+            ),
+            {"user_id": user_id, "limit": limit, "offset": offset},
+        ).mappings()
+        return {"items": [dict(row) for row in rows]}
+
+
 @router.get("/v1/knowledge/domains", response_model=KnowledgeDomainsResponse)
 def list_knowledge_domains(
     session_factory: SessionFactoryDep,
