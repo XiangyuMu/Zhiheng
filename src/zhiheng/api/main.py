@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import quote
 
 import uvicorn
@@ -198,6 +198,19 @@ def create_app(
     )
     app.state.session_factory = session_factory
     app.state.settings = app_settings
+
+    @app.middleware("http")
+    async def revalidate_pages_and_assets(request: Request, call_next: Any) -> Any:
+        # Pages and their scripts change with every release; without an explicit
+        # policy browsers cache them heuristically and keep running stale code.
+        response = await call_next(request)
+        content_type = response.headers.get("content-type", "")
+        if "cache-control" not in response.headers and content_type.startswith(
+            ("text/html", "text/css", "text/javascript", "application/javascript")
+        ):
+            response.headers["cache-control"] = "no-cache"
+        return response
+
     app.state.provider_secret_store = provider_secret_store
     # Idempotency records are intentionally response-only and contain no secret
     # material. A durable audit table can replace this process-local cache later.
