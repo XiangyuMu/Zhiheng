@@ -294,3 +294,11 @@ mark { background: #fbebbb; color: #463618; padding: 2px 0; }
 .model-add-row { margin-top: 10px; }
 .model-add-row input { min-width: 220px; flex: 1; }
 .model-add-row select { min-width: 150px; }
+
+.classification-domain { border-bottom: 1px solid var(--line, #e3e7ee); padding: 8px 0; }
+.classification-domain summary { cursor: pointer; display: flex; gap: 6px; align-items: baseline; }
+.classification-domain ul { list-style: none; margin: 4px 0 0; padding-left: 18px; }
+.classification-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 3px 0; }
+.unclassified-item { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line, #e3e7ee); }
+.unclassified-item strong { flex: 1 1 100%; }
+.unclassified-item select { max-width: 100%; }

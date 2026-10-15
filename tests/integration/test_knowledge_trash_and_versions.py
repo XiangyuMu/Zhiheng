@@ -98,3 +98,34 @@ def test_versions_of_unknown_knowledge_is_not_found(tmp_path: Path) -> None:
     _login(client)
 
     assert client.get("/v1/knowledge/no-such-knowledge/versions").status_code == 404
+
+
+def _domain_nodes(client: TestClient, domain_id: str) -> dict[str, dict[str, object]]:
+    domains = client.get("/v1/domains").json()["items"]
+    domain = next(item for item in domains if item["id"] == domain_id)
+    return {str(node["id"]): node for node in domain["nodes"]}
+
+
+def test_classification_nodes_report_confirmed_knowledge_counts(tmp_path: Path) -> None:
+    client, _session_factory = _client(tmp_path)
+    csrf = _login(client)
+    domain_id = client.get("/v1/domains").json()["items"][0]["id"]
+    node = client.post(
+        "/v1/classifications",
+        json={"domain_id": domain_id, "name": "整理测试"},
+        headers=_headers(csrf, "classification-node"),
+    )
+    assert node.status_code == 201
+    node_id = node.json()["id"]
+    knowledge_id = _import(client, csrf, "待归类资料")
+    assert _domain_nodes(client, domain_id)[node_id]["knowledge_count"] == 0
+
+    assigned = client.put(
+        f"/v1/knowledge/{knowledge_id}/classifications",
+        json={"primary_domain_id": domain_id, "node_ids": [node_id]},
+        headers=_headers(csrf, "classification-assign"),
+    )
+
+    assert assigned.status_code == 200
+    assert _domain_nodes(client, domain_id)[node_id]["knowledge_count"] == 1
+    assert knowledge_id not in _unclassified_ids(client)

@@ -41,11 +41,16 @@ class ClassificationRepository:
             session.execute(
                 text(
                     """
-                SELECT id, domain_id, parent_id, level, name, description, path,
-                       sort_order, status
-                FROM classification_nodes
-                WHERE owner_user_id = :user_id
-                ORDER BY domain_id, level, sort_order, name, id
+                SELECT n.id, n.domain_id, n.parent_id, n.level, n.name, n.description, n.path,
+                       n.sort_order, n.status,
+                       (SELECT count(*) FROM knowledge_classifications kc
+                        JOIN knowledge_objects ko ON ko.id = kc.knowledge_object_id
+                        WHERE kc.classification_node_id = n.id
+                          AND ko.owner_user_id = :user_id
+                          AND kc.confirmation_status = 'confirmed') AS knowledge_count
+                FROM classification_nodes n
+                WHERE n.owner_user_id = :user_id
+                ORDER BY n.domain_id, n.level, n.sort_order, n.name, n.id
                 """
                 ),
                 {"user_id": user_id},
