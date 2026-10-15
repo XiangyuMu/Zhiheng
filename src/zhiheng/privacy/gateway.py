@@ -337,6 +337,15 @@ def authorize_outbound_payload(
     return OutboundPayloadDecision("approved", "payload passed configured privacy gateway checks")
 
 
+def preload_pii_analyzer() -> None:
+    """Pay the analyzer's import cost now instead of on the first outbound model call.
+
+    Importing presidio also imports transformers and torch when they are
+    installed, which can take longer than the whole answer budget when cold.
+    """
+    _default_analyzer()
+
+
 def _default_analyzer() -> PiiAnalyzerPort:
     try:
         return PresidioPatternAnalyzer()

@@ -54,6 +54,7 @@ from zhiheng.models.configuration import (
     update_provider_model,
 )
 from zhiheng.models.registry import list_provider_definitions
+from zhiheng.privacy.gateway import preload_pii_analyzer
 from zhiheng.recovery import startup_recovery_barrier
 from zhiheng.secrets import ProviderSecretStore
 
@@ -186,6 +187,7 @@ def create_app(
         if not getattr(app.state, "startup_barrier_complete", False):
             startup_recovery_barrier(app_settings, session_factory)
             initialize_retrieval_services(app, app_settings)
+            preload_pii_analyzer()
             app.state.startup_barrier_complete = True
         yield
 
