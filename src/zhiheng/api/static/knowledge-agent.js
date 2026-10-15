@@ -875,7 +875,8 @@ async function loadKnowledge() {
     }
     if (request !== state.libraryRequest) return;
     state.materials = Array.from(new Map((response.items || []).map((item) => [item.knowledge_object_id, item])).values());
-    $("library-nav-count").textContent = state.materials.length || "";
+    state.materialsTotal = state.usingSearchApi && Number.isFinite(response.total) ? response.total : null;
+    $("library-nav-count").textContent = (state.materialsTotal ?? state.materials.length) || "";
     $("first-material").hidden = Boolean(state.materials.length);
     renderDomains(); renderMaterials();
   } catch (error) {
@@ -910,7 +911,9 @@ function renderMaterials() {
     && (!pinnedOnly || Boolean(item.is_pinned))
     && `${item.title} ${item.summary || ""}`.toLocaleLowerCase().includes(search));
   const hasFilters = Boolean(search || state.domain || sourceFilter || statusFilter || favoriteOnly || pinnedOnly);
-  $("library-count").textContent = `${items.length} 份资料${hasFilters ? ` / 已加载 ${state.materials.length} 份` : ""}`;
+  $("library-count").textContent = state.materialsTotal != null
+    ? `${state.materialsTotal} 份资料${state.materialsTotal > items.length ? ` · 显示前 ${items.length} 份` : ""}`
+    : `${items.length} 份资料${hasFilters ? ` / 已加载 ${state.materials.length} 份` : ""}`;
   $("knowledge-items").replaceChildren();
   updateBulkToolbar(items);
   if (!items.length) {
@@ -941,6 +944,10 @@ function renderMaterials() {
     const body = node("div", undefined, "material-body");
     const flags = [item.is_pinned ? "置顶" : "", item.is_favorite ? "收藏" : ""].filter(Boolean).join(" · ");
     body.append(action(item.title, () => loadKnowledgeDetail(item.knowledge_object_id), ""), node("p", `${domainName(item.primary_domain_id)} · ${sourceLabel(item)}${flags ? ` · ${flags}` : ""}`));
+    const readiness = materialReadiness(item);
+    if (!state.trashView && readiness !== "ready") {
+      body.append(node("p", readiness === "failed" ? `处理失败：${item.failure_summary || "索引未完成，资料暂不可检索"}` : "处理中：完成索引后才能检索和用于回答", readiness === "failed" ? "processing-failure" : "muted"));
+    }
     const actions = node("div", undefined, "material-actions");
     actions.append(action(item.is_favorite ? "★" : "☆", () => toggleKnowledgeFlag(item, "favorite"), "icon-button"));
     actions.lastChild.title = item.is_favorite ? "取消收藏" : "收藏";
@@ -951,8 +958,10 @@ function renderMaterials() {
       actions.replaceChildren(action("恢复", () => restoreKnowledge(item.knowledge_object_id, item.title), "secondary small"));
       li.append(select, icon, body, node("span", "已删除", "badge"), actions, action("查看 →", () => loadKnowledgeDetail(item.knowledge_object_id), "quiet small"));
     } else {
+      if (readiness === "failed") actions.append(action("重新处理", () => reprocessKnowledge(item.knowledge_object_id, item.title), "secondary small"));
       actions.append(action("删除", () => deleteKnowledge(item.knowledge_object_id, item.title), "quiet danger small"));
-      li.append(select, icon, body, node("span", item.searchable ? "可检索" : "处理中", "badge"), actions, action("阅读 →", () => loadKnowledgeDetail(item.knowledge_object_id), "quiet small"));
+      const badge = node("span", { ready: "可检索", processing: "处理中", failed: "失败" }[readiness], `badge readiness-${readiness}`);
+      li.append(select, icon, body, badge, actions, action("阅读 →", () => loadKnowledgeDetail(item.knowledge_object_id), "quiet small"));
     }
     $("knowledge-items").append(li);
   });
@@ -975,10 +984,14 @@ function sourceKind(item) {
 function sourceLabel(item) {
   return { pdf: "PDF", markdown: "Markdown", web: "网页", ocr: "图片 OCR", text: "文本" }[sourceKind(item)] || item.media_type || "资料";
 }
+function materialReadiness(item) {
+  if (item.processing_status) return item.processing_status;
+  return item.searchable ? "ready" : "processing";
+}
 function lifecycleFilter(item, filter) {
   if (!filter) return true;
-  if (filter === "active") return Boolean(item.searchable) && item.lifecycle_status !== "soft_deleted";
-  if (filter === "processing") return !item.searchable && item.lifecycle_status !== "soft_deleted";
+  if (filter === "active") return materialReadiness(item) === "ready" && item.lifecycle_status !== "soft_deleted";
+  if (filter === "processing" || filter === "failed") return materialReadiness(item) === filter && item.lifecycle_status !== "soft_deleted";
   return item.lifecycle_status === filter;
 }
 function updateBulkToolbar(items) {
@@ -1046,7 +1059,11 @@ async function loadKnowledgeDetail(id) {
     state.detail = detail;
     $("detail-title").textContent = detail.title;
     const deleted = detail.lifecycle_status === "soft_deleted";
-    $("detail-meta").textContent = `${domainName(detail.primary_domain_id)} · ${deleted ? "已移入回收站" : detail.searchable ? "可检索" : "尚未就绪"}`;
+    const listed = state.materials.find((item) => item.knowledge_object_id === id);
+    const readinessLabel = detail.searchable ? "可检索"
+      : listed?.processing_status === "failed" ? `处理失败：${listed.failure_summary || "索引未完成，资料暂不可检索"}`
+      : "处理中，尚未就绪";
+    $("detail-meta").textContent = `${domainName(detail.primary_domain_id)} · ${deleted ? "已移入回收站" : readinessLabel}`;
     const sourceUrl = detail.source_metadata?.url || detail.source_metadata?.canonical_url;
     $("detail-source").textContent = sourceUrl ? `网页来源：${sourceUrl}` : "";
     $("detail-source").hidden = !sourceUrl;
@@ -1226,6 +1243,13 @@ async function deleteKnowledge(id, title) {
   showToast(`已将「${title}」移入回收站。`, () => restoreKnowledge(id, title));
   await loadKnowledge();
   return true;
+}
+async function reprocessKnowledge(id, title) {
+  try {
+    await mutate(`/v1/knowledge/${encodeURIComponent(id)}/reindex`, {});
+  } catch (error) { showToast(readableError(error)); return; }
+  showToast(`已提交「${title}」的重新处理请求。`);
+  await loadKnowledge();
 }
 async function restoreKnowledge(id, title) {
   try {
