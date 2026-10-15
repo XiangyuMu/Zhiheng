@@ -55,11 +55,12 @@ function message(id, text) {
   $(id).textContent = text || "";
   $(id).hidden = !text;
 }
-function showToast(text) {
+function showToast(text, undo) {
   clearTimeout(state.toastTimer);
   $("toast").textContent = text;
+  if (undo) $("toast").append(" ", action("撤销", () => { $("toast").hidden = true; undo(); }, "toast-action"));
   $("toast").hidden = false;
-  state.toastTimer = setTimeout(() => { $("toast").hidden = true; }, 5000);
+  state.toastTimer = setTimeout(() => { $("toast").hidden = true; }, undo ? 8000 : 5000);
 }
 async function busy(button, text, work, errorId) {
   if (button.disabled) return;
@@ -861,9 +862,12 @@ async function loadKnowledge() {
     if ($("library-favorite-filter")?.checked) params.set("favorite", "true");
     if ($("library-pinned-filter")?.checked) params.set("pinned", "true");
     let response;
+    state.trashView = status === "soft_deleted";
     try {
-      response = await fetchJson(`/v1/knowledge/search?${params}`);
-      state.usingSearchApi = true;
+      response = state.trashView
+        ? await fetchJson("/v1/knowledge/trash")
+        : await fetchJson(`/v1/knowledge/search?${params}`);
+      state.usingSearchApi = !state.trashView;
     } catch (error) {
       if (error.status !== 404 && error.status !== 405) throw error;
       response = await fetchJson("/v1/knowledge/items");
@@ -896,7 +900,9 @@ function renderMaterials() {
   const statusFilter = $("library-status-filter").value;
   const favoriteOnly = $("library-favorite-filter").checked;
   const pinnedOnly = $("library-pinned-filter").checked;
-  const items = state.usingSearchApi ? state.materials : state.materials.filter((item) =>
+  const items = state.usingSearchApi ? state.materials : state.trashView
+    ? state.materials.filter((item) => item.title.toLocaleLowerCase().includes(search))
+    : state.materials.filter((item) =>
     (!state.domain || item.primary_domain_id === state.domain)
     && (!sourceFilter || sourceKind(item) === sourceFilter)
     && (!statusFilter || lifecycleFilter(item, statusFilter))
@@ -940,7 +946,14 @@ function renderMaterials() {
     actions.lastChild.title = item.is_favorite ? "取消收藏" : "收藏";
     actions.append(action(item.is_pinned ? "★" : "☆", () => toggleKnowledgeFlag(item, "pin"), "icon-button"));
     actions.lastChild.title = item.is_pinned ? "取消置顶" : "置顶";
-    li.append(select, icon, body, node("span", item.searchable ? "可检索" : "处理中", "badge"), actions, action("阅读 →", () => loadKnowledgeDetail(item.knowledge_object_id), "quiet small"));
+    if (state.trashView) {
+      body.lastChild.textContent = `${domainName(item.primary_domain_id)} · 删除于 ${item.deleted_at ? new Date(`${item.deleted_at.replace(" ", "T")}Z`).toLocaleString() : "未知时间"}`;
+      actions.replaceChildren(action("恢复", () => restoreKnowledge(item.knowledge_object_id, item.title), "secondary small"));
+      li.append(select, icon, body, node("span", "已删除", "badge"), actions, action("查看 →", () => loadKnowledgeDetail(item.knowledge_object_id), "quiet small"));
+    } else {
+      actions.append(action("删除", () => deleteKnowledge(item.knowledge_object_id, item.title), "quiet danger small"));
+      li.append(select, icon, body, node("span", item.searchable ? "可检索" : "处理中", "badge"), actions, action("阅读 →", () => loadKnowledgeDetail(item.knowledge_object_id), "quiet small"));
+    }
     $("knowledge-items").append(li);
   });
 }
@@ -985,6 +998,7 @@ $("select-all-knowledge").addEventListener("change", (event) => {
 async function bulkKnowledgeAction(actionName) {
   const ids = [...state.selectedKnowledge];
   if (!ids.length) return;
+  if (actionName === "delete" && !window.confirm(`将选中的 ${ids.length} 份资料移入回收站？之后可在回收站恢复。`)) return;
   const button = $(`bulk-${actionName}`);
   await busy(button, "处理中…", async () => {
     let response;
@@ -1204,9 +1218,30 @@ async function refreshWebSource() {
 $("load-versions").addEventListener("click", () => state.detail && loadVersionTimeline(state.detail.knowledge_object_id));
 $("detail-refresh-web").addEventListener("click", refreshWebSource);
 $("detail-ask").addEventListener("click", () => { if (state.detail) { const title = state.detail.title; $("knowledge-detail").close(); askAbout(title); } });
+async function deleteKnowledge(id, title) {
+  if (!window.confirm(`将「${title}」移入回收站？之后可在回收站恢复。`)) return false;
+  try {
+    await mutate(`/v1/knowledge/${encodeURIComponent(id)}/delete`, {});
+  } catch (error) { showToast(readableError(error)); return false; }
+  showToast(`已将「${title}」移入回收站。`, () => restoreKnowledge(id, title));
+  await loadKnowledge();
+  return true;
+}
+async function restoreKnowledge(id, title) {
+  try {
+    await mutate(`/v1/knowledge/${encodeURIComponent(id)}/restore`, {});
+  } catch (error) { showToast(readableError(error)); return; }
+  showToast(`已恢复「${title}」，正在更新索引。`);
+  await loadKnowledge();
+  if (state.detail?.knowledge_object_id === id && $("knowledge-detail").open) await loadKnowledgeDetail(id);
+}
 async function knowledgeAction(actionName, button) {
   if (!state.detail) return;
   const id = state.detail.knowledge_object_id;
+  if (actionName === "delete") {
+    if (await deleteKnowledge(id, state.detail.title)) await loadKnowledgeDetail(id);
+    return;
+  }
   await busy(button, "处理中…", async () => {
     await mutate(`/v1/knowledge/${encodeURIComponent(id)}/${actionName}`, {});
     showToast(actionName === "delete" ? "资料已移入回收站，可在当前详情恢复。" : actionName === "restore" ? "已恢复资料，正在更新索引。" : "已提交重新处理请求。");

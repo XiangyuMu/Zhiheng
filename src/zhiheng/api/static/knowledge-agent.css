@@ -261,6 +261,7 @@ mark { background: #fbebbb; color: #463618; padding: 2px 0; }
 .reader-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 28px; }
 .inline-error { color: var(--danger); background: #fdf0ef; border-radius: 8px; padding: 12px 15px; font-size: 13px; overflow-wrap: anywhere; }
 #question-error { max-width: 780px; margin: 12px auto; }
+.toast-action { margin-left: 8px; background: transparent; border: 1px solid rgba(255,255,255,.6); color: #fff; border-radius: 6px; padding: 2px 10px; font-size: 13px; cursor: pointer; }
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 50; background: #263347; color: #fff; border-radius: 10px; padding: 13px 20px; font-size: 13px; box-shadow: var(--shadow); max-width: min(560px,calc(100% - 32px)); }
 @media (max-width: 1100px) { .page-content { padding: 32px; } .topbar { padding: 0 28px; } .decision-layout { grid-template-columns: 1fr; } .decision-note { display: none; } .starter-grid { gap: 8px; } button.starter { padding: 14px; } }
 @media (max-width: 760px) {
