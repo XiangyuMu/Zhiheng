@@ -160,6 +160,7 @@ summary { cursor: pointer; color: var(--ink); padding: 4px 0; }
 .processing-list span, .processing-list small { display: block; font-size: 12px; color: var(--muted); }
 .processing-stats { margin-top: 2px; }
 .processing-failure { color: var(--danger) !important; }
+.badge.readiness-failed { color: var(--danger); background: #fdf0ef; }
 .processing-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .processing-failed strong, .processing-dead_letter strong, .processing-parse_failed strong { color: var(--danger); }
 .import-workbench { margin: 24px 0; padding: 24px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }

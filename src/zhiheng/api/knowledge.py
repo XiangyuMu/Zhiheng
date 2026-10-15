@@ -894,6 +894,9 @@ def search_knowledge(
     source_type: str | None = Query(default=None, max_length=64),
     media_type: str | None = Query(default=None, max_length=128),
     lifecycle_status: str | None = Query(default=None, max_length=32),
+    readiness: Literal["active", "processing", "failed"] | None = Query(
+        default=None, alias="status"
+    ),
     created_from: str | None = Query(default=None, max_length=64),
     created_to: str | None = Query(default=None, max_length=64),
     favorite: bool | None = None,
@@ -914,13 +917,17 @@ def search_knowledge(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=100000),
 ) -> dict[str, Any]:
-    """Search the caller's visible knowledge using FTS and structured filters."""
+    """Search the caller's visible knowledge using FTS and structured filters.
+
+    Without a query this is the library listing, which includes knowledge that is
+    still processing or failed to index. A full-text query only matches knowledge
+    that meets formal retrieval qualification.
+    """
     from zhiheng.retrieval.tokenizer import segment_for_fts
 
     conditions = [
         "(ko.owner_user_id = :user_id OR ko.owner_user_id IS NULL)",
         "ko.lifecycle_status <> 'privacy_erased'",
-        formal_searchable_sql("ko"),
     ]
     params: dict[str, Any] = {
         "user_id": user_id,
@@ -929,9 +936,14 @@ def search_knowledge(
     }
     has_query = bool(q and q.strip())
     if has_query:
+        conditions.append(formal_searchable_sql("ko"))
         query_text = q
         if query_text is not None:
             params["fts_query"] = segment_for_fts(query_text.strip())
+    readiness_sql = _knowledge_readiness_sql("ko")
+    if readiness:
+        conditions.append(f"({readiness_sql}) = :readiness")
+        params["readiness"] = "ready" if readiness == "active" else readiness
     if domain_id:
         conditions.append("ko.primary_domain_id = :domain_id")
         params["domain_id"] = domain_id
@@ -958,6 +970,8 @@ def search_knowledge(
     if lifecycle_status:
         conditions.append("ko.lifecycle_status = :lifecycle_status")
         params["lifecycle_status"] = lifecycle_status
+    else:
+        conditions.append("ko.lifecycle_status = 'formal_current'")
     if created_from:
         conditions.append("ko.created_at >= :created_from")
         params["created_from"] = created_from
@@ -1035,6 +1049,7 @@ def search_knowledge(
                eo.id AS evidence_object_id, eo.sha256 AS source_sha256,
                eo.media_type, eo.source_kind, eo.source_metadata_json,
                cv.content_sha256,
+               ({readiness_sql}) AS readiness,
                {snippet_select}
         FROM knowledge_objects ko
         JOIN knowledge_versions kv ON kv.id = ko.current_version_id
@@ -1059,9 +1074,14 @@ def search_knowledge(
     with session_scope(session_factory) as session:
         rows = session.execute(text(query), params).mappings().all()
         total = int(session.execute(text(count_query), params).scalar_one())
+        failure_summaries = _latest_index_failure_summaries(
+            session,
+            [str(row["knowledge_object_id"]) for row in rows if row["readiness"] == "failed"],
+        )
         items = []
         for row in rows:
             metadata = _json_object(row["source_metadata_json"])
+            readiness_value = str(row["readiness"])
             items.append(
                 {
                     "knowledge_object_id": str(row["knowledge_object_id"]),
@@ -1075,7 +1095,9 @@ def search_knowledge(
                     "source_type": str(row["source_kind"]),
                     "evidence_object_id": str(row["evidence_object_id"]),
                     "source_sha256": str(row["source_sha256"]),
-                    "searchable": True,
+                    "searchable": readiness_value == "ready",
+                    "processing_status": readiness_value,
+                    "failure_summary": failure_summaries.get(str(row["knowledge_object_id"])),
                     "source_url": metadata.get("source_url") or metadata.get("url"),
                     "content_sha256": str(row["content_sha256"]),
                     "summary": str(row["summary"]) if row["summary"] is not None else None,
@@ -1092,6 +1114,91 @@ def search_knowledge(
                 }
             )
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+def _knowledge_readiness_sql(alias: str) -> str:
+    """Project a knowledge object's library status: ready, processing or failed.
+
+    Only ``ready`` means formal retrieval qualification. Pending reprocessing
+    requests win over an earlier failure so a retried item shows as processing.
+    """
+    latest_index_status = f"""
+        (SELECT latest_index.status
+         FROM jobs latest_index
+         WHERE latest_index.job_type = 'knowledge.index'
+           AND (
+             json_extract(latest_index.payload_json, '$.knowledge_object_id') = {alias}.id
+             OR json_extract(latest_index.payload_json, '$.aggregate_id') = {alias}.id
+           )
+         ORDER BY latest_index.created_at DESC, latest_index.rowid DESC
+         LIMIT 1)
+    """
+    pending_request = f"""
+        EXISTS (
+          SELECT 1 FROM outbox_events pending_request
+          WHERE pending_request.aggregate_id = {alias}.id
+            AND pending_request.event_type IN (
+              'evidence.ingested', 'knowledge.reindex_requested',
+              'knowledge_candidate.confirmed', 'knowledge.restored'
+            )
+            AND pending_request.status IN ('pending', 'processing')
+        )
+    """
+    return f"""
+        CASE
+          WHEN {formal_searchable_sql(alias)} THEN 'ready'
+          WHEN {pending_request} THEN 'processing'
+          WHEN {latest_index_status} IN ('failed', 'dead', 'unsupported', 'completed')
+            THEN 'failed'
+          ELSE 'processing'
+        END
+    """
+
+
+def _latest_index_failure_summaries(
+    session: Session, knowledge_object_ids: list[str]
+) -> dict[str, str]:
+    """Return a readable, redacted failure reason for each failed knowledge object."""
+    summaries: dict[str, str] = {}
+    for knowledge_object_id in knowledge_object_ids:
+        row = (
+            session.execute(
+                text(
+                    """
+                    SELECT j.status, j.payload_json, ja.error_class, ja.error_message
+                    FROM jobs j
+                    LEFT JOIN job_attempts ja ON ja.job_id = j.id
+                     AND ja.started_at = (
+                        SELECT max(started_at) FROM job_attempts WHERE job_id = j.id
+                     )
+                    WHERE j.job_type = 'knowledge.index'
+                      AND (
+                        json_extract(j.payload_json, '$.knowledge_object_id') = :id
+                        OR json_extract(j.payload_json, '$.aggregate_id') = :id
+                      )
+                    ORDER BY j.created_at DESC, j.rowid DESC
+                    LIMIT 1
+                    """
+                ),
+                {"id": knowledge_object_id},
+            )
+            .mappings()
+            .first()
+        )
+        failure = (
+            failure_from_row(
+                error_class=str(row["error_class"]) if row["error_class"] else None,
+                error_message=str(row["error_message"]) if row["error_message"] else None,
+                payload=_json_result(row["payload_json"]),
+                job_status=str(row["status"]),
+            )
+            if row is not None and row["error_message"]
+            else None
+        )
+        summaries[knowledge_object_id] = (
+            failure.redacted_summary if failure else "索引未完成，资料暂不可检索"
+        )
+    return summaries
 
 
 def _json_object(value: Any) -> dict[str, Any]:
