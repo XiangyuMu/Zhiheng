@@ -730,6 +730,10 @@ def test_restic_restore_real_api_worker_starts_and_serves_knowledge_without_keyr
             self.wfile.write(b'{"data":[{"id":"model-a"}]}')
 
         def do_POST(self) -> None:  # noqa: N802 - stdlib handler protocol
+            # Drain the body before replying. Closing with unread request bytes
+            # resets the connection on x86_64 Linux, and the client then fails
+            # with ReadError("Broken pipe") instead of reading the response.
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
             if self.path != "/chat/completions":
                 self.send_response(404)
                 self.end_headers()
