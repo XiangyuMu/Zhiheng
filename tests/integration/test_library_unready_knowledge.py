@@ -8,6 +8,7 @@ library so the user can manage it.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -85,13 +86,14 @@ def _consume_outbox(session: Session, knowledge_id: str) -> None:
     )
 
 
-def _library(client: TestClient, **params: str) -> dict:
+def _library(client: TestClient, **params: str) -> dict[str, Any]:
     response = client.get("/v1/knowledge/search", params=params)
     assert response.status_code == 200
-    return response.json()
+    body: dict[str, Any] = response.json()
+    return body
 
 
-def _by_id(body: dict) -> dict[str, dict]:
+def _by_id(body: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {item["knowledge_object_id"]: item for item in body["items"]}
 
 
