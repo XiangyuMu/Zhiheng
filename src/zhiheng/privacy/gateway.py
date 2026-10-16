@@ -393,9 +393,12 @@ def _deduplicate_findings(findings: list[PiiFinding]) -> list[PiiFinding]:
 def _contains_sensitive_personal_semantics(text: str) -> bool:
     # Do not combine unrelated words from an entire document. Retrieved
     # evidence can contain first-person dialogue and a separate sensitive
-    # topic elsewhere; only a single sentence/line establishes the semantic
-    # relationship that requires local handling.
-    segments = re.split(r"(?:\n|\\n|[。！？!?;；])", text)
+    # topic elsewhere; only a single sentence establishes the semantic
+    # relationship that requires local handling. Line breaks (real or
+    # escaped) are user-controlled and are not sentence boundaries: treating
+    # them as such lets "My\nhealth is poor" reach an external model.
+    sentences = re.sub(r"(?:\s|\\[nrt])+", " ", text)
+    segments = re.split(r"[。！？!?;；]", sentences)
     return any(
         _FIRST_PERSON_PATTERN.search(segment) and _SENSITIVE_CONTEXT_PATTERN.search(segment)
         for segment in segments
