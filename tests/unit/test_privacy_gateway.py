@@ -131,10 +131,48 @@ def test_privacy_pipeline_does_not_join_distant_document_segments() -> None:
     assert result.status == "clear"
 
 
-@pytest.mark.parametrize("separator", ["\n", "\r\n", r"\n"])
-def test_privacy_pipeline_preserves_line_only_semantic_boundaries(separator: str) -> None:
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "My\nhealth is poor",
+        "My\r\nhealth is poor",
+        "My\n\n\nhealth is poor",
+        "My \n \t\r\n  health is poor",
+        "My\ndiagnosis is cancer",
+        "My" + r"\n" + "diagnosis is cancer",
+        "我的\n疾病情况",
+        "我的\r\n\r\n疾病情况",
+        "I describe a dialogue\nfinance overview",
+    ],
+)
+def test_privacy_pipeline_keeps_first_person_sensitive_semantics_across_line_breaks(
+    payload: str,
+) -> None:
     pipeline = PrivacyPipeline(analyzer=DeterministicPatternAnalyzer())
-    result = pipeline.prepare_for_model(f"I describe a dialogue{separator}finance overview")
+
+    result = pipeline.prepare_for_model(payload)
+
+    assert result.status == "refused"
+    assert result.final_payload == ""
+    assert "first-person" in result.reason
+
+
+@pytest.mark.parametrize("separator", ["\n", "\r\n", "\n\n"])
+def test_privacy_pipeline_keeps_non_sensitive_multi_line_text_clear(separator: str) -> None:
+    pipeline = PrivacyPipeline(analyzer=DeterministicPatternAnalyzer())
+
+    result = pipeline.prepare_for_model(
+        f"I describe a dialogue{separator}The weather was mild{separator}We met at noon"
+    )
+
+    assert result.status == "clear"
+
+
+def test_privacy_pipeline_still_separates_sentences_across_lines() -> None:
+    pipeline = PrivacyPipeline(analyzer=DeterministicPatternAnalyzer())
+
+    result = pipeline.prepare_for_model("I describe a dialogue?\nfinance overview")
+
     assert result.status == "clear"
 
 
