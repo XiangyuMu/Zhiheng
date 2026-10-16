@@ -35,6 +35,8 @@ KNOWLEDGE_PARSE_PDF_JOB_TYPE = "knowledge.parse_pdf"
 KNOWLEDGE_JOB_TYPES = (KNOWLEDGE_INDEX_JOB_TYPE, KNOWLEDGE_PARSE_PDF_JOB_TYPE)
 KNOWLEDGE_JOB_LEASE_SECONDS = 90
 KNOWLEDGE_JOB_HEARTBEAT_SECONDS = 15
+# Exhausted leases dead-lettered per claim, independent of how many jobs are claimed.
+KNOWLEDGE_DEAD_LETTER_SWEEP_LIMIT = 10
 
 logger = logging.getLogger(__name__)
 PROVIDER_EMBED_BATCH_SIZE = 32
@@ -322,7 +324,7 @@ class KnowledgeJobRepository:
         )
 
         claimed: list[ClaimedKnowledgeJob] = []
-        self._dead_letter_exhausted_leases(session, limit=limit)
+        self._dead_letter_exhausted_leases(session, limit=KNOWLEDGE_DEAD_LETTER_SWEEP_LIMIT)
         for row in rows:
             session.execute(
                 text(
@@ -1056,67 +1058,90 @@ def process_knowledge_jobs_once(
     execution_role: str = "worker",
 ) -> int:
     job_repository = repository or KnowledgeJobRepository()
-    with session_scope(session_factory) as session:
-        claimed = job_repository.claim_available(
-            session,
-            worker_id=worker_id,
-            limit=limit,
-            lease_seconds=lease_seconds,
-        )
-
     completed = 0
-    for job in claimed:
-        if job.job_type == KNOWLEDGE_PARSE_PDF_JOB_TYPE:
-            if pdf_executor is None:
-                with session_scope(session_factory) as session:
-                    completed += int(
-                        job_repository.mark_unsupported(
-                            session,
-                            job,
-                            code="unsupported_pdf_parser",
-                            message=(
-                                "PDF parsing is unsupported: configure a parser service "
-                                "before retrying this import"
-                            ),
-                        )
-                    )
-                continue
-            executor_for_job = pdf_executor
-        else:
-            executor_for_job = executor
-        heartbeat_stop = threading.Event()
-        heartbeat = threading.Thread(
-            target=_lease_heartbeat,
-            args=(session_factory, job_repository, job, heartbeat_stop, lease_seconds, execution_role),
-            name=f"knowledge-lease-heartbeat-{job.id}",
-            daemon=True,
+    # Claim one job at a time: a claim only gets a heartbeat once it starts
+    # executing, so a batch claim would let later jobs' leases lapse (and be
+    # reclaimed by another worker) while an earlier job runs.
+    for _ in range(limit):
+        with session_scope(session_factory) as session:
+            claimed = job_repository.claim_available(
+                session,
+                worker_id=worker_id,
+                limit=1,
+                lease_seconds=lease_seconds,
+            )
+        if not claimed:
+            break
+        completed += _execute_claimed_job(
+            session_factory,
+            job_repository,
+            claimed[0],
+            executor=executor,
+            pdf_executor=pdf_executor,
+            lease_seconds=lease_seconds,
+            execution_role=execution_role,
         )
-        heartbeat.start()
-        try:
-            result = executor_for_job.execute(session_factory, job)
-        except EmbeddingCapabilityUnavailable as exc:
+    return completed
+
+
+def _execute_claimed_job(
+    session_factory: sessionmaker[Session],
+    job_repository: KnowledgeJobRepository,
+    job: ClaimedKnowledgeJob,
+    *,
+    executor: KnowledgeIndexJobExecutor,
+    pdf_executor: KnowledgeJobExecutorPort | None,
+    lease_seconds: int,
+    execution_role: str,
+) -> int:
+    """Run one claimed job under a lease heartbeat; return 1 if its completion was acknowledged."""
+    if job.job_type == KNOWLEDGE_PARSE_PDF_JOB_TYPE:
+        if pdf_executor is None:
             with session_scope(session_factory) as session:
-                completed += int(
+                return int(
                     job_repository.mark_unsupported(
                         session,
                         job,
-                        code=exc.code,
-                        message=str(exc),
-                        failure_stage="index",
+                        code="unsupported_pdf_parser",
+                        message=(
+                            "PDF parsing is unsupported: configure a parser service "
+                            "before retrying this import"
+                        ),
                     )
                 )
-            continue
-        except Exception as exc:
-            with session_scope(session_factory) as session:
-                job_repository.fail(session, job, exc=exc)
-            continue
-        finally:
-            heartbeat_stop.set()
-            heartbeat.join(timeout=KNOWLEDGE_JOB_HEARTBEAT_SECONDS)
+        executor_for_job = pdf_executor
+    else:
+        executor_for_job = executor
+    heartbeat_stop = threading.Event()
+    heartbeat = threading.Thread(
+        target=_lease_heartbeat,
+        args=(session_factory, job_repository, job, heartbeat_stop, lease_seconds, execution_role),
+        name=f"knowledge-lease-heartbeat-{job.id}",
+        daemon=True,
+    )
+    heartbeat.start()
+    try:
+        result = executor_for_job.execute(session_factory, job)
+    except EmbeddingCapabilityUnavailable as exc:
         with session_scope(session_factory) as session:
-            acknowledged = job_repository.complete(session, job, result=result)
-        completed += int(acknowledged)
-    return completed
+            return int(
+                job_repository.mark_unsupported(
+                    session,
+                    job,
+                    code=exc.code,
+                    message=str(exc),
+                    failure_stage="index",
+                )
+            )
+    except Exception as exc:
+        with session_scope(session_factory) as session:
+            job_repository.fail(session, job, exc=exc)
+        return 0
+    finally:
+        heartbeat_stop.set()
+        heartbeat.join(timeout=KNOWLEDGE_JOB_HEARTBEAT_SECONDS)
+    with session_scope(session_factory) as session:
+        return int(job_repository.complete(session, job, result=result))
 
 
 def _lease_heartbeat(
