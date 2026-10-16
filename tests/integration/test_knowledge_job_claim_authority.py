@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.test_worker_knowledge_indexing import _FakeEmbedder, _ingest, _migrated
 from tests.knowledge_helpers import stored_text_artifacts
+from zhiheng.core.config import Settings
 from zhiheng.core.ids import json_text, new_id
+from zhiheng.jobs import knowledge_indexing
 from zhiheng.jobs.knowledge_contract import job_etag
 from zhiheng.jobs.knowledge_indexing import (
     KNOWLEDGE_INDEX_JOB_TYPE,
@@ -429,6 +433,92 @@ def test_process_knowledge_jobs_counts_only_acknowledged_completion(tmp_path: Pa
         )
         == 0
     )
+
+
+class _SlowFirstExecutor(KnowledgeIndexJobExecutor):
+    """Outlives the lease on the first job, optionally letting another worker poll meanwhile."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        slow_seconds: float,
+        during_slow_job: Callable[[], None] | None = None,
+    ) -> None:
+        super().__init__(settings)
+        self._slow_seconds = slow_seconds
+        self._during_slow_job = during_slow_job
+        self.executed: list[str] = []
+
+    def execute(self, session_factory: Any, job: ClaimedKnowledgeJob) -> KnowledgeIndexResult:
+        del session_factory
+        self.executed.append(job.id)
+        if len(self.executed) == 1:
+            time.sleep(self._slow_seconds)
+            if self._during_slow_job is not None:
+                self._during_slow_job()
+        return _result(f"generation-{job.id}")
+
+
+def _job_states(factory: sessionmaker[Session], job_ids: list[str]) -> list[tuple[Any, ...]]:
+    with factory() as session:
+        return [
+            tuple(
+                session.execute(
+                    text("SELECT status, attempts FROM jobs WHERE id=:id"), {"id": job_id}
+                ).one()
+            )
+            for job_id in job_ids
+        ]
+
+
+def test_jobs_queued_behind_a_slow_job_complete_once_without_lease_loss(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings, factory = _migrated(tmp_path)
+    monkeypatch.setattr(knowledge_indexing, "KNOWLEDGE_JOB_HEARTBEAT_SECONDS", 0.3)
+    with factory.begin() as session:
+        job_ids = [_enqueue_knowledge_job(session, f"knowledge-queued-{n}") for n in range(3)]
+    executor = _SlowFirstExecutor(settings, slow_seconds=3.5)
+
+    completed = process_knowledge_jobs_once(
+        factory, executor, worker_id="worker-a", lease_seconds=2
+    )
+
+    assert completed == 3
+    assert sorted(executor.executed) == sorted(job_ids)
+    assert _job_states(factory, job_ids) == [("completed", 1)] * 3
+
+
+def test_second_worker_does_not_reexecute_jobs_queued_behind_a_slow_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings, factory = _migrated(tmp_path)
+    monkeypatch.setattr(knowledge_indexing, "KNOWLEDGE_JOB_HEARTBEAT_SECONDS", 0.3)
+    with factory.begin() as session:
+        job_ids = [_enqueue_knowledge_job(session, f"knowledge-shared-{n}") for n in range(3)]
+    other_executor = _SlowFirstExecutor(settings, slow_seconds=0)
+    other_completed: list[int] = []
+    executor = _SlowFirstExecutor(
+        settings,
+        slow_seconds=3.5,
+        during_slow_job=lambda: other_completed.append(
+            process_knowledge_jobs_once(
+                factory, other_executor, worker_id="worker-b", lease_seconds=2
+            )
+        ),
+    )
+
+    completed = process_knowledge_jobs_once(
+        factory, executor, worker_id="worker-a", lease_seconds=2
+    )
+
+    executed = executor.executed + other_executor.executed
+    assert sorted(executed) == sorted(job_ids)
+    assert completed + sum(other_completed) == 3
+    assert _job_states(factory, job_ids) == [("completed", 1)] * 3
 
 
 def test_stale_knowledge_claim_cannot_activate_vector_generation(tmp_path: Path) -> None:
