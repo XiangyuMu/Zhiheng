@@ -17,7 +17,7 @@
 - [需求—实现—测试映射](docs/testing/issue-17-delivery-matrix.md)
 - [同 SHA 交付门禁和持久证据](docs/testing/pytest-delivery-gate.md)
 - [备份与恢复设计](docs/architecture/deployment-and-recovery.md)
-- [产品规格](docs/product/evolving-knowledge-memory-spec.md)、[领域词汇](CONTEXT.md)、[路线图](docs/ROADMAP.md)
+- [产品规格](docs/product/evolving-knowledge-memory-spec.md)、[领域词汇](GLOSSARY.md)、[路线图](docs/ROADMAP.md)
 
 首版使用规则提炼和确定性分类，结论与分类建议经人工审核后生效；明确且无冲突的个人陈述
 可按既定规则自动记忆。LLM 分类、多用户、开放域质量保证和生产服务器/公网 HTTPS 属于后续增强。

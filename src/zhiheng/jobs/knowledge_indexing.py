@@ -688,7 +688,7 @@ class KnowledgeJobRepository:
                       AND attempts >= max_attempts
                     ORDER BY lease_expires_at, id LIMIT :limit
                 )
-                RETURNING id, payload_json
+                RETURNING id, job_type, payload_json
                 """
                 ),
                 {
@@ -703,6 +703,12 @@ class KnowledgeJobRepository:
         )
         for row in rows:
             self._record_expired_attempt_finish(session, job_id=str(row["id"]))
+            self._fail_pdf_task_for_expired_lease(
+                session,
+                job_id=str(row["id"]),
+                job_type=str(row["job_type"]),
+                payload_json=row["payload_json"],
+            )
             session.execute(
                 text(
                     """
@@ -721,6 +727,36 @@ class KnowledgeJobRepository:
                     "failure_summary": "LeaseExpired: final attempt exhausted; reconcile effects",
                 },
             )
+
+    def _fail_pdf_task_for_expired_lease(
+        self, session: Session, *, job_id: str, job_type: str, payload_json: object
+    ) -> None:
+        """Settle the PDF task like ``fail`` does when a dead worker exhausts a lease."""
+
+        if job_type not in {KNOWLEDGE_PARSE_PDF_JOB_TYPE, KNOWLEDGE_INDEX_JOB_TYPE}:
+            return
+        payload = _json_object(payload_json)
+        task_id = payload.get("task_id")
+        if not task_id:
+            return
+        stage = "parse" if job_type == KNOWLEDGE_PARSE_PDF_JOB_TYPE else "index"
+        payload.update(
+            {"failure_code": "worker_lease_expired", "failure_stage": stage, "retryable": True}
+        )
+        session.execute(
+            text("UPDATE jobs SET payload_json=:payload_json WHERE id=:job_id"),
+            {
+                "job_id": job_id,
+                "payload_json": json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            },
+        )
+        session.execute(
+            text(
+                "UPDATE pdf_tasks SET state='failed', updated_at=CURRENT_TIMESTAMP "
+                "WHERE id=:task_id AND state IN ('queued', 'processing', 'parsed')"
+            ),
+            {"task_id": str(task_id)},
+        )
 
     def _record_attempt_start(self, session: Session, *, job_id: str) -> str:
         attempt_id = new_id()

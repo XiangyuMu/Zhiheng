@@ -130,14 +130,27 @@ def _project_batch_item(session: Session, item: dict[str, Any]) -> dict[str, Any
     pdf = (
         session.execute(
             text(
-                """
+                f"""
             SELECT t.state, t.updated_at,
                    count(DISTINCT p.id) AS progress_total,
                    count(DISTINCT CASE WHEN p.status='parsed' THEN p.id END)
                      AS progress_completed,
                    j.status AS job_status, j.attempts, j.max_attempts,
                    ja.error_class, ja.error_message,
-                   a.status AS attempt_status
+                   a.status AS attempt_status,
+                   (SELECT ij.status FROM jobs ij
+                     WHERE ij.job_type='knowledge.index'
+                       AND json_extract(ij.payload_json,'$.task_id')=t.id
+                     ORDER BY ij.updated_at DESC, ij.id DESC LIMIT 1) AS index_job_status,
+                   EXISTS (
+                     SELECT 1 FROM knowledge_objects ko
+                     WHERE ko.id = (
+                       SELECT json_extract(ij.payload_json,'$.knowledge_object_id') FROM jobs ij
+                        WHERE ij.job_type='knowledge.index'
+                          AND json_extract(ij.payload_json,'$.task_id')=t.id
+                        ORDER BY ij.updated_at DESC, ij.id DESC LIMIT 1)
+                       AND {formal_searchable_sql("ko")}
+                   ) AS index_searchable
             FROM pdf_tasks t
             LEFT JOIN pdf_parse_attempts a
               ON a.task_id=t.id
@@ -165,9 +178,12 @@ def _project_batch_item(session: Session, item: dict[str, Any]) -> dict[str, Any
     if pdf is not None:
         status = _pdf_public_status(pdf)
         error = _error_fields(pdf, status)
+        index_failed = str(pdf["state"]) == "parsed" and status in {"failed", "dead_letter"}
+        if index_failed:
+            error["error_stage"] = "index"
         return {
             "status": status,
-            "stage": _pdf_stage(status),
+            "stage": "index" if index_failed else _pdf_stage(status),
             "progress_completed": int(pdf["progress_completed"] or 0),
             "progress_total": int(pdf["progress_total"] or 0),
             "error_stage": error["error_stage"],
@@ -194,6 +210,8 @@ def _project_batch_item(session: Session, item: dict[str, Any]) -> dict[str, Any
                                 WHERE ja2.job_id=j.id)
             WHERE j.id=:task_id
                OR json_extract(j.payload_json,'$.knowledge_object_id')=:source_id
+               OR json_extract(j.payload_json,'$.aggregate_id')=:source_id
+            ORDER BY j.updated_at DESC, j.id DESC
             """
             ),
             {"task_id": task_id, "source_id": str(item.get("source_id") or "")},
@@ -266,7 +284,12 @@ def _pdf_public_status(row: Any) -> str:
     if source_status == "parsed":
         # Parsing is not formal retrieval qualification. The indexing job must
         # publish a knowledge object and serving pointer before success.
-        return "processing"
+        index_status = str(row["index_job_status"] or "")
+        if index_status == "dead":
+            return "dead_letter"
+        if index_status in {"failed", "unsupported"}:
+            return "failed"
+        return "succeeded" if row["index_searchable"] else "processing"
     if source_status == "partial":
         return "partial"
     return "queued" if source_status == "queued" else source_status or "queued"

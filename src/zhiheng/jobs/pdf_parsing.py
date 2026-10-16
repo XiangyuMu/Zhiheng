@@ -244,8 +244,10 @@ def configured_pdf_parse_executor(settings: Settings) -> PdfParseJobExecutor | N
         )
         or "deepdoc"
     )
+    if parser_backend == "none":
+        return None
     if parser_backend not in {"deepdoc", "mineru"}:
-        raise ValueError("PDF parser backend must be deepdoc or mineru")
+        raise ValueError("PDF parser backend must be deepdoc, mineru or none")
 
     deepdoc_url = _setting_or_env(
         settings,
@@ -253,7 +255,9 @@ def configured_pdf_parse_executor(settings: Settings) -> PdfParseJobExecutor | N
         "ZHIHENG_PDF_DEEPDOC_URL",
     )
     deepdoc_token = None
-    deepdoc_token_file = os.environ.get("ZHIHENG_PDF_DEEPDOC_TOKEN_FILE")
+    deepdoc_token_file = os.environ.get("ZHIHENG_PDF_DEEPDOC_TOKEN_FILE") or getattr(
+        settings, "pdf_deepdoc_token_file", None
+    )
     deepdoc_configured = (
         parser_backend == "deepdoc"
         or getattr(settings, "pdf_deepdoc_token", None) is not None
@@ -335,8 +339,7 @@ def configured_pdf_parse_executor(settings: Settings) -> PdfParseJobExecutor | N
 
 
 def _setting_or_env(settings: Settings, attribute: str, env_name: str) -> str | None:
-    # Runtime process configuration must override development Settings
-    # defaults, notably ``pdf_parser_backend=deepdoc``.
+    # Runtime process configuration must override development Settings values.
     value = os.environ.get(env_name)
     if value is None:
         value = getattr(settings, attribute, None)
@@ -354,7 +357,9 @@ def _secret_or_env(settings: Settings, attribute: str, env_name: str) -> str | N
     if value is None:
         value = os.environ.get(env_name)
     if value is None:
-        file_name = os.environ.get(f"{env_name}_FILE")
+        file_name = os.environ.get(f"{env_name}_FILE") or getattr(
+            settings, f"{attribute}_file", None
+        )
         if file_name:
             try:
                 with open(file_name, encoding="utf-8") as handle:

@@ -52,6 +52,7 @@ def test_network_libraries_are_only_imported_by_private_model_transports() -> No
             "src/zhiheng/models/_transports.py",
             "src/zhiheng/knowledge/pdf_worker.py",
             "src/zhiheng/knowledge/import_adapters.py",
+            "src/zhiheng/jobs/deployment_capabilities.py",
         }:
             offenders.append(path.as_posix())
 

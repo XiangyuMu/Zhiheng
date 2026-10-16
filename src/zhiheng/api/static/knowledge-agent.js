@@ -28,7 +28,7 @@ const processingNames = {
   ready: "已可检索", searchable: "已可检索", completed: "处理完成", retrying: "正在重试",
   parsed: "解析完成", succeeded: "处理完成", partial: "部分完成，尚不可检索",
   retryable_failed: "处理失败，可以重试", failed: "处理失败", dead: "处理失败", dead_letter: "处理失败，可以重试",
-  parse_failed: "解析失败，可以重试", unsupported: "当前服务版本不支持处理", cancelled: "处理已取消",
+  parse_failed: "解析失败，可以重试", unsupported: "当前部署未声明所需的部署能力", cancelled: "处理已取消",
 };
 const batchStatusNames = {
   queued: "排队中", processing: "处理中", succeeded: "已完成", partial: "部分完成",
@@ -55,11 +55,12 @@ function message(id, text) {
   $(id).textContent = text || "";
   $(id).hidden = !text;
 }
-function showToast(text) {
+function showToast(text, undo) {
   clearTimeout(state.toastTimer);
   $("toast").textContent = text;
+  if (undo) $("toast").append(" ", action("撤销", () => { $("toast").hidden = true; undo(); }, "toast-action"));
   $("toast").hidden = false;
-  state.toastTimer = setTimeout(() => { $("toast").hidden = true; }, 5000);
+  state.toastTimer = setTimeout(() => { $("toast").hidden = true; }, undo ? 8000 : 5000);
 }
 async function busy(button, text, work, errorId) {
   if (button.disabled) return;
@@ -663,9 +664,13 @@ function renderProcessing() {
   $("processing-section").hidden = !state.processing.size;
   const entries = [...state.processing.values()];
   const active = entries.filter((entry) => !entry.terminal).length;
+  const unfinished = entries.filter((entry) => entry.terminal && !entry.ready && entry.state !== "parsed").length;
+  $("processing-title").textContent = active ? "正在准备资料" : unfinished ? "资料处理未完成" : "资料已准备好";
   $("processing-summary").textContent = active
-    ? `${active} 份资料正在处理；完成后会自动进入资料库和检索。`
-    : "最近提交的资料已完成处理，可打开详情查看原文定位。";
+    ? `${active} 份资料正在处理；完成后会自动进入资料库和检索。${unfinished ? `另有 ${unfinished} 份处理未完成。` : ""}`
+    : unfinished
+      ? `${unfinished} 份资料处理未完成，暂不能检索。可以重试、补充资料，或在资料库中删除。`
+      : "最近提交的资料已完成处理，可打开详情查看原文定位。";
   $("processing-list").replaceChildren(...Array.from(state.processing, ([id, entry]) => {
     const li = node("li", undefined, `processing-item processing-${entry.kind || "knowledge"} processing-${entry.state || "pending"}`);
     const text = node("div", undefined, "processing-main");
@@ -680,14 +685,14 @@ function renderProcessing() {
       actions.append(action("查看已解析页面", () => loadPdfDetail(entry), "link-button"));
     } else if (entry.ready) {
       actions.append(action("围绕此资料提问", () => askAbout(entry.title), "link-button"));
-    } else {
+    } else if (!entry.terminal) {
       actions.append(action("刷新进度", () => entry.kind === "pdf" ? pollPdfTask(id) : pollProcessing(id), "secondary small"));
     }
     // A terminal failed/dead PDF remains manually retryable even after the
     // bounded automatic retry budget is exhausted. The API accepts these
     // durable terminal states, so keep the recovery action visible when the
     // persisted retryable flag is false.
-    const canRetry = entry.retryable || (entry.terminal && ["failed", "dead"].includes(entry.state));
+    const canRetry = entry.retryable || (entry.terminal && ["failed", "dead", "dead_letter"].includes(entry.state));
     if (canRetry && entry.terminal) actions.append(action("重试", (event) => retryImportTask(id, entry, event.currentTarget), "secondary small"));
     if (entry.terminal) actions.append(action("补充资料", () => openDialog("import-dialog"), "secondary small"));
     if (entry.kind === "pdf" && entry.terminal) actions.append(action("查看详情", () => loadPdfDetail(entry), "quiet small"));
@@ -701,7 +706,7 @@ function renderProcessing() {
 function entryLabel(entry) {
   if (entry.kind === "pdf" && entry.label) return entry.label;
   if (entry.kind === "pdf") return processingNames[entry.state] || entry.state || "正在解析 PDF";
-  if (entry.failure && entry.terminal) return entry.failure.redacted_summary || "处理失败";
+  if (entry.failure && entry.terminal) return processingNames[entry.state] || "处理失败";
   return entry.label || processingNames[entry.status] || "资料处理中";
 }
 function pdfStats(entry) {
@@ -843,7 +848,7 @@ async function loadPersistentImportTasks() {
     renderProcessing();
   } catch (_) { /* library remains usable when task history is unavailable */ }
 }
-function domainName(value) { return domainNames[value] || value || "未分类"; }
+function domainName(value) { return domainNames[value] || state.catalogNames?.[value] || value || "未分类"; }
 async function loadKnowledge() {
   const request = ++state.libraryRequest;
   $("library-count").textContent = "正在读取资料…";
@@ -861,9 +866,12 @@ async function loadKnowledge() {
     if ($("library-favorite-filter")?.checked) params.set("favorite", "true");
     if ($("library-pinned-filter")?.checked) params.set("pinned", "true");
     let response;
+    state.trashView = status === "soft_deleted";
     try {
-      response = await fetchJson(`/v1/knowledge/search?${params}`);
-      state.usingSearchApi = true;
+      response = state.trashView
+        ? await fetchJson("/v1/knowledge/trash")
+        : await fetchJson(`/v1/knowledge/search?${params}`);
+      state.usingSearchApi = !state.trashView;
     } catch (error) {
       if (error.status !== 404 && error.status !== 405) throw error;
       response = await fetchJson("/v1/knowledge/items");
@@ -871,7 +879,8 @@ async function loadKnowledge() {
     }
     if (request !== state.libraryRequest) return;
     state.materials = Array.from(new Map((response.items || []).map((item) => [item.knowledge_object_id, item])).values());
-    $("library-nav-count").textContent = state.materials.length || "";
+    state.materialsTotal = state.usingSearchApi && Number.isFinite(response.total) ? response.total : null;
+    $("library-nav-count").textContent = (state.materialsTotal ?? state.materials.length) || "";
     $("first-material").hidden = Boolean(state.materials.length);
     renderDomains(); renderMaterials();
   } catch (error) {
@@ -896,7 +905,9 @@ function renderMaterials() {
   const statusFilter = $("library-status-filter").value;
   const favoriteOnly = $("library-favorite-filter").checked;
   const pinnedOnly = $("library-pinned-filter").checked;
-  const items = state.usingSearchApi ? state.materials : state.materials.filter((item) =>
+  const items = state.usingSearchApi ? state.materials : state.trashView
+    ? state.materials.filter((item) => item.title.toLocaleLowerCase().includes(search))
+    : state.materials.filter((item) =>
     (!state.domain || item.primary_domain_id === state.domain)
     && (!sourceFilter || sourceKind(item) === sourceFilter)
     && (!statusFilter || lifecycleFilter(item, statusFilter))
@@ -904,7 +915,9 @@ function renderMaterials() {
     && (!pinnedOnly || Boolean(item.is_pinned))
     && `${item.title} ${item.summary || ""}`.toLocaleLowerCase().includes(search));
   const hasFilters = Boolean(search || state.domain || sourceFilter || statusFilter || favoriteOnly || pinnedOnly);
-  $("library-count").textContent = `${items.length} 份资料${hasFilters ? ` / 已加载 ${state.materials.length} 份` : ""}`;
+  $("library-count").textContent = state.materialsTotal != null
+    ? `${state.materialsTotal} 份资料${state.materialsTotal > items.length ? ` · 显示前 ${items.length} 份` : ""}`
+    : `${items.length} 份资料${hasFilters ? ` / 已加载 ${state.materials.length} 份` : ""}`;
   $("knowledge-items").replaceChildren();
   updateBulkToolbar(items);
   if (!items.length) {
@@ -935,12 +948,25 @@ function renderMaterials() {
     const body = node("div", undefined, "material-body");
     const flags = [item.is_pinned ? "置顶" : "", item.is_favorite ? "收藏" : ""].filter(Boolean).join(" · ");
     body.append(action(item.title, () => loadKnowledgeDetail(item.knowledge_object_id), ""), node("p", `${domainName(item.primary_domain_id)} · ${sourceLabel(item)}${flags ? ` · ${flags}` : ""}`));
+    const readiness = materialReadiness(item);
+    if (!state.trashView && readiness !== "ready") {
+      body.append(node("p", readiness === "failed" ? `处理失败：${item.failure_summary || "索引未完成，资料暂不可检索"}` : "处理中：完成索引后才能检索和用于回答", readiness === "failed" ? "processing-failure" : "muted"));
+    }
     const actions = node("div", undefined, "material-actions");
     actions.append(action(item.is_favorite ? "★" : "☆", () => toggleKnowledgeFlag(item, "favorite"), "icon-button"));
     actions.lastChild.title = item.is_favorite ? "取消收藏" : "收藏";
     actions.append(action(item.is_pinned ? "★" : "☆", () => toggleKnowledgeFlag(item, "pin"), "icon-button"));
     actions.lastChild.title = item.is_pinned ? "取消置顶" : "置顶";
-    li.append(select, icon, body, node("span", item.searchable ? "可检索" : "处理中", "badge"), actions, action("阅读 →", () => loadKnowledgeDetail(item.knowledge_object_id), "quiet small"));
+    if (state.trashView) {
+      body.lastChild.textContent = `${domainName(item.primary_domain_id)} · 删除于 ${item.deleted_at ? new Date(`${item.deleted_at.replace(" ", "T")}Z`).toLocaleString() : "未知时间"}`;
+      actions.replaceChildren(action("恢复", () => restoreKnowledge(item.knowledge_object_id, item.title), "secondary small"));
+      li.append(select, icon, body, node("span", "已删除", "badge"), actions, action("查看 →", () => loadKnowledgeDetail(item.knowledge_object_id), "quiet small"));
+    } else {
+      if (readiness === "failed") actions.append(action("重新处理", () => reprocessKnowledge(item.knowledge_object_id, item.title), "secondary small"));
+      actions.append(action("删除", () => deleteKnowledge(item.knowledge_object_id, item.title), "quiet danger small"));
+      const badge = node("span", { ready: "可检索", processing: "处理中", failed: "失败" }[readiness], `badge readiness-${readiness}`);
+      li.append(select, icon, body, badge, actions, action("阅读 →", () => loadKnowledgeDetail(item.knowledge_object_id), "quiet small"));
+    }
     $("knowledge-items").append(li);
   });
 }
@@ -962,10 +988,15 @@ function sourceKind(item) {
 function sourceLabel(item) {
   return { pdf: "PDF", markdown: "Markdown", web: "网页", ocr: "图片 OCR", text: "文本" }[sourceKind(item)] || item.media_type || "资料";
 }
+function materialReadiness(item) {
+  if (item.processing_status) return item.processing_status;
+  return item.searchable ? "ready" : "processing";
+}
 function lifecycleFilter(item, filter) {
   if (!filter) return true;
-  if (filter === "active") return Boolean(item.searchable) && item.lifecycle_status !== "soft_deleted";
-  if (filter === "processing") return !item.searchable && item.lifecycle_status !== "soft_deleted";
+  if (filter === "active") return materialReadiness(item) === "ready" && item.lifecycle_status !== "soft_deleted";
+  if (filter === "processing") return materialReadiness(item) !== "ready" && item.lifecycle_status !== "soft_deleted";
+  if (filter === "failed") return materialReadiness(item) === "failed" && item.lifecycle_status !== "soft_deleted";
   return item.lifecycle_status === filter;
 }
 function updateBulkToolbar(items) {
@@ -985,6 +1016,7 @@ $("select-all-knowledge").addEventListener("change", (event) => {
 async function bulkKnowledgeAction(actionName) {
   const ids = [...state.selectedKnowledge];
   if (!ids.length) return;
+  if (actionName === "delete" && !window.confirm(`将选中的 ${ids.length} 份资料移入回收站？之后可在回收站恢复。`)) return;
   const button = $(`bulk-${actionName}`);
   await busy(button, "处理中…", async () => {
     let response;
@@ -1032,7 +1064,11 @@ async function loadKnowledgeDetail(id) {
     state.detail = detail;
     $("detail-title").textContent = detail.title;
     const deleted = detail.lifecycle_status === "soft_deleted";
-    $("detail-meta").textContent = `${domainName(detail.primary_domain_id)} · ${deleted ? "已移入回收站" : detail.searchable ? "可检索" : "尚未就绪"}`;
+    const listed = state.materials.find((item) => item.knowledge_object_id === id);
+    const readinessLabel = detail.searchable ? "可检索"
+      : listed?.processing_status === "failed" ? `处理失败：${listed.failure_summary || "索引未完成，资料暂不可检索"}`
+      : "处理中，尚未就绪";
+    $("detail-meta").textContent = `${domainName(detail.primary_domain_id)} · ${deleted ? "已移入回收站" : readinessLabel}`;
     const sourceUrl = detail.source_metadata?.url || detail.source_metadata?.canonical_url;
     $("detail-source").textContent = sourceUrl ? `网页来源：${sourceUrl}` : "";
     $("detail-source").hidden = !sourceUrl;
@@ -1204,9 +1240,37 @@ async function refreshWebSource() {
 $("load-versions").addEventListener("click", () => state.detail && loadVersionTimeline(state.detail.knowledge_object_id));
 $("detail-refresh-web").addEventListener("click", refreshWebSource);
 $("detail-ask").addEventListener("click", () => { if (state.detail) { const title = state.detail.title; $("knowledge-detail").close(); askAbout(title); } });
+async function deleteKnowledge(id, title) {
+  if (!window.confirm(`将「${title}」移入回收站？之后可在回收站恢复。`)) return false;
+  try {
+    await mutate(`/v1/knowledge/${encodeURIComponent(id)}/delete`, {});
+  } catch (error) { showToast(readableError(error)); return false; }
+  showToast(`已将「${title}」移入回收站。`, () => restoreKnowledge(id, title));
+  await loadKnowledge();
+  return true;
+}
+async function reprocessKnowledge(id, title) {
+  try {
+    await mutate(`/v1/knowledge/${encodeURIComponent(id)}/reindex`, {});
+  } catch (error) { showToast(readableError(error)); return; }
+  showToast(`已提交「${title}」的重新处理请求。`);
+  await loadKnowledge();
+}
+async function restoreKnowledge(id, title) {
+  try {
+    await mutate(`/v1/knowledge/${encodeURIComponent(id)}/restore`, {});
+  } catch (error) { showToast(readableError(error)); return; }
+  showToast(`已恢复「${title}」，正在更新索引。`);
+  await loadKnowledge();
+  if (state.detail?.knowledge_object_id === id && $("knowledge-detail").open) await loadKnowledgeDetail(id);
+}
 async function knowledgeAction(actionName, button) {
   if (!state.detail) return;
   const id = state.detail.knowledge_object_id;
+  if (actionName === "delete") {
+    if (await deleteKnowledge(id, state.detail.title)) await loadKnowledgeDetail(id);
+    return;
+  }
   await busy(button, "处理中…", async () => {
     await mutate(`/v1/knowledge/${encodeURIComponent(id)}/${actionName}`, {});
     showToast(actionName === "delete" ? "资料已移入回收站，可在当前详情恢复。" : actionName === "restore" ? "已恢复资料，正在更新索引。" : "已提交重新处理请求。");
@@ -1549,6 +1613,142 @@ $("refresh-model-audits").addEventListener("click", () => busy($("refresh-model-
 $("apply-model-audit-filters").addEventListener("click", () => busy($("apply-model-audit-filters"), "读取中…", loadModelAudits));
 $("logout").addEventListener("click", () => busy($("logout"), "正在退出…", async () => { await mutate("/auth/logout", {}); location.assign("/login"); }));
 fetchJson("/me").then(() => { $("current-user").textContent = "已登录 · 单用户工作空间"; }).catch((error) => { $("current-user").textContent = readableError(error); });
+function send(url, method, payload) {
+  return fetchJson(url, { method, headers: {
+    "Content-Type": "application/json", "X-CSRF-Token": readCookie("zhiheng_csrf"),
+    "Idempotency-Key": crypto.randomUUID(),
+  }, body: payload === undefined ? undefined : JSON.stringify(payload) });
+}
+async function loadClassifications() {
+  try {
+    const response = await fetchJson("/v1/domains");
+    state.taxonomy = response.items || [];
+    state.catalogNames = Object.fromEntries(state.taxonomy.map((domain) => [domain.id, domain.name]));
+    renderClassificationTree();
+  } catch (error) {
+    $("classification-tree").replaceChildren(node("p", readableError(error), "empty-state"));
+  }
+}
+function classificationNode(domain, item, children) {
+  const li = node("li", undefined, "classification-node");
+  const row = node("div", undefined, "classification-row");
+  row.append(node("span", item.name), node("small", `${item.knowledge_count || 0} 份资料`, "muted"));
+  const kids = children.get(item.id) || [];
+  row.append(action("重命名", () => renameClassification(item), "quiet small"));
+  if (item.level < 3) row.append(action("＋ 子分类", () => createClassification(domain, item), "quiet small"));
+  if (!kids.length && !item.knowledge_count) row.append(action("删除", () => deleteClassification(item), "quiet danger small"));
+  li.append(row);
+  if (kids.length) {
+    const ul = node("ul");
+    ul.append(...kids.map((child) => classificationNode(domain, child, children)));
+    li.append(ul);
+  }
+  return li;
+}
+function renderClassificationTree() {
+  const domains = state.taxonomy || [];
+  if (!domains.length) { $("classification-tree").replaceChildren(node("p", "暂无可用领域。", "empty-state")); return; }
+  $("classification-tree").replaceChildren(...domains.map((domain) => {
+    const children = new Map();
+    (domain.nodes || []).forEach((item) => { const key = item.parent_id || domain.id; children.set(key, [...(children.get(key) || []), item]); });
+    const details = document.createElement("details");
+    details.className = "classification-domain";
+    details.open = (domain.nodes || []).length > 0;
+    const summary = node("summary");
+    summary.append(node("strong", domain.name), node("small", ` ${(domain.nodes || []).length} 个分类`, "muted"));
+    details.append(summary, action("＋ 二级分类", () => createClassification(domain, null), "quiet small"));
+    const roots = children.get(domain.id) || [];
+    if (roots.length) {
+      const ul = node("ul");
+      ul.append(...roots.map((item) => classificationNode(domain, item, children)));
+      details.append(ul);
+    }
+    return details;
+  }));
+}
+async function createClassification(domain, parent) {
+  const name = window.prompt(parent ? `在「${parent.name}」下新建三级分类` : `在「${domain.name}」下新建二级分类`)?.trim();
+  if (!name) return;
+  try {
+    await send("/v1/classifications", "POST", { domain_id: domain.id, parent_id: parent?.id || null, name });
+    showToast(`已新建分类「${name}」。`);
+    await loadClassifications(); renderUnclassified();
+  } catch (error) { showToast(readableError(error)); }
+}
+async function renameClassification(item) {
+  const name = window.prompt("新的分类名称", item.name)?.trim();
+  if (!name || name === item.name) return;
+  try {
+    await send(`/v1/classifications/${encodeURIComponent(item.id)}`, "PATCH", { name });
+    showToast(`已重命名为「${name}」。`);
+    await loadClassifications(); renderUnclassified();
+  } catch (error) { showToast(readableError(error)); }
+}
+async function deleteClassification(item) {
+  if (!window.confirm(`删除空分类「${item.name}」？`)) return;
+  try {
+    const response = await fetch(`/v1/classifications/${encodeURIComponent(item.id)}`, { method: "DELETE", credentials: "same-origin", headers: {
+      "X-CSRF-Token": readCookie("zhiheng_csrf"), "Idempotency-Key": crypto.randomUUID() } });
+    if (!response.ok) throw Object.assign(new Error(response.status === 400 ? "请先移走其中的资料或子分类。" : "删除未完成，请重试。"), { status: response.status });
+    showToast(`已删除分类「${item.name}」。`);
+    await loadClassifications(); renderUnclassified();
+  } catch (error) { showToast(readableError(error)); }
+}
+async function loadUnclassified() {
+  try {
+    const response = await fetchJson("/v1/knowledge/unclassified");
+    state.unclassified = response.items || [];
+    renderUnclassified();
+  } catch (error) {
+    $("unclassified-list").replaceChildren(node("li", readableError(error), "muted"));
+  }
+}
+function classificationOptions(domainId) {
+  const domain = (state.taxonomy || []).find((item) => item.id === domainId);
+  const options = [new Option("不选分类（只确认主领域）", "")];
+  const byId = new Map((domain?.nodes || []).map((item) => [item.id, item]));
+  (domain?.nodes || []).filter((item) => item.status === "active").forEach((item) => {
+    const parent = item.parent_id ? byId.get(item.parent_id) : null;
+    options.push(new Option(parent ? `${parent.name} / ${item.name}` : item.name, item.id));
+  });
+  return options;
+}
+function renderUnclassified() {
+  if (!state.unclassified) return;
+  if (!state.unclassified.length) { $("unclassified-list").replaceChildren(node("li", "所有资料都已归类。", "muted")); return; }
+  $("unclassified-list").replaceChildren(...state.unclassified.map((item) => {
+    const li = node("li", undefined, "unclassified-item");
+    const domainSelect = document.createElement("select");
+    domainSelect.setAttribute("aria-label", `${item.title} 的主领域`);
+    domainSelect.append(new Option("选择主领域", ""), ...(state.taxonomy || []).map((domain) => new Option(domain.name, domain.id)));
+    domainSelect.value = (state.taxonomy || []).some((domain) => domain.id === item.primary_domain_id) ? item.primary_domain_id : "";
+    const nodeSelect = document.createElement("select");
+    nodeSelect.setAttribute("aria-label", `${item.title} 的分类`);
+    const refreshNodes = () => { nodeSelect.replaceChildren(...classificationOptions(domainSelect.value)); nodeSelect.disabled = !domainSelect.value; };
+    domainSelect.addEventListener("change", refreshNodes); refreshNodes();
+    const confirmButton = action("确认归类", () => busy(confirmButton, "保存中…", async () => {
+      if (!domainSelect.value) throw new Error("请先选择主领域。");
+      await send(`/v1/knowledge/${encodeURIComponent(item.knowledge_object_id)}/classifications`, "PUT", {
+        primary_domain_id: domainSelect.value, node_ids: nodeSelect.value ? [nodeSelect.value] : [] });
+      showToast(`「${item.title}」已归类。`);
+      await Promise.all([loadUnclassified(), loadClassifications()]);
+      await loadKnowledge();
+    }).catch((error) => showToast(readableError(error))), "secondary small");
+    li.append(node("strong", item.title), domainSelect, nodeSelect, confirmButton);
+    return li;
+  }));
+}
+$("refresh-classifications").addEventListener("click", () => busy($("refresh-classifications"), "刷新中…", loadClassifications));
+$("refresh-unclassified").addEventListener("click", () => busy($("refresh-unclassified"), "刷新中…", async () => { await loadClassifications(); await loadUnclassified(); }));
+$("add-classification").addEventListener("click", () => {
+  const domains = state.taxonomy || [];
+  if (!domains.length) { showToast("领域尚未读取，请稍后重试。"); return; }
+  const choice = window.prompt(`在哪个领域下新建二级分类？输入序号：\n${domains.map((domain, index) => `${index + 1}. ${domain.name}`).join("\n")}`);
+  const domain = domains[Number(choice) - 1];
+  if (choice && !domain) { showToast("请输入列表中的序号。"); return; }
+  if (domain) createClassification(domain, null);
+});
 loadKnowledge();
 loadPersistentImportTasks();
+loadClassifications().then(loadUnclassified);
 loadReviewCount();

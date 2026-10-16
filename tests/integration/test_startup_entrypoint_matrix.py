@@ -39,6 +39,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
             "ZHIHENG_ENVIRONMENT": "test",
             "ZHIHENG_DATABASE_URL": f"sqlite:///{tmp_path / 'startup.db'}",
             "ZHIHENG_SECRET_KEY": SECRET,
+            "ZHIHENG_PDF_PARSER_BACKEND": "none",
         }
     )
     for name in ("ZHIHENG_ERASE_JOURNAL_PATH", "ZHIHENG_BOOTSTRAP_TOKEN"):

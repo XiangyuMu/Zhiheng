@@ -41,11 +41,13 @@ class Settings(BaseSettings):
     answer_provider_id: str | None = Field(default=None, max_length=128)
     answer_model_id: str | None = Field(default=None, max_length=128)
     answer_max_wall_clock_ms: int = 10_000
-    pdf_parser_backend: Literal["deepdoc", "mineru"] = "deepdoc"
+    pdf_parser_backend: Literal["deepdoc", "mineru", "none"] | None = None
     pdf_deepdoc_url: str | None = None
     pdf_deepdoc_token: SecretStr | None = None
+    pdf_deepdoc_token_file: str | None = None
     pdf_mineru_url: str | None = None
     pdf_mineru_token: SecretStr | None = None
+    pdf_mineru_token_file: str | None = None
     pdf_parser_timeout_seconds: float | None = None
     pdf_parser_poll_interval_seconds: float | None = None
     pdf_parser_max_polls: int | None = None

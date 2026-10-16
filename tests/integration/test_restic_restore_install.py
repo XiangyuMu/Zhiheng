@@ -275,6 +275,22 @@ def _persist_restore_evidence(
     )
 
 
+def _answer_failure_context(
+    answer_text: str, db_path: Path, api_log: Path, provider_requests: list[str]
+) -> str:
+    """Explain a failed provider answer; CI keeps no server logs or databases."""
+    with sqlite3.connect(db_path) as connection:
+        failed_calls = connection.execute(
+            "SELECT error_class, diagnostic_code, duration_ms FROM model_call_audits "
+            "WHERE status = 'failed'"
+        ).fetchall()
+    return (
+        f"{answer_text}\nfailed model calls (error_class, diagnostic, ms): {failed_calls}"
+        f"\nprovider requests received: {len(provider_requests)}"
+        f"\napi log tail:\n{api_log.read_text(encoding='utf-8', errors='replace')[-4000:]}"
+    )
+
+
 def _object_paths_from_db(db_path: Path) -> list[Path]:
     connection = sqlite3.connect(db_path)
     try:
@@ -891,7 +907,11 @@ def test_restic_restore_real_api_worker_starts_and_serves_knowledge_without_keyr
                     json={"query": "restic restore install"},
                 )
                 assert answer.status_code == 200, answer.text
-                assert answer.json()["answer"] == "restored provider answer", answer.text
+                assert answer.json()["answer"] == "restored provider answer", (
+                    _answer_failure_context(
+                        answer.text, available_target_db, available_api_log, provider_requests
+                    )
+                )
                 assert provider_requests == [
                     "Bearer sk-restic-provider-secret",
                     "Bearer sk-restic-provider-secret",

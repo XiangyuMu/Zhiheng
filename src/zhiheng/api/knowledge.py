@@ -299,7 +299,12 @@ async def upload_pdf(
     backend: Literal["deepdoc", "mineru"] | None = None,
 ) -> PdfTaskResponse | JSONResponse:
     settings: Settings = request.app.state.knowledge_settings
-    selected_backend = backend or settings.pdf_parser_backend
+    # Without a declared parser the task keeps the historical deepdoc label; the
+    # worker then settles it as ``unsupported`` (ADR 0005).
+    configured_backend = settings.pdf_parser_backend
+    selected_backend = backend or (
+        configured_backend if configured_backend in {"deepdoc", "mineru"} else "deepdoc"
+    )
     if selected_backend not in {"deepdoc", "mineru"}:
         raise HTTPException(status_code=400, detail="unsupported PDF parser backend")
     if request.headers.get("content-type", "").split(";", 1)[0].lower() != "application/pdf":
@@ -528,7 +533,7 @@ def get_pdf_task(
             else None
         ),
         payload=(
-            {"failure_code": failure_code, "failure_stage": "parse", "retryable": False}
+            {"failure_code": failure_code, "failure_stage": "parse", "retryable": True}
             if failure_code and raw_state == "unsupported"
             else {
                 "failure_code": failure_code,
@@ -637,6 +642,7 @@ def get_pdf_manifest(
 @router.post("/v1/knowledge/pdf-imports/{task_id}/retry")
 def retry_pdf_task(
     task_id: str,
+    request: Request,
     session_factory: SessionFactoryDep,
     _user_id: AuthDep,
     if_match: IfMatchDep,
@@ -648,8 +654,16 @@ def retry_pdf_task(
         ).first()
         if row is None:
             raise HTTPException(status_code=404, detail="PDF task not found")
-        if str(row[0]) not in {"failed", "partial", "dead"}:
+        if str(row[0]) not in {"failed", "partial", "dead", "unsupported"}:
             raise HTTPException(status_code=409, detail="PDF task is not retryable")
+        declared_backend = request.app.state.knowledge_settings.pdf_parser_backend
+        if str(row[0]) == "unsupported" and declared_backend in {"deepdoc", "mineru"}:
+            # The task was labelled before a parser was declared; parse it with
+            # the backend this deployment declares now.
+            session.execute(
+                text("UPDATE pdf_tasks SET backend=:backend WHERE id=:id"),
+                {"backend": declared_backend, "id": task_id},
+            )
         pdf_repository.retry_task(session, task_id)
     return {"task_id": task_id, "state": "queued"}
 
@@ -809,6 +823,33 @@ def list_user_knowledge(
         )
 
 
+@router.get("/v1/knowledge/trash")
+def list_knowledge_trash(
+    session_factory: SessionFactoryDep,
+    user_id: AuthDep,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    """List deleted knowledge in the recycle bin, most recently deleted first."""
+
+    with session_scope(session_factory) as session:
+        rows = session.execute(
+            text(
+                """
+                SELECT id AS knowledge_object_id, title, primary_domain_id, object_kind,
+                       updated_at AS deleted_at
+                FROM knowledge_objects
+                WHERE lifecycle_status = 'soft_deleted'
+                  AND (owner_user_id = :user_id OR owner_user_id IS NULL)
+                ORDER BY updated_at DESC, id DESC
+                LIMIT :limit OFFSET :offset
+                """
+            ),
+            {"user_id": user_id, "limit": limit, "offset": offset},
+        ).mappings()
+        return {"items": [dict(row) for row in rows]}
+
+
 @router.get("/v1/knowledge/domains", response_model=KnowledgeDomainsResponse)
 def list_knowledge_domains(
     session_factory: SessionFactoryDep,
@@ -853,6 +894,9 @@ def search_knowledge(
     source_type: str | None = Query(default=None, max_length=64),
     media_type: str | None = Query(default=None, max_length=128),
     lifecycle_status: str | None = Query(default=None, max_length=32),
+    readiness: Literal["active", "processing", "failed"] | None = Query(
+        default=None, alias="status"
+    ),
     created_from: str | None = Query(default=None, max_length=64),
     created_to: str | None = Query(default=None, max_length=64),
     favorite: bool | None = None,
@@ -873,13 +917,17 @@ def search_knowledge(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0, le=100000),
 ) -> dict[str, Any]:
-    """Search the caller's visible knowledge using FTS and structured filters."""
+    """Search the caller's visible knowledge using FTS and structured filters.
+
+    Without a query this is the library listing, which includes knowledge that is
+    still processing or failed to index. A full-text query only matches knowledge
+    that meets formal retrieval qualification.
+    """
     from zhiheng.retrieval.tokenizer import segment_for_fts
 
     conditions = [
         "(ko.owner_user_id = :user_id OR ko.owner_user_id IS NULL)",
         "ko.lifecycle_status <> 'privacy_erased'",
-        formal_searchable_sql("ko"),
     ]
     params: dict[str, Any] = {
         "user_id": user_id,
@@ -888,9 +936,18 @@ def search_knowledge(
     }
     has_query = bool(q and q.strip())
     if has_query:
+        conditions.append(formal_searchable_sql("ko"))
         query_text = q
         if query_text is not None:
             params["fts_query"] = segment_for_fts(query_text.strip())
+    readiness_sql = _knowledge_readiness_sql("ko")
+    if readiness == "active":
+        conditions.append(f"({readiness_sql}) = 'ready'")
+    elif readiness == "processing":
+        # "Processing" covers everything not yet ready, including failures.
+        conditions.append(f"({readiness_sql}) <> 'ready'")
+    elif readiness == "failed":
+        conditions.append(f"({readiness_sql}) = 'failed'")
     if domain_id:
         conditions.append("ko.primary_domain_id = :domain_id")
         params["domain_id"] = domain_id
@@ -917,6 +974,8 @@ def search_knowledge(
     if lifecycle_status:
         conditions.append("ko.lifecycle_status = :lifecycle_status")
         params["lifecycle_status"] = lifecycle_status
+    else:
+        conditions.append("ko.lifecycle_status = 'formal_current'")
     if created_from:
         conditions.append("ko.created_at >= :created_from")
         params["created_from"] = created_from
@@ -994,6 +1053,7 @@ def search_knowledge(
                eo.id AS evidence_object_id, eo.sha256 AS source_sha256,
                eo.media_type, eo.source_kind, eo.source_metadata_json,
                cv.content_sha256,
+               ({readiness_sql}) AS readiness,
                {snippet_select}
         FROM knowledge_objects ko
         JOIN knowledge_versions kv ON kv.id = ko.current_version_id
@@ -1018,9 +1078,14 @@ def search_knowledge(
     with session_scope(session_factory) as session:
         rows = session.execute(text(query), params).mappings().all()
         total = int(session.execute(text(count_query), params).scalar_one())
+        failure_summaries = _latest_index_failure_summaries(
+            session,
+            [str(row["knowledge_object_id"]) for row in rows if row["readiness"] == "failed"],
+        )
         items = []
         for row in rows:
             metadata = _json_object(row["source_metadata_json"])
+            readiness_value = str(row["readiness"])
             items.append(
                 {
                     "knowledge_object_id": str(row["knowledge_object_id"]),
@@ -1034,7 +1099,9 @@ def search_knowledge(
                     "source_type": str(row["source_kind"]),
                     "evidence_object_id": str(row["evidence_object_id"]),
                     "source_sha256": str(row["source_sha256"]),
-                    "searchable": True,
+                    "searchable": readiness_value == "ready",
+                    "processing_status": readiness_value,
+                    "failure_summary": failure_summaries.get(str(row["knowledge_object_id"])),
                     "source_url": metadata.get("source_url") or metadata.get("url"),
                     "content_sha256": str(row["content_sha256"]),
                     "summary": str(row["summary"]) if row["summary"] is not None else None,
@@ -1051,6 +1118,91 @@ def search_knowledge(
                 }
             )
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+def _knowledge_readiness_sql(alias: str) -> str:
+    """Project a knowledge object's library status: ready, processing or failed.
+
+    Only ``ready`` means formal retrieval qualification. Pending reprocessing
+    requests win over an earlier failure so a retried item shows as processing.
+    """
+    latest_index_status = f"""
+        (SELECT latest_index.status
+         FROM jobs latest_index
+         WHERE latest_index.job_type = 'knowledge.index'
+           AND (
+             json_extract(latest_index.payload_json, '$.knowledge_object_id') = {alias}.id
+             OR json_extract(latest_index.payload_json, '$.aggregate_id') = {alias}.id
+           )
+         ORDER BY latest_index.created_at DESC, latest_index.rowid DESC
+         LIMIT 1)
+    """
+    pending_request = f"""
+        EXISTS (
+          SELECT 1 FROM outbox_events pending_request
+          WHERE pending_request.aggregate_id = {alias}.id
+            AND pending_request.event_type IN (
+              'evidence.ingested', 'knowledge.reindex_requested',
+              'knowledge_candidate.confirmed', 'knowledge.restored'
+            )
+            AND pending_request.status IN ('pending', 'processing')
+        )
+    """
+    return f"""
+        CASE
+          WHEN {formal_searchable_sql(alias)} THEN 'ready'
+          WHEN {pending_request} THEN 'processing'
+          WHEN {latest_index_status} IN ('failed', 'dead', 'unsupported', 'completed')
+            THEN 'failed'
+          ELSE 'processing'
+        END
+    """
+
+
+def _latest_index_failure_summaries(
+    session: Session, knowledge_object_ids: list[str]
+) -> dict[str, str]:
+    """Return a readable, redacted failure reason for each failed knowledge object."""
+    summaries: dict[str, str] = {}
+    for knowledge_object_id in knowledge_object_ids:
+        row = (
+            session.execute(
+                text(
+                    """
+                    SELECT j.status, j.payload_json, ja.error_class, ja.error_message
+                    FROM jobs j
+                    LEFT JOIN job_attempts ja ON ja.job_id = j.id
+                     AND ja.started_at = (
+                        SELECT max(started_at) FROM job_attempts WHERE job_id = j.id
+                     )
+                    WHERE j.job_type = 'knowledge.index'
+                      AND (
+                        json_extract(j.payload_json, '$.knowledge_object_id') = :id
+                        OR json_extract(j.payload_json, '$.aggregate_id') = :id
+                      )
+                    ORDER BY j.created_at DESC, j.rowid DESC
+                    LIMIT 1
+                    """
+                ),
+                {"id": knowledge_object_id},
+            )
+            .mappings()
+            .first()
+        )
+        failure = (
+            failure_from_row(
+                error_class=str(row["error_class"]) if row["error_class"] else None,
+                error_message=str(row["error_message"]) if row["error_message"] else None,
+                payload=_json_result(row["payload_json"]),
+                job_status=str(row["status"]),
+            )
+            if row is not None and row["error_message"]
+            else None
+        )
+        summaries[knowledge_object_id] = (
+            failure.redacted_summary if failure else "索引未完成，资料暂不可检索"
+        )
+    return summaries
 
 
 def _json_object(value: Any) -> dict[str, Any]:
