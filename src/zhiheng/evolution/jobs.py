@@ -34,6 +34,9 @@ from zhiheng.evolution.maintenance import (
 )
 from zhiheng.evolution.releases import ReleaseController
 
+# Exhausted leases dead-lettered per claim, independent of how many jobs are claimed.
+DEAD_LETTER_SWEEP_LIMIT = 10
+
 
 class EvolutionJobType(StrEnum):
     PROPOSAL_EVALUATION = "proposal-evaluation"
@@ -104,7 +107,9 @@ class JobRepository:
         if not allowed:
             return []
         allowed_json = json_text(sorted(EvolutionJobType(kind).value for kind in allowed))
-        self._dead_letter_exhausted_leases(session, allowed_json=allowed_json, limit=limit)
+        self._dead_letter_exhausted_leases(
+            session, allowed_json=allowed_json, limit=DEAD_LETTER_SWEEP_LIMIT
+        )
         rows = (
             session.execute(
                 text(
@@ -698,16 +703,21 @@ def process_jobs_once(
     repository: JobRepository | None = None,
 ) -> int:
     job_repository = repository or JobRepository()
-    with session_scope(session_factory) as session:
-        claimed = job_repository.claim_available(
-            session,
-            worker_id=worker_id,
-            limit=limit,
-            allowed_job_types=executor.allowed_job_types,
-        )
-
     completed = 0
-    for job in claimed:
+    # Claim one job at a time: claims get no heartbeat, so a batch claim would let
+    # later jobs' leases lapse (and be reclaimed by another worker) while an
+    # earlier job runs.
+    for _ in range(limit):
+        with session_scope(session_factory) as session:
+            claimed = job_repository.claim_available(
+                session,
+                worker_id=worker_id,
+                limit=1,
+                allowed_job_types=executor.allowed_job_types,
+            )
+        if not claimed:
+            break
+        job = claimed[0]
         try:
             result = executor.execute(job)
         except Exception as exc:

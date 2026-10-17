@@ -1,12 +1,16 @@
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.test_g006_worker_recovery import _migrated
+from zhiheng.core.config import Settings
 from zhiheng.evolution.contracts import EvolutionRole, command_context_for_role
 from zhiheng.evolution.jobs import (
+    ClaimedJob,
     EvolutionJobExecutor,
     EvolutionJobType,
     JobRepository,
@@ -188,3 +192,71 @@ def test_ack_requires_exact_open_attempt(
             session.execute(text("SELECT * FROM job_attempts ORDER BY id")).all() == before_attempts
         )
         assert session.execute(text("SELECT count(*) FROM dead_letters")).scalar_one() == 0
+
+
+class _SlowFirstExecutor(EvolutionJobExecutor):
+    """Runs a callback while executing its first job, standing in for a slow job."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        during_first_job: Callable[[ClaimedJob], None] | None = None,
+    ) -> None:
+        super().__init__(settings)
+        self._during_first_job = during_first_job
+        self.executed: list[str] = []
+
+    def execute(self, job: ClaimedJob) -> JobResult:
+        self.executed.append(job.id)
+        if len(self.executed) == 1 and self._during_first_job is not None:
+            self._during_first_job(job)
+        return JobResult("completed", {"synthetic_job": job.id})
+
+
+def _lapse_queued_leases(factory: sessionmaker[Session], running: ClaimedJob) -> None:
+    """Advance past the lease of every claim still waiting behind the running job.
+
+    Queued claims were leased no later than the running one, so they lapse first
+    when the jobs ahead of them outlast the lease.
+    """
+    with factory.begin() as session:
+        session.execute(
+            text(
+                "UPDATE jobs SET lease_expires_at=datetime('now','-1 minute') "
+                "WHERE status='processing' AND id != :running_id"
+            ),
+            {"running_id": running.id},
+        )
+
+
+def test_second_worker_does_not_reexecute_jobs_queued_behind_a_slow_job(tmp_path: Path) -> None:
+    settings, factory, connection = _migrated(tmp_path)
+    connection.close()
+    with factory.begin() as session:
+        for index in range(3):
+            JobRepository().enqueue(
+                session,
+                job_type=EvolutionJobType.MAINTENANCE,
+                idempotency_key=f"synthetic-queued-{index}",
+                payload={},
+            )
+        job_ids = list(session.execute(text("SELECT id FROM jobs")).scalars())
+    other_executor = _SlowFirstExecutor(settings)
+    other_completed: list[int] = []
+
+    def slow_first_job(running: ClaimedJob) -> None:
+        _lapse_queued_leases(factory, running)
+        other_completed.append(process_jobs_once(factory, other_executor, worker_id="worker-b"))
+
+    executor = _SlowFirstExecutor(settings, during_first_job=slow_first_job)
+
+    completed = process_jobs_once(factory, executor, worker_id="worker-a")
+
+    assert sorted(executor.executed + other_executor.executed) == sorted(job_ids)
+    assert completed + sum(other_completed) == 3
+    with factory() as session:
+        rows = session.execute(text("SELECT status, attempts FROM jobs")).all()
+        assert [tuple(row) for row in rows] == [("completed", 1)] * 3
+        attempts = session.execute(text("SELECT status FROM job_attempts")).scalars().all()
+        assert attempts == ["completed"] * 3
