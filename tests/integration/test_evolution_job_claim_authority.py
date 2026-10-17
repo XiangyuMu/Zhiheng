@@ -1,3 +1,4 @@
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.test_g006_worker_recovery import _migrated
 from zhiheng.core.config import Settings
+from zhiheng.evolution import jobs as evolution_jobs
 from zhiheng.evolution.contracts import EvolutionRole, command_context_for_role
 from zhiheng.evolution.jobs import (
     ClaimedJob,
@@ -260,3 +262,90 @@ def test_second_worker_does_not_reexecute_jobs_queued_behind_a_slow_job(tmp_path
         assert [tuple(row) for row in rows] == [("completed", 1)] * 3
         attempts = session.execute(text("SELECT status FROM job_attempts")).scalars().all()
         assert attempts == ["completed"] * 3
+
+
+def _wait_past_lease_unless_renewed(factory: sessionmaker[Session], job: ClaimedJob) -> None:
+    """Stand in for a job that runs right up to the end of its lease.
+
+    The lease is moved to expire within a second, then the job keeps running until
+    either the lease lapses or a heartbeat pushes it well into the future.
+    """
+    with factory.begin() as session:
+        session.execute(
+            text("UPDATE jobs SET lease_expires_at=datetime('now','+1 second') WHERE id=:id"),
+            {"id": job.id},
+        )
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        with factory() as session:
+            renewed = session.execute(
+                text(
+                    "SELECT lease_expires_at > datetime('now','+60 seconds') FROM jobs WHERE id=:id"
+                ),
+                {"id": job.id},
+            ).scalar_one()
+        if renewed:
+            return
+        time.sleep(0.05)
+
+
+def test_job_running_past_its_lease_is_not_reclaimed_mid_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(evolution_jobs, "EVOLUTION_JOB_HEARTBEAT_SECONDS", 0.05, raising=False)
+    settings, factory, connection = _migrated(tmp_path)
+    connection.close()
+    with factory.begin() as session:
+        JobRepository().enqueue(
+            session,
+            job_type=EvolutionJobType.MAINTENANCE,
+            idempotency_key="synthetic-long-running",
+            payload={},
+        )
+    other_executor = _SlowFirstExecutor(settings)
+    other_completed: list[int] = []
+
+    def long_running_job(running: ClaimedJob) -> None:
+        _wait_past_lease_unless_renewed(factory, running)
+        other_completed.append(process_jobs_once(factory, other_executor, worker_id="worker-b"))
+
+    executor = _SlowFirstExecutor(settings, during_first_job=long_running_job)
+
+    completed = process_jobs_once(factory, executor, worker_id="worker-a")
+
+    assert other_executor.executed == []
+    assert other_completed == [0]
+    assert completed == 1
+    with factory() as session:
+        rows = session.execute(text("SELECT status, attempts FROM jobs")).all()
+        assert [tuple(row) for row in rows] == [("completed", 1)]
+        attempts = session.execute(text("SELECT status FROM job_attempts")).scalars().all()
+        assert attempts == ["completed"]
+
+
+def test_lease_renewal_requires_exact_live_claim(tmp_path: Path) -> None:
+    _settings, factory, connection = _migrated(tmp_path)
+    connection.close()
+    repository = JobRepository()
+    with factory.begin() as session:
+        repository.enqueue(
+            session,
+            job_type=EvolutionJobType.MAINTENANCE,
+            idempotency_key="synthetic-renewal",
+            payload={},
+        )
+        claimed = repository.claim_available(session, worker_id="owner", lease_seconds=1)[0]
+        assert repository.renew_lease(session, claimed, lease_seconds=90) is True
+        assert session.execute(
+            text("SELECT lease_expires_at > datetime('now','+60 seconds') FROM jobs")
+        ).scalar_one()
+
+        assert repository.renew_lease(session, replace(claimed, lease_owner="forged")) is False
+        assert repository.renew_lease(session, replace(claimed, attempts=2)) is False
+        assert repository.renew_lease(session, replace(claimed, attempt_id="forged")) is False
+
+        session.execute(text("UPDATE jobs SET lease_expires_at=datetime('now','-1 second')"))
+        assert repository.renew_lease(session, claimed) is False
+        assert session.execute(
+            text("SELECT lease_expires_at <= CURRENT_TIMESTAMP FROM jobs")
+        ).scalar_one()
