@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import new_id, sha256_text
-from zhiheng.db.session import session_scope
+from zhiheng.db.session import is_transient_database_error, session_scope
 from zhiheng.jobs.knowledge_contract import job_etag, retry_idempotency_key
 from zhiheng.knowledge import KnowledgeRepository
 from zhiheng.knowledge.pdf_worker import ParserTerminalFailure
@@ -1137,7 +1137,7 @@ def _lease_heartbeat(
                 ):
                     return
         except DBAPIError as exc:
-            level = logging.WARNING if _is_transient_heartbeat_error(exc) else logging.ERROR
+            level = logging.WARNING if is_transient_database_error(exc) else logging.ERROR
             logger.log(
                 level,
                 "knowledge lease heartbeat database failure",
@@ -1160,22 +1160,6 @@ def _lease_heartbeat(
             )
             return
 
-
-def _is_transient_heartbeat_error(exc: DBAPIError) -> bool:
-    if exc.connection_invalidated:
-        return True
-    message = str(exc.orig or exc).lower()
-    return any(
-        marker in message
-        for marker in (
-            "database is locked",
-            "database table is locked",
-            "database is busy",
-            "temporarily unavailable",
-            "connection reset",
-            "timed out",
-        )
-    )
 
 
 def _json_object(value: Any) -> dict[str, Any]:

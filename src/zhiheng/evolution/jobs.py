@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from enum import StrEnum
@@ -10,12 +12,13 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine, make_url
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import json_text, new_id
 from zhiheng.db.maintenance import ServingSQLiteConnection
-from zhiheng.db.session import session_scope
+from zhiheng.db.session import is_transient_database_error, session_scope
 from zhiheng.evaluation.g006_runner import G006ExecutionStage
 from zhiheng.evaluation.proposal_execution import ProposalExecutionService
 from zhiheng.evaluation.release_execution import ReleaseExecutionService
@@ -36,6 +39,10 @@ from zhiheng.evolution.releases import ReleaseController
 
 # Exhausted leases dead-lettered per claim, independent of how many jobs are claimed.
 DEAD_LETTER_SWEEP_LIMIT = 10
+EVOLUTION_JOB_LEASE_SECONDS = 300
+EVOLUTION_JOB_HEARTBEAT_SECONDS = 15
+
+logger = logging.getLogger(__name__)
 
 
 class EvolutionJobType(StrEnum):
@@ -100,7 +107,7 @@ class JobRepository:
         *,
         worker_id: str,
         limit: int = 10,
-        lease_seconds: int = 300,
+        lease_seconds: int = EVOLUTION_JOB_LEASE_SECONDS,
         allowed_job_types: frozenset[EvolutionJobType] | None = None,
     ) -> list[ClaimedJob]:
         allowed = frozenset(EvolutionJobType) if allowed_job_types is None else allowed_job_types
@@ -201,6 +208,48 @@ class JobRepository:
                     )
                 )
         return claimed
+
+    def renew_lease(
+        self,
+        session: Session,
+        job: ClaimedJob,
+        *,
+        lease_seconds: int = EVOLUTION_JOB_LEASE_SECONDS,
+    ) -> bool:
+        """Extend a live claim while its executor is still running.
+
+        An expired lease is never revived: once it lapses another worker may have
+        reclaimed the job, so the stale claim must lose its acknowledgement instead.
+        """
+        if job.lease_owner is None or job.attempt_id is None:
+            return False
+        session.execute(
+            text(
+                """
+                UPDATE jobs
+                SET lease_expires_at = datetime('now', :lease_delta),
+                    heartbeat_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :job_id
+                  AND status = 'processing' AND attempts = :attempts AND lease_owner = :owner
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at > CURRENT_TIMESTAMP
+                  AND EXISTS (
+                    SELECT 1 FROM job_attempts
+                    WHERE id = :attempt_id AND job_id = :job_id
+                      AND status = 'processing' AND finished_at IS NULL
+                  )
+                """
+            ),
+            {
+                "job_id": job.id,
+                "attempts": job.attempts,
+                "owner": job.lease_owner,
+                "attempt_id": job.attempt_id,
+                "lease_delta": f"+{lease_seconds} seconds",
+            },
+        )
+        return int(session.execute(text("SELECT changes()")).scalar_one()) == 1
 
     def _dead_letter_exhausted_leases(
         self,
@@ -704,9 +753,9 @@ def process_jobs_once(
 ) -> int:
     job_repository = repository or JobRepository()
     completed = 0
-    # Claim one job at a time: claims get no heartbeat, so a batch claim would let
-    # later jobs' leases lapse (and be reclaimed by another worker) while an
-    # earlier job runs.
+    # Claim one job at a time: only the running job's lease is renewed by the
+    # heartbeat, so a batch claim would let later jobs' leases lapse (and be
+    # reclaimed by another worker) while an earlier job runs.
     for _ in range(limit):
         with session_scope(session_factory) as session:
             claimed = job_repository.claim_available(
@@ -718,16 +767,60 @@ def process_jobs_once(
         if not claimed:
             break
         job = claimed[0]
+        heartbeat_stop = threading.Event()
+        heartbeat = threading.Thread(
+            target=_lease_heartbeat,
+            args=(session_factory, job_repository, job, heartbeat_stop),
+            name=f"evolution-lease-heartbeat-{job.id}",
+            daemon=True,
+        )
+        heartbeat.start()
         try:
             result = executor.execute(job)
         except Exception as exc:
             with session_scope(session_factory) as session:
                 job_repository.fail(session, job, exc=exc)
             continue
+        finally:
+            heartbeat_stop.set()
+            heartbeat.join(timeout=EVOLUTION_JOB_HEARTBEAT_SECONDS)
         with session_scope(session_factory) as session:
             acknowledged = job_repository.complete(session, job, result=result)
         completed += int(acknowledged)
     return completed
+
+
+def _lease_heartbeat(
+    session_factory: sessionmaker[Session],
+    repository: JobRepository,
+    job: ClaimedJob,
+    stop: threading.Event,
+) -> None:
+    while not stop.wait(EVOLUTION_JOB_HEARTBEAT_SECONDS):
+        try:
+            with session_scope(session_factory) as session:
+                if not repository.renew_lease(session, job):
+                    return
+        except DBAPIError as exc:
+            transient = is_transient_database_error(exc)
+            logger.log(
+                logging.WARNING if transient else logging.ERROR,
+                "evolution lease heartbeat database failure",
+                extra={
+                    "error_class": type(exc).__name__,
+                    "job_type": job.job_type.value,
+                    "transient": transient,
+                },
+            )
+            if transient:
+                continue
+            return
+        except Exception as exc:
+            logger.error(
+                "evolution lease heartbeat unexpected failure",
+                extra={"error_class": type(exc).__name__, "job_type": job.job_type.value},
+            )
+            return
 
 
 def enqueue_evolution_job(
