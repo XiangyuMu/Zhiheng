@@ -75,6 +75,9 @@ def test_proxy_forwards_real_submission_then_injects_status_fault(tmp_path: Path
             return
 
         def do_POST(self) -> None:
+            # Unread body bytes make close() send a TCP reset, which the
+            # proxy reports as a 503 instead of forwarding the 202.
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
             self.send_response(202)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
