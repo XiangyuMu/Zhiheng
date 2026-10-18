@@ -679,7 +679,10 @@ def test_restart_result_is_private_and_failure_stops_pdf_parse(
             timeout: float | None, env: dict[str, str]) -> dict[str, Any]:
         calls.append(name)
         if name == "pdf-worker-restart":
-            return cast(dict[str, Any], execute(root, dest, name, argv, 0.3, env))
+            # Only the timeout case needs a short budget; the others must
+            # survive a cold interpreter start on a loaded CI runner.
+            budget = 0.3 if outcome == "timeout" else 30.0
+            return cast(dict[str, Any], execute(root, dest, name, argv, budget, env))
         return {"name": name, "command": argv, "status": "passed", "exit_code": 0,
                 "seconds": 0.01}
 
