@@ -392,6 +392,14 @@ fs.mkdirSync(output, { recursive: true });
         memory_type: 'fact', state_key: 'profile.browser_city', value: { text: value }, source_kind: 'user_explicit',
       } });
       await update('北京'); await update('上海');
+      // Let the Worker finish the jobs these updates queue: an answer whose
+      // context is reindexed mid-request fails its manifest recheck.
+      await page.waitForTimeout(2000);
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const metrics = await page.evaluate(async () => (await fetch('/metrics')).text());
+        if (/^zhiheng_jobs_pending 0$/m.test(metrics)) break;
+        await page.waitForTimeout(500);
+      }
       await page.goto(`${base}/knowledge-agent#research`);
       await page.locator('#question').fill('我现在居住在哪个城市？');
       await page.locator('#answer-form button[type="submit"]').click();
