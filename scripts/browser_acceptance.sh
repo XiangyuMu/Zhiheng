@@ -98,7 +98,7 @@ export ZHIHENG_ENVIRONMENT="test"
 export ZHIHENG_API_HOST="127.0.0.1"
 export ZHIHENG_API_PORT="${PORT}"
 export ZHIHENG_EXTERNAL_MODELS_ENABLED="true"
-# The unsupported-PDF scenario needs PDF parsing declared off (ADR 0005).
+# The PDF upload refusal scenario needs PDF parsing declared off (ADR 0005).
 export ZHIHENG_PDF_PARSER_BACKEND="${ZHIHENG_PDF_PARSER_BACKEND:-none}"
 CURRENT_STAGE="migration"
 uv run python scripts/prepare_issue11_legacy_db.py "${DB_PATH}" >"${OUTPUT_DIR}/migration.log" 2>&1
