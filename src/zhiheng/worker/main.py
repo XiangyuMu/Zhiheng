@@ -6,9 +6,11 @@ import logging
 import math
 import os
 import signal
+import socket
 import threading
 from collections.abc import Callable
-from typing import Literal, cast
+from datetime import UTC, datetime
+from typing import Any, Literal, cast
 
 from sqlalchemy.exc import OperationalError
 
@@ -39,6 +41,7 @@ from zhiheng.jobs.deployment_capabilities import (
     deployment_capabilities_configured,
     probe_pdf_parsing,
 )
+from zhiheng.jobs.worker_heartbeats import HEARTBEAT_INTERVAL_SECONDS, record_worker_heartbeat
 from zhiheng.recovery import startup_recovery_barrier
 
 logger = logging.getLogger(__name__)
@@ -216,10 +219,31 @@ def serve_forever(
     backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
     knowledge_executor_factory: KnowledgeExecutorFactory | None = None,
     pdf_executor_factory: PdfExecutorFactory | None = None,
+    capabilities: dict[str, dict[str, Any]] | None = None,
+    heartbeat_seconds: float = HEARTBEAT_INTERVAL_SECONDS,
+    clock: Callable[[], datetime] | None = None,
 ) -> int:
-    if not all(math.isfinite(value) and value > 0 for value in (idle_seconds, backoff_seconds)):
+    intervals = (idle_seconds, backoff_seconds, heartbeat_seconds)
+    if not all(math.isfinite(value) and value > 0 for value in intervals):
         raise ValueError("worker wait intervals must be finite and positive")
+    now = clock or _utc_now
+    heartbeat_id = worker_id or f"{role}@{socket.gethostname()}"
+    last_heartbeat: datetime | None = None
     while not stop_event.is_set():
+        if capabilities is not None:
+            moment = now()
+            if (
+                last_heartbeat is None
+                or (moment - last_heartbeat).total_seconds() >= heartbeat_seconds
+            ):
+                if report_heartbeat(
+                    settings,
+                    worker_id=heartbeat_id,
+                    role=role,
+                    capabilities=capabilities,
+                    now=moment,
+                ):
+                    last_heartbeat = moment
         try:
             completed = run_once(
                 settings,
@@ -239,6 +263,41 @@ def serve_forever(
         if completed <= 0:
             _wait_for_stop(stop_event, idle_seconds)
     return 0
+
+
+def report_heartbeat(
+    settings: Settings,
+    *,
+    worker_id: str,
+    role: WorkerRole,
+    capabilities: dict[str, dict[str, Any]],
+    now: datetime,
+) -> bool:
+    """Record this worker's declared deployment capabilities; failures are retried."""
+
+    engine = create_sqlite_engine(settings)
+    try:
+        with session_scope(create_session_factory(engine)) as session:
+            record_worker_heartbeat(
+                session,
+                worker_id=worker_id,
+                role=role,
+                capabilities=capabilities,
+                now=now,
+            )
+    except OperationalError:
+        logger.warning(
+            "worker heartbeat failed",
+            extra={"error_class": "OperationalError", "role": role},
+        )
+        return False
+    finally:
+        engine.dispose()
+    return True
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 def run() -> None:
@@ -309,6 +368,7 @@ def main(argv: list[str] | None = None) -> int:
         worker_id=args.worker_id,
         idle_seconds=args.idle_seconds,
         backoff_seconds=args.backoff_seconds,
+        capabilities=capabilities,
     )
 
 

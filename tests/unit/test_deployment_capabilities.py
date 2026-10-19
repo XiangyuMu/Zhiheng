@@ -205,6 +205,27 @@ def test_worker_starts_when_pdf_parsing_is_declared_off(
     assert calls == ["run"]
 
 
+def test_serving_worker_heartbeats_the_capabilities_its_startup_validated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _mineru_settings()
+    _patch_settings(monkeypatch, settings)
+    monkeypatch.setattr(worker_main, "_install_signal_handlers", lambda _event: None)
+    served: dict[str, Any] = {}
+
+    def record_serve(*_args: object, **kwargs: Any) -> int:
+        served.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(worker_main, "serve_forever", record_serve)
+
+    assert worker_main.main(["--role", "publisher", "--worker-id", "publisher-7"]) == 0
+    assert served["capabilities"] == deployment_capabilities(settings)
+    assert served["capabilities"]["pdf_parsing"]["declared"] == "mineru"
+    assert served["role"] == "publisher"
+    assert served["worker_id"] == "publisher-7"
+
+
 def test_token_file_declared_in_env_file_is_read(tmp_path: Path) -> None:
     token_file = tmp_path / "token"
     token_file.write_text(TOKEN, encoding="utf-8")

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy.orm import Session, sessionmaker
@@ -15,6 +17,7 @@ from zhiheng.jobs.worker_heartbeats import (
     current_deployment_capabilities,
     record_worker_heartbeat,
 )
+from zhiheng.worker import main as worker_main
 
 NOW = datetime(2026, 10, 19, 8, 0, 0, tzinfo=UTC)
 
@@ -188,3 +191,116 @@ def test_a_worker_restarted_without_a_parser_withdraws_it_immediately(tmp_path: 
 
     assert report["pdf_parsing"]["available"] is False
     assert len(report["workers"]) == 1
+
+
+def _worker_settings(tmp_path: Path, **values: Any) -> Settings:
+    _session_factory(tmp_path)
+    return Settings(
+        environment="test",
+        database_url=f"sqlite:///{tmp_path / 'heartbeats.db'}",
+        **values,
+    )
+
+
+class _SteppingClock:
+    def __init__(self, start: datetime, step: timedelta) -> None:
+        self.current = start
+        self.step = step
+
+    def __call__(self) -> datetime:
+        return self.current
+
+    def advance(self) -> None:
+        self.current += self.step
+
+
+def test_serving_worker_keeps_its_declaration_fresh_past_the_stale_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _worker_settings(tmp_path, pdf_parser_backend="none")
+    clock = _SteppingClock(NOW, timedelta(seconds=HEARTBEAT_STALE_AFTER_SECONDS / 2))
+    stop_event = threading.Event()
+    iterations: list[int] = []
+
+    def one_batch(*_args: object, **_kwargs: object) -> int:
+        iterations.append(1)
+        clock.advance()
+        if len(iterations) >= 6:
+            stop_event.set()
+        return 1
+
+    monkeypatch.setattr(worker_main, "run_once", one_batch)
+
+    worker_main.serve_forever(
+        settings,
+        stop_event=stop_event,
+        role="publisher",
+        worker_id="publisher-1",
+        capabilities=_declared("mineru"),
+        clock=clock,
+    )
+
+    report = _capabilities(_session_factory_for(settings), at=clock())
+    assert report["pdf_parsing"]["available"] is True
+    assert [(worker["worker_id"], worker["role"]) for worker in report["workers"]] == [
+        ("publisher-1", "publisher")
+    ]
+
+
+def test_serving_worker_without_an_id_reports_under_its_role_and_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _worker_settings(tmp_path, pdf_parser_backend="none")
+    stop_event = threading.Event()
+
+    def one_batch(*_args: object, **_kwargs: object) -> int:
+        stop_event.set()
+        return 0
+
+    monkeypatch.setattr(worker_main, "run_once", one_batch)
+    monkeypatch.setattr(worker_main.socket, "gethostname", lambda: "box-1")
+
+    worker_main.serve_forever(
+        settings,
+        stop_event=stop_event,
+        role="worker",
+        capabilities=_declared("none"),
+        clock=lambda: NOW,
+    )
+
+    report = _capabilities(_session_factory_for(settings), at=NOW)
+    assert [worker["worker_id"] for worker in report["workers"]] == ["worker@box-1"]
+    assert report["pdf_parsing"]["available"] is False
+
+
+def test_heartbeat_database_failure_does_not_stop_the_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(
+        environment="test", database_url=f"sqlite:///{tmp_path / 'unmigrated.db'}"
+    )
+    stop_event = threading.Event()
+    batches: list[int] = []
+
+    def one_batch(*_args: object, **_kwargs: object) -> int:
+        batches.append(1)
+        stop_event.set()
+        return 0
+
+    monkeypatch.setattr(worker_main, "run_once", one_batch)
+
+    assert (
+        worker_main.serve_forever(
+            settings,
+            stop_event=stop_event,
+            role="worker",
+            capabilities=_declared("mineru"),
+            clock=lambda: NOW,
+        )
+        == 0
+    )
+    assert batches == [1]
+
+
+def _session_factory_for(settings: Settings) -> sessionmaker[Session]:
+    return create_session_factory(create_sqlite_engine(settings))
