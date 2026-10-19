@@ -6,8 +6,8 @@ from pathlib import Path
 from pypdf import PdfWriter
 from sqlalchemy import text
 
-from tests.knowledge_helpers import announce_pdf_parser_worker
 from tests.integration.test_g005_api_impl import _client, _headers, _login
+from tests.knowledge_helpers import announce_pdf_parser_worker
 from zhiheng.core.ids import json_text, new_id
 from zhiheng.db.session import session_scope
 

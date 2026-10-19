@@ -232,18 +232,17 @@ def serve_forever(
     while not stop_event.is_set():
         if capabilities is not None:
             moment = now()
-            if (
-                last_heartbeat is None
-                or (moment - last_heartbeat).total_seconds() >= heartbeat_seconds
+            due = last_heartbeat is None or (
+                (moment - last_heartbeat).total_seconds() >= heartbeat_seconds
+            )
+            if due and report_heartbeat(
+                settings,
+                worker_id=heartbeat_id,
+                role=role,
+                capabilities=capabilities,
+                now=moment,
             ):
-                if report_heartbeat(
-                    settings,
-                    worker_id=heartbeat_id,
-                    role=role,
-                    capabilities=capabilities,
-                    now=moment,
-                ):
-                    last_heartbeat = moment
+                last_heartbeat = moment
         try:
             completed = run_once(
                 settings,

@@ -13,8 +13,8 @@ from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 from sqlalchemy import text
 
-from tests.knowledge_helpers import announce_pdf_parser_worker
 from tests.integration.test_g005_api_impl import _client, _headers, _login
+from tests.knowledge_helpers import announce_pdf_parser_worker
 from zhiheng.api.main import create_app
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import new_id, sha256_text

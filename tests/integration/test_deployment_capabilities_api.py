@@ -47,12 +47,13 @@ def _heartbeat(
 
 
 def _upload(client: TestClient, csrf: str, key: str) -> httpx.Response:
-    return client.post(
+    response: httpx.Response = client.post(
         "/v1/knowledge/pdf-imports",
         params={"title": "能力门禁 PDF", "primary_domain_id": "technology.ai"},
         content=_pdf_bytes(),
         headers={**_headers(csrf, key), "Content-Type": "application/pdf"},
     )
+    return response
 
 
 def _pdf_task_count(session_factory: sessionmaker[Session]) -> int:

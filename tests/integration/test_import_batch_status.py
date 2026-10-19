@@ -9,9 +9,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
-from tests.knowledge_helpers import announce_pdf_parser_worker
 from tests.integration.test_g005_api_impl import _client, _headers, _login
 from tests.integration.test_pdf_async_upload import _pdf_bytes
+from tests.knowledge_helpers import announce_pdf_parser_worker
 from zhiheng.core.ids import new_id
 from zhiheng.db.session import session_scope
 from zhiheng.jobs import import_tasks

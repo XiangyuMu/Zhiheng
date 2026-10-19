@@ -74,32 +74,29 @@ def current_deployment_capabilities(
         .mappings()
         .all()
     )
-    workers = [
-        {
-            "worker_id": str(row["worker_id"]),
-            "role": str(row["role"]),
-            "heartbeat_at": _public(str(row["heartbeat_at"])),
-            # ``detail`` can name internal service addresses; the API only
-            # exposes what each worker declares.
-            "capabilities": {
-                name: {
-                    "declared": capability.get("declared"),
-                    "configured": bool(capability.get("configured")),
-                }
-                for name, capability in _capabilities(row["capabilities_json"]).items()
-            },
+    workers: list[dict[str, Any]] = []
+    backends: set[str] = set()
+    for row in rows:
+        # ``detail`` can name internal service addresses; the API only exposes
+        # what each worker declares.
+        declared = {
+            name: {
+                "declared": capability.get("declared"),
+                "configured": bool(capability.get("configured")),
+            }
+            for name, capability in _capabilities(row["capabilities_json"]).items()
         }
-        for row in rows
-    ]
-    backends = sorted(
-        {
-            str(pdf["declared"])
-            for worker in workers
-            if (pdf := worker["capabilities"].get("pdf_parsing")) is not None
-            and pdf["configured"]
-            and pdf["declared"] in PDF_PARSER_BACKENDS
-        }
-    )
+        pdf = declared.get("pdf_parsing")
+        if pdf is not None and pdf["configured"] and pdf["declared"] in PDF_PARSER_BACKENDS:
+            backends.add(str(pdf["declared"]))
+        workers.append(
+            {
+                "worker_id": str(row["worker_id"]),
+                "role": str(row["role"]),
+                "heartbeat_at": _public(str(row["heartbeat_at"])),
+                "capabilities": declared,
+            }
+        )
     if backends:
         reason = None
     elif workers:
@@ -110,7 +107,11 @@ def current_deployment_capabilities(
             "PDF uploads are unsupported"
         )
     return {
-        "pdf_parsing": {"available": bool(backends), "backends": backends, "reason": reason},
+        "pdf_parsing": {
+            "available": bool(backends),
+            "backends": sorted(backends),
+            "reason": reason,
+        },
         "workers": workers,
         "stale_after_seconds": stale_after_seconds,
     }

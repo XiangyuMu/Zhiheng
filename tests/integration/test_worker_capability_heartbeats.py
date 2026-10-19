@@ -258,7 +258,7 @@ def test_serving_worker_without_an_id_reports_under_its_role_and_host(
         return 0
 
     monkeypatch.setattr(worker_main, "run_once", one_batch)
-    monkeypatch.setattr(worker_main.socket, "gethostname", lambda: "box-1")
+    monkeypatch.setattr("socket.gethostname", lambda: "box-1")
 
     worker_main.serve_forever(
         settings,
