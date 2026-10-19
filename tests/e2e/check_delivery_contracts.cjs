@@ -500,9 +500,15 @@ const MINIMAL_PDF = Buffer.from(
       await importError.waitFor({ timeout: 10000 });
       const errorText = await importError.innerText();
       assert(errorText.includes(refusedPdf) && errorText.includes("已导入其余 1 项"), errorText);
-      const tasks = (await apiJson("/v1/knowledge/import-tasks?limit=100")).items;
-      assert(!tasks.some((task) => task.title === refusedPdf), "no PDF import task is created");
+      // The Worker enqueues the Markdown file's indexing job from the outbox shortly after.
+      let tasks = [];
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        tasks = (await apiJson("/v1/knowledge/import-tasks?limit=100")).items;
+        if (tasks.some((task) => task.title === keptNote)) break;
+        await page.waitForTimeout(1000);
+      }
       assert(tasks.some((task) => task.title === keptNote), "the Markdown file in the batch is imported");
+      assert(!tasks.some((task) => task.title === refusedPdf), "no PDF import task is created");
       evidence.import_refusal = {
         mode: "real_api_and_independent_worker",
         state: "refused_at_upload",
