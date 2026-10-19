@@ -5,8 +5,8 @@ import json
 import logging
 import math
 import os
+import platform
 import signal
-import socket
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -227,7 +227,7 @@ def serve_forever(
     if not all(math.isfinite(value) and value > 0 for value in intervals):
         raise ValueError("worker wait intervals must be finite and positive")
     now = clock or _utc_now
-    heartbeat_id = worker_id or f"{role}@{socket.gethostname()}"
+    heartbeat_id = worker_id or f"{role}@{platform.node()}"
     last_heartbeat: datetime | None = None
     while not stop_event.is_set():
         if capabilities is not None:
