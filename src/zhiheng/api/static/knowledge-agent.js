@@ -1632,11 +1632,15 @@ async function loadClassifications() {
 function classificationNode(domain, item, children) {
   const li = node("li", undefined, "classification-node");
   const row = node("div", undefined, "classification-row");
-  row.append(node("span", item.name), node("small", `${item.knowledge_count || 0} 份资料`, "muted"));
   const kids = children.get(item.id) || [];
+  const count = kids.length
+    ? `${item.subtree_knowledge_count || 0} 份资料（含子分类）`
+    : `${item.knowledge_count || 0} 份资料`;
+  row.append(node("span", item.name), node("small", count, "muted"));
   row.append(action("重命名", () => renameClassification(item), "quiet small"));
   if (item.level < 3) row.append(action("＋ 子分类", () => createClassification(domain, item), "quiet small"));
-  if (!kids.length && !item.knowledge_count) row.append(action("删除", () => deleteClassification(item), "quiet danger small"));
+  // The server decides deletability with the same rule as its delete check.
+  if (item.deletable) row.append(action("删除", () => deleteClassification(item), "quiet danger small"));
   li.append(row);
   if (kids.length) {
     const ul = node("ul");

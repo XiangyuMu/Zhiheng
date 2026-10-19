@@ -23,6 +23,39 @@ class ClassificationNode:
     status: str
 
 
+# What blocks deleting a classification: child classifications, or confirmed
+# knowledge classified directly into it. There is no lifecycle filter: knowledge in
+# the recycle bin counts because it can be restored and deleting its classification
+# would orphan it, and privacy-erased knowledge counts too because erasure keeps its
+# classification rows. The tree counts below use the same rule so the numbers users
+# see agree with what the delete check enforces.
+# `{node}` is filled with an SQL expression (a column such as "n.id" or a bind name
+# such as ":id"), never with a value.
+_CHILD_COUNT_SQL = """
+    (SELECT count(*) FROM classification_nodes child
+     WHERE child.parent_id = {node} AND child.owner_user_id = :user_id)
+"""
+_DIRECT_KNOWLEDGE_COUNT_SQL = """
+    (SELECT count(*) FROM knowledge_classifications kc
+     JOIN knowledge_objects ko ON ko.id = kc.knowledge_object_id
+     WHERE kc.classification_node_id = {node}
+       AND ko.owner_user_id = :user_id
+       AND kc.confirmation_status = 'confirmed')
+"""
+# Distinct knowledge in a node and its children. Classifications are levels 2 and 3
+# under a fixed level-1 domain, so a node's only descendants are its children.
+_SUBTREE_KNOWLEDGE_COUNT_SQL = """
+    (SELECT count(DISTINCT kc.knowledge_object_id) FROM knowledge_classifications kc
+     JOIN knowledge_objects ko ON ko.id = kc.knowledge_object_id
+     WHERE ko.owner_user_id = :user_id
+       AND kc.confirmation_status = 'confirmed'
+       AND kc.classification_node_id IN (
+         SELECT d.id FROM classification_nodes d
+         WHERE d.owner_user_id = :user_id
+           AND (d.id = {node} OR d.parent_id = {node})))
+"""
+
+
 class ClassificationRepository:
     def list_domains(self, session: Session, *, user_id: str) -> list[dict[str, Any]]:
         domains = (
@@ -40,14 +73,13 @@ class ClassificationRepository:
         nodes = (
             session.execute(
                 text(
-                    """
+                    f"""
                 SELECT n.id, n.domain_id, n.parent_id, n.level, n.name, n.description, n.path,
                        n.sort_order, n.status,
-                       (SELECT count(*) FROM knowledge_classifications kc
-                        JOIN knowledge_objects ko ON ko.id = kc.knowledge_object_id
-                        WHERE kc.classification_node_id = n.id
-                          AND ko.owner_user_id = :user_id
-                          AND kc.confirmation_status = 'confirmed') AS knowledge_count
+                       {_DIRECT_KNOWLEDGE_COUNT_SQL.format(node="n.id")} AS knowledge_count,
+                       {_SUBTREE_KNOWLEDGE_COUNT_SQL.format(node="n.id")}
+                         AS subtree_knowledge_count,
+                       {_CHILD_COUNT_SQL.format(node="n.id")} AS child_count
                 FROM classification_nodes n
                 WHERE n.owner_user_id = :user_id
                 ORDER BY n.domain_id, n.level, n.sort_order, n.name, n.id
@@ -60,7 +92,9 @@ class ClassificationRepository:
         )
         by_domain: dict[str, list[dict[str, Any]]] = {}
         for node in nodes:
-            by_domain.setdefault(str(node["domain_id"]), []).append(dict(node))
+            item = dict(node)
+            item["deletable"] = _deletable(int(item["child_count"]), int(item["knowledge_count"]))
+            by_domain.setdefault(str(node["domain_id"]), []).append(item)
         return [
             {**dict(domain), "nodes": by_domain.get(str(domain["id"]), [])} for domain in domains
         ]
@@ -191,27 +225,16 @@ class ClassificationRepository:
         node = self.get_node(session, node_id=node_id, user_id=user_id)
         if node is None:
             raise ValueError("classification not found")
-        child_count = session.execute(
+        child_count, ref_count = session.execute(
             text(
-                """
-                SELECT count(*) FROM classification_nodes
-                WHERE parent_id = :id AND owner_user_id = :user_id
+                f"""
+                SELECT {_CHILD_COUNT_SQL.format(node=":id")},
+                       {_DIRECT_KNOWLEDGE_COUNT_SQL.format(node=":id")}
                 """
             ),
             {"id": node_id, "user_id": user_id},
-        ).scalar_one()
-        ref_count = session.execute(
-            text(
-                """
-                SELECT count(*) FROM knowledge_classifications kc
-                JOIN knowledge_objects ko ON ko.id = kc.knowledge_object_id
-                WHERE kc.classification_node_id = :id AND ko.owner_user_id = :user_id
-                  AND kc.confirmation_status = 'confirmed'
-                """
-            ),
-            {"id": node_id, "user_id": user_id},
-        ).scalar_one()
-        if child_count or ref_count:
+        ).one()
+        if not _deletable(int(child_count), int(ref_count)):
             raise ValueError("classification is referenced; disable or migrate it first")
         session.execute(
             text("DELETE FROM classification_nodes WHERE id = :id AND owner_user_id = :user_id"),
@@ -427,6 +450,11 @@ class ClassificationRepository:
             {"user_id": user_id, "limit": limit, "offset": offset},
         ).mappings()
         return [dict(row) for row in rows]
+
+
+def _deletable(child_count: int, direct_knowledge_count: int) -> bool:
+    """Only an empty classification can be deleted: no children, no direct knowledge."""
+    return child_count == 0 and direct_knowledge_count == 0
 
 
 __all__ = ["ClassificationNode", "ClassificationRepository"]
