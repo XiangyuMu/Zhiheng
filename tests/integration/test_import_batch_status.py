@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
+from tests.knowledge_helpers import announce_pdf_parser_worker
 from tests.integration.test_g005_api_impl import _client, _headers, _login
 from tests.integration.test_pdf_async_upload import _pdf_bytes
 from zhiheng.core.ids import new_id
@@ -96,6 +97,7 @@ def test_parsed_pdf_item_succeeds_once_its_index_is_searchable(
 ) -> None:
     client, session_factory = _client(tmp_path)
     csrf = _login(client)
+    announce_pdf_parser_worker(session_factory)
     task_id, knowledge_object_id = _parsed_pdf_task(client, csrf, "batch-pdf-searchable")
     _mark_parsed(session_factory, task_id)
     with session_scope(session_factory) as session:
@@ -129,6 +131,7 @@ def test_parsed_pdf_item_succeeds_once_its_index_is_searchable(
 def test_parsed_pdf_item_fails_when_its_index_job_failed(tmp_path: Path) -> None:
     client, session_factory = _client(tmp_path)
     csrf = _login(client)
+    announce_pdf_parser_worker(session_factory)
     task_id, knowledge_object_id = _parsed_pdf_task(client, csrf, "batch-pdf-index-failed")
     _mark_parsed(session_factory, task_id)
     _index_job(

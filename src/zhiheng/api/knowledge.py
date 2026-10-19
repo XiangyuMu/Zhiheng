@@ -33,6 +33,7 @@ from zhiheng.jobs.knowledge_contract import (
     project_import_status,
 )
 from zhiheng.jobs.knowledge_indexing import KnowledgeJobRepository
+from zhiheng.jobs.worker_heartbeats import current_deployment_capabilities
 from zhiheng.knowledge import (
     KnowledgeIngestionService,
     KnowledgeRepository,
@@ -288,6 +289,16 @@ def require_if_match(if_match: str | None = Header(default=None, alias="If-Match
 IfMatchDep = Annotated[str, Depends(require_if_match)]
 
 
+@router.get("/v1/deployment/capabilities")
+def get_deployment_capabilities(
+    session_factory: SessionFactoryDep,
+    _user_id: AuthDep,
+) -> dict[str, Any]:
+    """Deployment capabilities declared by workers whose heartbeat is fresh."""
+    with session_scope(session_factory) as session:
+        return current_deployment_capabilities(session)
+
+
 @router.post("/v1/knowledge/pdf-imports", response_model=PdfTaskResponse, status_code=202)
 async def upload_pdf(
     request: Request,
@@ -341,6 +352,22 @@ async def upload_pdf(
     }
     operation_key = f"knowledge.pdf-import:{user_id}:{idempotency_key}"
     with session_scope(session_factory) as session:
+        pdf_parsing = current_deployment_capabilities(session)["pdf_parsing"]
+        if not pdf_parsing["available"] and (
+            _operation_receipt(
+                session,
+                operation_key,
+                request_hash=_mutation_request_hash("knowledge.pdf-import", payload),
+            )
+            is None
+        ):
+            # Refuse before any receipt exists so the same key succeeds once a
+            # parser-declaring worker is live, instead of queueing an import the
+            # worker can only settle as ``unsupported`` (ADR 0005).
+            raise HTTPException(
+                status_code=422,
+                detail=str(pdf_parsing["reason"]),
+            )
         receipt_id, replay = _begin_api_mutation(
             session,
             operation_key=operation_key,
@@ -1791,7 +1818,7 @@ def _begin_api_mutation(
     operation_type: str,
     payload: dict[str, Any],
 ) -> tuple[str, MutationResponse | None]:
-    request_hash = sha256_json({"operation_type": operation_type, "payload": payload})
+    request_hash = _mutation_request_hash(operation_type, payload)
     existing = _operation_receipt(session, operation_key, request_hash=request_hash)
     if existing is not None:
         return "", MutationResponse(
@@ -1802,6 +1829,10 @@ def _begin_api_mutation(
         _insert_operation_receipt(session, operation_key, operation_type, request_hash),
         None,
     )
+
+
+def _mutation_request_hash(operation_type: str, payload: dict[str, Any]) -> str:
+    return sha256_json({"operation_type": operation_type, "payload": payload})
 
 
 def _operation_receipt(

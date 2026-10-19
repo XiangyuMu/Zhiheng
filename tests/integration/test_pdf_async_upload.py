@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 from sqlalchemy import text
 
+from tests.knowledge_helpers import announce_pdf_parser_worker
 from tests.integration.test_g005_api_impl import _client, _headers, _login
 from zhiheng.api.main import create_app
 from zhiheng.core.config import Settings
@@ -92,6 +93,7 @@ def _manifest(
 def test_pdf_upload_is_async_idempotent_and_emits_parse_event(tmp_path: Path) -> None:
     client, session_factory = _client(tmp_path)
     csrf = _login(client)
+    announce_pdf_parser_worker(session_factory)
     body = _pdf_bytes()
     headers = {
         **_headers(csrf, "pdf-upload-1"),
@@ -160,8 +162,10 @@ def test_pdf_upload_uses_configured_parser_backend_when_query_omits_backend(
         database_url=f"sqlite:///{db_path}",
         pdf_parser_backend="mineru",
     )
-    client = TestClient(create_app(settings))
+    app = create_app(settings)
+    client = TestClient(app)
     csrf = _login(client)
+    announce_pdf_parser_worker(app.state.session_factory, backend="mineru")
     response = client.post(
         "/v1/knowledge/pdf-imports",
         params={"title": "configured", "primary_domain_id": "technology.ai"},
@@ -176,6 +180,7 @@ def test_pdf_upload_uses_configured_parser_backend_when_query_omits_backend(
 def test_pdf_status_exposes_unsupported_worker_diagnostics(tmp_path: Path) -> None:
     client, session_factory = _client(tmp_path)
     csrf = _login(client)
+    announce_pdf_parser_worker(session_factory)
     response = client.post(
         "/v1/knowledge/pdf-imports",
         params={"title": "未配置解析器 PDF", "primary_domain_id": "technology.ai"},
@@ -218,6 +223,7 @@ def test_pdf_status_exposes_unsupported_worker_diagnostics(tmp_path: Path) -> No
 def test_pdf_parser_failure_is_projected_to_retryable_task_status(tmp_path: Path) -> None:
     client, session_factory = _client(tmp_path)
     csrf = _login(client)
+    announce_pdf_parser_worker(session_factory)
     response = client.post(
         "/v1/knowledge/pdf-imports",
         params={"title": "失败 PDF", "primary_domain_id": "technology.ai"},
@@ -301,6 +307,7 @@ def test_pdf_parser_failure_is_projected_to_retryable_task_status(tmp_path: Path
 def test_pdf_parser_automatic_retries_stop_after_two_retries(tmp_path: Path) -> None:
     client, session_factory = _client(tmp_path)
     csrf = _login(client)
+    announce_pdf_parser_worker(session_factory)
     response = client.post(
         "/v1/knowledge/pdf-imports",
         params={"title": "自动重试 PDF", "primary_domain_id": "technology.ai"},
@@ -401,6 +408,7 @@ def test_pdf_index_worker_exception_is_projected_after_parse(
 ) -> None:
     client, session_factory = _client(tmp_path)
     csrf = _login(client)
+    announce_pdf_parser_worker(session_factory)
     response = client.post(
         "/v1/knowledge/pdf-imports",
         params={"title": "索引失败 PDF", "primary_domain_id": "technology.ai"},
@@ -495,6 +503,7 @@ def test_pdf_terminal_parser_failure_preserves_code_after_attempts_are_exhausted
 ) -> None:
     client, session_factory = _client(tmp_path)
     csrf = _login(client)
+    announce_pdf_parser_worker(session_factory)
     response = client.post(
         "/v1/knowledge/pdf-imports",
         params={"title": "损坏 manifest PDF", "primary_domain_id": "technology.ai"},
@@ -658,6 +667,9 @@ def test_unsupported_pdf_retry_rebinds_to_the_declared_parser_backend(tmp_path: 
     app = create_app(settings())
     client = TestClient(app)
     csrf = _login(client)
+    # A parser-declaring worker accepts the upload, but the worker that claims
+    # the job has no parser (ADR 0005).
+    announce_pdf_parser_worker(app.state.session_factory)
     response = client.post(
         "/v1/knowledge/pdf-imports",
         params={"title": "未声明解析器 PDF", "primary_domain_id": "technology.ai"},
@@ -704,6 +716,7 @@ def test_unsupported_pdf_retry_rebinds_to_the_declared_parser_backend(tmp_path: 
 def test_pdf_parse_lease_exhausted_by_a_dead_worker_fails_the_task(tmp_path: Path) -> None:
     client, session_factory = _client(tmp_path)
     csrf = _login(client)
+    announce_pdf_parser_worker(session_factory)
     response = client.post(
         "/v1/knowledge/pdf-imports",
         params={"title": "Worker 中途退出 PDF", "primary_domain_id": "technology.ai"},
