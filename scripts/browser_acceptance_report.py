@@ -28,11 +28,34 @@ REQUIRED_CHECKS = {
     "missing_information": (
         "missing information prompt supports defer, skip, and supplement on the real page"
     ),
-    "import_failure": (
+    "import_refusal": (
         "real Worker without PDF parsing refuses PDF upload with a readable reason and no "
         "import task"
     ),
+    "import_failure": (
+        "real Worker unsupported PDF failure is visible with stable code and recovery actions"
+    ),
 }
+PDF_PARSER_UNAVAILABLE_CODE = "unsupported_pdf_parser"
+
+
+def _pdf_capability_evidence_error(evidence: dict[str, Any]) -> str | None:
+    """ADR 0005 needs both the upload refusal and the accepted-then-unsupported import."""
+
+    refusal = evidence["import_refusal"]
+    if (
+        refusal.get("state") != "refused_at_upload"
+        or refusal.get("error_code") != PDF_PARSER_UNAVAILABLE_CODE
+        or refusal.get("import_task_created") is not False
+    ):
+        return "PDF upload refusal evidence must show a stable code and no import task"
+    failure = evidence["import_failure"]
+    if (
+        failure.get("state") != "unsupported"
+        or failure.get("error_code") != PDF_PARSER_UNAVAILABLE_CODE
+    ):
+        return "unsupported PDF import evidence must show the unsupported state and stable code"
+    return None
 
 ISSUE8_CHECKS = {
     "conflict_confirmation": "conflict confirmation is completed through the real browser dialog",
@@ -622,6 +645,10 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     )
                 ):
                     result["error"] = "required evidence fields missing"
+                elif name == "delivery_contracts" and (
+                    pdf_error := _pdf_capability_evidence_error(evidence)
+                ):
+                    result["error"] = pdf_error
                 elif name == "import_failures" and import_missing:
                     result["error"] = f"required import failure checks missing: {import_missing}"
                 elif name == "import_failures" and (
@@ -767,7 +794,9 @@ def main() -> int:
                 "real page status polling checks cover failed, unsupported, partial, "
                 "404, 5xx, and network failure states with bounded retries",
                 "real page refuses PDF import before upload when no live worker declares "
-                "PDF parsing",
+                "PDF parsing, while other files in the batch still import",
+                "real page shows an accepted PDF claimed by a Worker without a parser as a "
+                "terminal non-searchable unsupported state",
                 "suspended conclusions are excluded while assumed-premise conclusions "
                 "keep their condition",
                 "missing-information prompt supports validation, supplement, and "

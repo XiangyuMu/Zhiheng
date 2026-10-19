@@ -11,6 +11,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { chromium } = require("playwright");
 const { randomUUID } = require("node:crypto");
+const { announceParserWorker, withdrawParserWorker } = require("./parser_worker_announcement.cjs");
 const runTag = randomUUID().replaceAll("-", "").slice(0, 12);
 const personalFinanceDomain = `issue17_personal_finance_${runTag}`;
 const businessFinanceDomain = `issue17_business_finance_${runTag}`;
@@ -480,30 +481,70 @@ const MINIMAL_PDF = Buffer.from(
     await check("real Worker without PDF parsing refuses PDF upload with a readable reason and no import task", async () => {
       const capabilities = await apiJson("/v1/deployment/capabilities");
       assert.equal(capabilities.pdf_parsing.available, false);
-      assert(capabilities.workers.length >= 1, "the independent worker reports its declaration");
-      const tasksBefore = (await apiJson("/v1/knowledge/import-tasks?task_type=pdf")).items.length;
+      assert.equal(capabilities.pdf_parsing.error_code, "unsupported_pdf_parser");
+      assert(capabilities.live_workers >= 1, "the independent worker reports its declaration");
+      const refusedPdf = `refused-${runTag}.pdf`;
+      const keptNote = `kept-${runTag}.md`;
       await page.goto(`${base}/knowledge-agent#research`);
       await page.locator(".topbar [data-open-import]").first().click();
-      await page.locator("#import-title").fill("未配置解析器 PDF");
-      await page.locator("#import-file").setInputFiles({
-        name: "unsupported.pdf",
-        mimeType: "application/pdf",
-        buffer: MINIMAL_PDF,
-      });
+      await page.locator("#import-title").fill("");
+      await page.locator("#import-file").setInputFiles([
+        { name: refusedPdf, mimeType: "application/pdf", buffer: MINIMAL_PDF },
+        { name: keptNote, mimeType: "text/markdown", buffer: Buffer.from(`# 混合批次 ${runTag}\n\nPDF 被拒绝时文本照常导入。`) },
+      ]);
       const notice = page.locator("#pdf-unsupported-notice");
       await notice.waitFor({ state: "visible", timeout: 10000 });
-      assert.match(await notice.innerText(), /PDF 解析/);
+      assert.match(await notice.innerText(), /PDF 解析的部署能力/);
       await page.locator("#import-submit").click();
-      await page.locator("#import-error").filter({ hasText: "PDF 暂时无法导入" }).waitFor({ timeout: 10000 });
-      assert.notEqual(await page.evaluate(() => location.hash), "#library");
-      const tasksAfter = (await apiJson("/v1/knowledge/import-tasks?task_type=pdf")).items.length;
-      assert.equal(tasksAfter, tasksBefore, "no PDF import task is created");
-      evidence.import_failure = {
+      const importError = page.locator("#import-error").filter({ hasText: "PDF 暂时无法导入" });
+      await importError.waitFor({ timeout: 10000 });
+      const errorText = await importError.innerText();
+      assert(errorText.includes(refusedPdf) && errorText.includes("已导入其余 1 项"), errorText);
+      const tasks = (await apiJson("/v1/knowledge/import-tasks?limit=100")).items;
+      assert(!tasks.some((task) => task.title === refusedPdf), "no PDF import task is created");
+      assert(tasks.some((task) => task.title === keptNote), "the Markdown file in the batch is imported");
+      evidence.import_refusal = {
         mode: "real_api_and_independent_worker",
         state: "refused_at_upload",
-        live_workers: capabilities.workers.length,
+        error_code: capabilities.pdf_parsing.error_code,
+        live_workers: capabilities.live_workers,
         notice_visible: true,
         import_task_created: false,
+        other_files_imported: true,
+      };
+      await shot("import-refused");
+      await page.evaluate(() => document.getElementById("import-dialog").close());
+    });
+
+    await check("real Worker unsupported PDF failure is visible with stable code and recovery actions", async () => {
+      // Another worker declares a parser, so the upload is accepted; the real
+      // Worker without one claims it and settles it as ``unsupported`` (ADR 0005).
+      announceParserWorker();
+      try {
+        assert.equal((await apiJson("/v1/deployment/capabilities")).pdf_parsing.available, true);
+        await page.goto(`${base}/knowledge-agent#research`);
+        await page.locator(".topbar [data-open-import]").first().click();
+        await page.locator("#import-title").fill("未配置解析器 PDF");
+        await page.locator("#import-file").setInputFiles({
+          name: "unsupported.pdf",
+          mimeType: "application/pdf",
+          buffer: MINIMAL_PDF,
+        });
+        await page.locator("#import-submit").click();
+        await page.waitForFunction(() => location.hash === "#library");
+      } finally {
+        withdrawParserWorker();
+      }
+      await page.locator("#processing-section").waitFor({ state: "visible", timeout: 20000 });
+      const item = page.locator(".processing-item").filter({ hasText: "unsupported_pdf_parser" }).first();
+      await item.waitFor({ timeout: 30000 });
+      assert((await item.innerText()).includes("configure a parser service"));
+      assert(await item.getByRole("button", { name: "补充资料" }).isVisible());
+      evidence.import_failure = {
+        mode: "real_api_and_independent_worker",
+        state: "unsupported",
+        error_code: "unsupported_pdf_parser",
+        recovery_action_visible: true,
       };
       await shot("import-unsupported");
     });

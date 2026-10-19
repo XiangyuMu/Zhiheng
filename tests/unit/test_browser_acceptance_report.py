@@ -29,6 +29,7 @@ REQUIRED_CHECKS = [
     "suspended conclusions stay out of context while assumptions remain conditional",
     "missing information prompt supports defer, skip, and supplement on the real page",
     "real Worker without PDF parsing refuses PDF upload with a readable reason and no import task",
+    "real Worker unsupported PDF failure is visible with stable code and recovery actions",
 ]
 
 ISSUE15_CHECKS = [
@@ -131,7 +132,12 @@ def complete_delivery_checks() -> dict[str, object]:
             },
             "applicability": {"suspended_context_visible": False},
             "missing_information": {"decisions": ["defer", "supplement", "skip"]},
-            "import_failure": {"state": "refused_at_upload", "import_task_created": False},
+            "import_refusal": {
+                "state": "refused_at_upload",
+                "error_code": "unsupported_pdf_parser",
+                "import_task_created": False,
+            },
+            "import_failure": {"state": "unsupported", "error_code": "unsupported_pdf_parser"},
         },
     }
 
@@ -663,6 +669,28 @@ def test_delivery_contracts_require_all_scenarios_and_evidence(
     result = reporter().validate_checks(tmp_path)["delivery_contracts"]
     assert result["status"] == "failed"
     assert "missing" in result["error"]
+
+
+@pytest.mark.parametrize(
+    ("key", "evidence"),
+    [
+        ("import_failure", {"state": "refused_at_upload", "error_code": "unsupported_pdf_parser"}),
+        ("import_failure", {"state": "unsupported", "error_code": "parse_failed"}),
+        ("import_refusal", {"state": "unsupported", "error_code": "unsupported_pdf_parser"}),
+        ("import_refusal", {"state": "refused_at_upload", "import_task_created": True}),
+    ],
+)
+def test_delivery_contracts_require_both_refusal_and_unsupported_pdf_evidence(
+    tmp_path: Path, key: str, evidence: dict[str, object]
+) -> None:
+    payload = complete_delivery_checks()
+    payload["evidence"][key] = evidence  # type: ignore[index]
+    write_checks(tmp_path, "delivery-contracts/checks.json", payload)
+
+    result = reporter().validate_checks(tmp_path)["delivery_contracts"]
+
+    assert result["status"] == "failed"
+    assert "PDF" in result["error"]
 
 
 @pytest.mark.parametrize(
