@@ -494,7 +494,7 @@ const MINIMAL_PDF = Buffer.from(
       await notice.waitFor({ state: "visible", timeout: 10000 });
       assert.match(await notice.innerText(), /PDF 解析/);
       await page.locator("#import-submit").click();
-      await page.locator("#toast").filter({ hasText: "PDF 暂时无法导入" }).waitFor({ timeout: 10000 });
+      await page.locator("#import-error").filter({ hasText: "PDF 暂时无法导入" }).waitFor({ timeout: 10000 });
       assert.notEqual(await page.evaluate(() => location.hash), "#library");
       const tasksAfter = (await apiJson("/v1/knowledge/import-tasks?task_type=pdf")).items.length;
       assert.equal(tasksAfter, tasksBefore, "no PDF import task is created");

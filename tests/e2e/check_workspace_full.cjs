@@ -214,7 +214,7 @@ fs.mkdirSync(output, { recursive: true });
       });
       await page.locator('#pdf-unsupported-notice').waitFor({ state: 'visible', timeout: 10000 });
       await page.locator('#import-submit').click();
-      await page.locator('#toast').filter({ hasText: 'PDF 暂时无法导入' }).waitFor({ timeout: 10000 });
+      await page.locator('#import-error').filter({ hasText: 'PDF 暂时无法导入' }).waitFor({ timeout: 10000 });
       assert.equal((await apiJson('/v1/knowledge/import-tasks?task_type=pdf')).items.length, tasksBefore);
       assert.equal(
         (await apiJson('/v1/knowledge/search?' + new URLSearchParams({ q: '浏览器验收 PDF unsupported', limit: '5' }))).items.length,
