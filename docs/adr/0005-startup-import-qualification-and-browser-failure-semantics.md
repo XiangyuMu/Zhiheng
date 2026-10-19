@@ -10,7 +10,7 @@
 - 迁移或恢复屏障失败时，API 和 Worker 都拒绝启动。
 - 缺少可选解析能力的任务进入 `unsupported` 终态，记录稳定错误码和用户可读原因；Worker 继续处理其他任务。
 - （2026-10-14 修订）部署能力必须显式声明：`ZHIHENG_PDF_PARSER_BACKEND` 取 `mineru`、`deepdoc` 或 `none`。未声明，或声明了后端却缺少地址或令牌时，Worker 拒绝启动；只有声明为 `none` 时，PDF 任务才按上一条进入 `unsupported`。原因：隐式默认值让"忘记配置"伪装成"有意不支持"，用户只能在每个导入失败后才发现。`unsupported` 的 PDF 导入可由用户手动重试；若部署仍未声明该能力，任务再次进入 `unsupported`；若已声明，重试改用当前声明的后端。
-- （2026-10-19 修订）持续运行的 Worker 每 15 秒把启动校验得到的部署能力连同心跳时间写入 `worker_heartbeats`；60 秒内无心跳的 Worker 不计入。API 通过只读接口 `GET /v1/deployment/capabilities` 汇总存活 Worker 的声明（不返回解析服务地址）。没有存活 Worker 声明 PDF 解析能力时，PDF 上传返回 `422` 和可读原因，不创建导入任务；浏览器在选择 PDF 时即提示。已被接受的上传仍按幂等键重放。原因：用户不应等到导入进入 `unsupported` 才发现部署不支持 PDF。上传后领取任务的 Worker 仍可能没有解析能力，此时任务照旧进入 `unsupported`。
+- （2026-10-19 修订）持续运行的 Worker 每 15 秒把启动校验得到的部署能力连同心跳时间写入 `worker_heartbeats`；60 秒内无心跳的 Worker 不计入。API 通过只读接口 `GET /v1/deployment/capabilities` 汇总存活 Worker 的声明（只返回汇总结果和存活 Worker 数，不返回 Worker 标识或解析服务地址）。没有存活 Worker 声明 PDF 解析的部署能力时，PDF 上传返回 `422`、稳定错误码 `unsupported_pdf_parser` 和可读原因，不创建导入任务；同批次的文本、Markdown 和图片照常导入；浏览器在选择 PDF 时即提示。已被接受的上传仍按幂等键重放。原因：用户不应等到导入进入 `unsupported` 才发现部署不支持 PDF。上传后领取任务的 Worker 仍可能未声明 PDF 解析的部署能力，此时任务照旧进入 `unsupported`。
 - `queued`、`processing`、`failed`、`unsupported` 和 `partial` 状态都不能进入正式回答上下文。
 - 浏览器收到状态接口 `404` 时停止轮询并提示当前服务版本不支持；`5xx` 或网络错误只进行有限次退避重试。
 - 真实浏览器验收必须同时启动真实 API 和 Worker，并覆盖成功、失败和不支持场景。

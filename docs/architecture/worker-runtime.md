@@ -32,6 +32,25 @@ The CLI maps outcomes explicitly:
 The signal handlers set a shared stop event. Idle and backoff sleeps wait on that event, so shutdown
 does not wait for a busy loop or a fixed shell sleep to finish.
 
+## Deployment Capability Heartbeat
+
+At startup the worker validates its declared deployment capabilities (ADR 0005). In continuous
+mode it then writes them, with a heartbeat time, to `worker_heartbeats`:
+
+- The first heartbeat is written before the first batch is claimed. After that a background
+  thread writes one every 15 seconds, independently of batches, so a long batch does not make
+  a busy worker look offline. The thread stops and is joined when the loop exits.
+- The row is keyed by `--worker-id`, or by `role@host:pid` by default, so two workers on one
+  host count separately. A restarted process writes a new row; the old one simply expires.
+- The API counts only rows whose heartbeat is at most 60 seconds old. `GET
+  /v1/deployment/capabilities` returns the aggregate and the live-worker count, never worker
+  identities or parser service addresses. Both `worker` and `publisher` roles claim PDF parse
+  jobs, so either role's declaration counts.
+- A heartbeat that fails with a database error is logged by class and role and retried at the
+  next interval; it never stops the worker. Four missed heartbeats make the worker stale.
+
+`--once` runs do not write heartbeats.
+
 ## Privacy Boundary
 
 Database errors are logged by class and role only. SQL statements, bound values, exception payloads,

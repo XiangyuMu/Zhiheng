@@ -56,6 +56,7 @@ Candidate memory rows cannot be referenced by `memory_current_state`. A database
 | `jobs` | `id`, `job_type`, `idempotency_key`, `payload_json`, `status`, `lease_owner`, `lease_expires_at`, `heartbeat_at`, `attempts`, `max_attempts` | unique `job_type, idempotency_key`; index `status, available_at` |
 | `job_attempts` | `id`, `job_id`, `started_at`, `finished_at`, `status`, `error_class`, `error_message` | append-only |
 | `dead_letters` | `id`, `job_id`, `payload_json`, `failure_summary`, `created_at` | manual inspection queue |
+| `worker_heartbeats` | `worker_id`, `role`, `capabilities_json`, `heartbeat_at` | primary key `worker_id` (default `role@host:pid`); one row per worker process, replaced on each heartbeat; `heartbeat_at` is UTC ISO 8601; rows older than 60 seconds are ignored, not deleted |
 
 ## Privacy and Model Gateway
 
