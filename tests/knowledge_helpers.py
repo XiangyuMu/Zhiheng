@@ -5,7 +5,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session, sessionmaker
 
 from zhiheng.db.session import session_scope
-from zhiheng.jobs.worker_heartbeats import record_worker_heartbeat
+from zhiheng.jobs.worker_heartbeats import WorkerHeartbeat, record_worker_heartbeat
 from zhiheng.knowledge.object_store import LocalKnowledgeObjectStore, StoredTextArtifacts
 
 
@@ -24,13 +24,15 @@ def announce_pdf_parser_worker(
     with session_scope(session_factory) as session:
         record_worker_heartbeat(
             session,
-            worker_id="test-pdf-parser-worker",
-            role="worker",
-            capabilities={
-                "pdf_parsing": {
-                    "declared": backend,
-                    "configured": True,
-                    "detail": f"PDF parsing uses {backend}",
-                }
-            },
+            WorkerHeartbeat(
+                worker_id="test-pdf-parser-worker",
+                role="worker",
+                capabilities={
+                    "pdf_parsing": {
+                        "declared": backend,
+                        "configured": True,
+                        "detail": f"PDF parsing uses {backend}",
+                    }
+                },
+            ),
         )

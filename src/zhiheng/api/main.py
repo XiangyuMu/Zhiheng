@@ -23,6 +23,7 @@ from zhiheng import __version__
 from zhiheng.api.classifications import install_classification_routes
 from zhiheng.api.conclusions import install_conclusion_routes
 from zhiheng.api.decisions import install_decision_routes
+from zhiheng.api.deployment import install_deployment_routes
 from zhiheng.api.evolution import install_evolution_routes
 from zhiheng.api.gaps import install_gap_routes
 from zhiheng.api.import_tasks import install_import_task_routes
@@ -222,6 +223,7 @@ def create_app(
         initialize_retrieval_services(app, app_settings)
         app.state.startup_barrier_complete = True
     install_import_task_routes(app)
+    install_deployment_routes(app)
     from zhiheng.api.events import install_event_routes
 
     install_event_routes(app)

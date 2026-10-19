@@ -220,8 +220,10 @@ def test_serving_worker_heartbeats_the_capabilities_its_startup_validated(
     monkeypatch.setattr(worker_main, "serve_forever", record_serve)
 
     assert worker_main.main(["--role", "publisher", "--worker-id", "publisher-7"]) == 0
-    assert served["capabilities"] == deployment_capabilities(settings)
-    assert served["capabilities"]["pdf_parsing"]["declared"] == "mineru"
+    heartbeat = served["heartbeat"]
+    assert heartbeat.capabilities == deployment_capabilities(settings)
+    assert heartbeat.capabilities["pdf_parsing"]["declared"] == "mineru"
+    assert (heartbeat.worker_id, heartbeat.role) == ("publisher-7", "publisher")
     assert served["role"] == "publisher"
     assert served["worker_id"] == "publisher-7"
 
