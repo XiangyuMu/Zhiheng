@@ -29,7 +29,8 @@ REQUIRED_CHECKS = {
         "missing information prompt supports defer, skip, and supplement on the real page"
     ),
     "import_failure": (
-        "real Worker unsupported PDF failure is visible with stable code and recovery actions"
+        "real Worker without PDF parsing refuses PDF upload with a readable reason and no "
+        "import task"
     ),
 }
 
@@ -689,6 +690,7 @@ def main() -> int:
             "uv run uvicorn zhiheng.api.main:app",
             "uv run zhiheng-worker --role worker --idle-seconds 1",
             "node --test tests/e2e/test_import_polling.cjs",
+            "node --test tests/e2e/test_pdf_capability_gate.cjs",
             "ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs",
             "node tests/e2e/check_review_relations.cjs",
             "node tests/e2e/check_qualification.cjs",
@@ -764,7 +766,8 @@ def main() -> int:
                 "unsupported, and partial states",
                 "real page status polling checks cover failed, unsupported, partial, "
                 "404, 5xx, and network failure states with bounded retries",
-                "real page shows unsupported PDF import as terminal non-searchable state",
+                "real page refuses PDF import before upload when no live worker declares "
+                "PDF parsing",
                 "suspended conclusions are excluded while assumed-premise conclusions "
                 "keep their condition",
                 "missing-information prompt supports validation, supplement, and "

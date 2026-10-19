@@ -28,7 +28,7 @@ REQUIRED_CHECKS = [
     "taxonomy migration preserves each item until its own approval",
     "suspended conclusions stay out of context while assumptions remain conditional",
     "missing information prompt supports defer, skip, and supplement on the real page",
-    "real Worker unsupported PDF failure is visible with stable code and recovery actions",
+    "real Worker without PDF parsing refuses PDF upload with a readable reason and no import task",
 ]
 
 ISSUE15_CHECKS = [
@@ -131,7 +131,7 @@ def complete_delivery_checks() -> dict[str, object]:
             },
             "applicability": {"suspended_context_visible": False},
             "missing_information": {"decisions": ["defer", "supplement", "skip"]},
-            "import_failure": {"state": "unsupported", "error_code": "unsupported_pdf_parser"},
+            "import_failure": {"state": "refused_at_upload", "import_task_created": False},
         },
     }
 

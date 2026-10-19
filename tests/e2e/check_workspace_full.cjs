@@ -202,8 +202,9 @@ fs.mkdirSync(output, { recursive: true });
         reader_text_contains_original: reader.text.includes('中文全文检索必须回查正式视图'),
       };
     });
-    await check('real PDF import unsupported state is visible and excluded from search', async () => {
+    await check('real PDF import without a live parser worker is refused before upload', async () => {
       const pdfBytes = Buffer.from('JVBERi0xLjMKJeLjz9MKMSAwIG9iago8PAovUHJvZHVjZXIgKHB5cGRmKQo+PgplbmRvYmoKMiAwIG9iago8PAovVHlwZSAvUGFnZXMKL0NvdW50IDEKL0tpZHMgWyA0IDAgUiBdCj4+CmVuZG9iagozIDAgb2JqCjw8Ci9UeXBlIC9DYXRhbG9nCi9QYWdlcyAyIDAgUgo+PgplbmRvYmoKNCAwIG9iago8PAovVHlwZSAvUGFnZQovUmVzb3VyY2VzIDw8Cj4+Ci9NZWRpYUJveCBbIDAuMCAwLjAgMjAwIDIwMCBdCi9QYXJlbnQgMiAwIFIKPj4KZW5kb2JqCnhyZWYKMCA1CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAxNSAwMDAwMCBuIAowMDAwMDAwMDU0IDAwMDAwIG4gCjAwMDAwMDAxMTMgMDAwMDAgbiAKMDAwMDAwMDE2MiAwMDAwMCBuIAp0cmFpbGVyCjw8Ci9TaXplIDUKL1Jvb3QgMyAwIFIKL0luZm8gMSAwIFIKPj4Kc3RhcnR4cmVmCjI1NgolJUVPRgo=', 'base64');
+      const tasksBefore = (await apiJson('/v1/knowledge/import-tasks?task_type=pdf')).items.length;
       await page.locator('.topbar [data-open-import]').click();
       await page.locator('#import-title').fill('浏览器验收 PDF unsupported');
       await page.locator('#import-file').setInputFiles({
@@ -211,24 +212,23 @@ fs.mkdirSync(output, { recursive: true });
         mimeType: 'application/pdf',
         buffer: pdfBytes,
       });
+      await page.locator('#pdf-unsupported-notice').waitFor({ state: 'visible', timeout: 10000 });
       await page.locator('#import-submit').click();
-      await page.waitForFunction(() => location.hash === '#library');
-      const unsupportedRow = page.locator('.processing-item').filter({ hasText: '浏览器验收 PDF unsupported' });
-      await page.waitForFunction(() => {
-        const row = [...document.querySelectorAll('.processing-item')]
-          .find((item) => item.textContent.includes('浏览器验收 PDF unsupported'));
-        return Boolean(row && /unsupported_pdf_parser|当前服务版本不支持|PDF parsing is unsupported/.test(row.textContent));
-      }, undefined, { timeout: 30000 });
-      await unsupportedRow.getByRole('button', { name: '补充资料' }).waitFor({ state: 'visible' });
+      await page.locator('#toast').filter({ hasText: 'PDF 暂时无法导入' }).waitFor({ timeout: 10000 });
+      assert.equal((await apiJson('/v1/knowledge/import-tasks?task_type=pdf')).items.length, tasksBefore);
       assert.equal(
         (await apiJson('/v1/knowledge/search?' + new URLSearchParams({ q: '浏览器验收 PDF unsupported', limit: '5' }))).items.length,
         0,
       );
       evidence.pdfUnsupported = {
-        rowText: await unsupportedRow.innerText(),
+        notice: await page.locator('#pdf-unsupported-notice').innerText(),
+        importTaskCreated: false,
         excludedFromSearch: true,
       };
       await shot('pdf-unsupported-desktop');
+      await page.locator('#import-file').setInputFiles([]);
+      await page.evaluate(() => { document.getElementById('import-dialog').close(); location.hash = 'library'; });
+      await page.locator('#library-search').waitFor({ state: 'visible' });
     });
     await shot('library-desktop');
     await check('library filtering and reader preserve context', async () => {

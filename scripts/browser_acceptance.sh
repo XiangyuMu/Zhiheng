@@ -133,6 +133,8 @@ fi
 BASE_URL="http://127.0.0.1:${PORT}"
 CURRENT_STAGE="import-polling"
 node --test tests/e2e/test_import_polling.cjs >"${OUTPUT_DIR}/import-polling.log" 2>&1
+CURRENT_STAGE="pdf-capability-gate"
+node --test tests/e2e/test_pdf_capability_gate.cjs >"${OUTPUT_DIR}/pdf-capability-gate.log" 2>&1
 run_stage "workspace-full" env ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs "${BASE_URL}" "${OUTPUT_DIR}/workspace-full"
 run_stage "review-relations" node tests/e2e/check_review_relations.cjs "${BASE_URL}" "${OUTPUT_DIR}/relations"
 run_stage "qualification" node tests/e2e/check_qualification.cjs "${BASE_URL}" "${OUTPUT_DIR}/qualification"

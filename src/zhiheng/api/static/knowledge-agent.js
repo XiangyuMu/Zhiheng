@@ -434,11 +434,19 @@ async function openCitation(citation) {
 
 $("import-file").addEventListener("change", () => {
   state.previewFile = null;
-  const files = [...$("import-file").files];
+  const selection = $("import-file").files;
+  const files = [...selection];
   const hasPdf = files.some((file) => file.type === "application/pdf" || /\.pdf$/i.test(file.name));
   const hasImage = files.some((file) => file.type.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(file.name));
   $("pdf-notice").hidden = !hasPdf;
+  $("pdf-unsupported-notice").hidden = true;
   $("ocr-notice").hidden = !hasImage;
+  if (hasPdf) loadPdfCapability().then((notice) => {
+    if (!notice || $("import-file").files !== selection) return;
+    $("pdf-unsupported-notice").textContent = notice;
+    $("pdf-unsupported-notice").hidden = false;
+    $("pdf-notice").hidden = true;
+  });
   $("selected-files").replaceChildren(...(files.length
     ? files.map((file) => node("div", `${file.name} · ${formatBytes(file.size)}`, "selected-file"))
     : [node("p", "尚未选择文件。", "muted")]));
@@ -459,6 +467,18 @@ function formatBytes(size) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+const PDF_UNSUPPORTED_MESSAGE = "当前没有在线的 Worker 声明 PDF 解析能力，PDF 暂时无法导入。请启动已配置 PDF 解析服务的 Worker 后重试；文本、Markdown 和图片不受影响。";
+function pdfUnsupportedNotice(capabilities) {
+  // Only an explicit refusal blocks; servers without the report decide at upload.
+  return capabilities?.pdf_parsing?.available === false ? PDF_UNSUPPORTED_MESSAGE : null;
+}
+async function loadPdfCapability() {
+  try { return pdfUnsupportedNotice(await fetchJson("/v1/deployment/capabilities")); }
+  catch (_) { return null; }
+}
+function pdfUploadError(error) {
+  return error?.status === 422 && /PDF uploads are unsupported/.test(error.message || "") ? new Error(PDF_UNSUPPORTED_MESSAGE) : error;
 }
 function fileKind(file) {
   if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) return "pdf";
@@ -516,6 +536,10 @@ $("import-form").addEventListener("submit", (event) => {
       }
     } else {
       if (files.length > 100) throw new Error("单批最多导入 100 项。");
+      if (files.some((file) => fileKind(file) === "pdf")) {
+        const blocked = await loadPdfCapability();
+        if (blocked) throw new Error(blocked);
+      }
       for (const file of files) {
         if (file.size > 50 * 1024 * 1024) throw new Error(`《${file.name}》超过 50 MiB。`);
         const kind = fileKind(file);
@@ -524,7 +548,7 @@ $("import-form").addEventListener("submit", (event) => {
           const response = await fetchJson(`/v1/knowledge/pdf-imports?title=${encodeURIComponent(title)}&primary_domain_id=${encodeURIComponent($("import-domain").value)}`, {
             method: "POST", headers: { "Content-Type": "application/pdf", "Idempotency-Key": crypto.randomUUID(), "X-CSRF-Token": readCookie("zhiheng_csrf") },
             body: file,
-          });
+          }).catch((error) => { throw pdfUploadError(error); });
           const id = response.task_id;
           items.push({ source_id: id, task_id: id, title, source_type: "pdf", filename: file.name, media_type: file.type });
           if (id) { state.processing.set(id, { title, kind: "pdf", label: "正在解析 PDF" }); renderProcessing(); pollPdfTask(id); }

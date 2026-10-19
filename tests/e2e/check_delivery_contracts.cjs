@@ -477,7 +477,11 @@ const MINIMAL_PDF = Buffer.from(
       await shot("missing-information");
     });
 
-    await check("real Worker unsupported PDF failure is visible with stable code and recovery actions", async () => {
+    await check("real Worker without PDF parsing refuses PDF upload with a readable reason and no import task", async () => {
+      const capabilities = await apiJson("/v1/deployment/capabilities");
+      assert.equal(capabilities.pdf_parsing.available, false);
+      assert(capabilities.workers.length >= 1, "the independent worker reports its declaration");
+      const tasksBefore = (await apiJson("/v1/knowledge/import-tasks?task_type=pdf")).items.length;
       await page.goto(`${base}/knowledge-agent#research`);
       await page.locator(".topbar [data-open-import]").first().click();
       await page.locator("#import-title").fill("未配置解析器 PDF");
@@ -486,18 +490,20 @@ const MINIMAL_PDF = Buffer.from(
         mimeType: "application/pdf",
         buffer: MINIMAL_PDF,
       });
+      const notice = page.locator("#pdf-unsupported-notice");
+      await notice.waitFor({ state: "visible", timeout: 10000 });
+      assert.match(await notice.innerText(), /PDF 解析/);
       await page.locator("#import-submit").click();
-      await page.waitForFunction(() => location.hash === "#library");
-      await page.locator("#processing-section").waitFor({ state: "visible", timeout: 20000 });
-      const item = page.locator(".processing-item").filter({ hasText: "unsupported_pdf_parser" }).first();
-      await item.waitFor({ timeout: 30000 });
-      assert((await item.innerText()).includes("configure a parser service"));
-      assert(await item.getByRole("button", { name: "补充资料" }).isVisible());
+      await page.locator("#toast").filter({ hasText: "PDF 暂时无法导入" }).waitFor({ timeout: 10000 });
+      assert.notEqual(await page.evaluate(() => location.hash), "#library");
+      const tasksAfter = (await apiJson("/v1/knowledge/import-tasks?task_type=pdf")).items.length;
+      assert.equal(tasksAfter, tasksBefore, "no PDF import task is created");
       evidence.import_failure = {
         mode: "real_api_and_independent_worker",
-        state: "unsupported",
-        error_code: "unsupported_pdf_parser",
-        recovery_action_visible: true,
+        state: "refused_at_upload",
+        live_workers: capabilities.workers.length,
+        notice_visible: true,
+        import_task_created: false,
       };
       await shot("import-unsupported");
     });
