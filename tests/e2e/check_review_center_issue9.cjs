@@ -114,6 +114,9 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     // Closing the page and logging in again must leave an unapproved draft intact.
     await page.goto(`${base}/knowledge-agent#research`);
     assert.equal((await api(`/v1/conclusions/${drafts[0].id}`)).status, "draft");
+    // Leave the workspace first: its status polls would hit 401 once cookies are
+    // cleared and redirect, aborting the next navigation.
+    await page.goto(`${base}/login`);
     await context.clearCookies();
     await page.evaluate(() => localStorage.clear());
     await login();
