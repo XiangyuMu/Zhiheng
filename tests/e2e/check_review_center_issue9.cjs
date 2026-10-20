@@ -56,6 +56,14 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     await page.locator("#form button").click();
     await page.waitForURL("**/knowledge-agent**");
   }
+  async function relogin() {
+    // Leave the workspace first: its status polls would hit 401 once cookies are
+    // cleared and redirect, aborting the next navigation.
+    await page.goto(`${base}/login`);
+    await context.clearCookies();
+    await page.evaluate(() => localStorage.clear());
+    await login();
+  }
   async function createDraft(index) {
     const source = await api("/v1/conclusions/sources", { method: "POST", body: {
       text: `Issue 9 浏览器原文 ${tag}-${index}：固定条件下复习有效。`,
@@ -114,9 +122,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     // Closing the page and logging in again must leave an unapproved draft intact.
     await page.goto(`${base}/knowledge-agent#research`);
     assert.equal((await api(`/v1/conclusions/${drafts[0].id}`)).status, "draft");
-    await context.clearCookies();
-    await page.evaluate(() => localStorage.clear());
-    await login();
+    await relogin();
     await page.goto(`${base}/review-center`);
     await page.locator(`button.queue-item[data-entry-id="${drafts[0].id}"]`).waitFor();
     evidence.recovery.push("draft_restored_after_relogin");
@@ -175,9 +181,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     assert.equal(thirdAfterClose.etag, thirdBefore.etag);
     evidence.recovery.push("close_without_approval_preserved_draft");
     evidence.recovery.push("revision_cancel_and_idle_preserved_draft");
-    await context.clearCookies();
-    await page.evaluate(() => localStorage.clear());
-    await login();
+    await relogin();
     await page.goto(`${base}/review-center`);
     await page.locator(`button.queue-item[data-entry-id="${drafts[2].id}"]`).waitFor();
     const thirdAfterRelogin = await api(`/v1/conclusions/${drafts[2].id}`);

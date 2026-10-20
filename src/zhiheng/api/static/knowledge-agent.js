@@ -89,7 +89,8 @@ async function fetchJson(url, options = {}) {
   if (!response.ok) {
     const raw = await response.text();
     let detail = raw;
-    try { detail = JSON.parse(raw).detail; } catch (_) { /* plain upstream failure */ }
+    let code = null;
+    try { ({ detail, error_code: code = null } = JSON.parse(raw)); } catch (_) { /* plain upstream failure */ }
     if (Array.isArray(detail)) detail = "请检查输入格式和长度后重试。";
     const code = typeof detail?.code === "string" ? detail.code : null;
     if (typeof detail?.reason === "string") detail = detail.reason;
@@ -438,11 +439,19 @@ async function openCitation(citation) {
 
 $("import-file").addEventListener("change", () => {
   state.previewFile = null;
-  const files = [...$("import-file").files];
-  const hasPdf = files.some((file) => file.type === "application/pdf" || /\.pdf$/i.test(file.name));
-  const hasImage = files.some((file) => file.type.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(file.name));
+  const selection = $("import-file").files;
+  const files = [...selection];
+  const hasPdf = files.some((file) => fileKind(file) === "pdf");
+  const hasImage = files.some((file) => fileKind(file) === "ocr");
   $("pdf-notice").hidden = !hasPdf;
+  $("pdf-unsupported-notice").hidden = true;
   $("ocr-notice").hidden = !hasImage;
+  if (hasPdf) loadPdfCapability().then((notice) => {
+    if (!notice || $("import-file").files !== selection) return;
+    $("pdf-unsupported-notice").textContent = notice;
+    $("pdf-unsupported-notice").hidden = false;
+    $("pdf-notice").hidden = true;
+  });
   $("selected-files").replaceChildren(...(files.length
     ? files.map((file) => node("div", `${file.name} · ${formatBytes(file.size)}`, "selected-file"))
     : [node("p", "尚未选择文件。", "muted")]));
@@ -464,12 +473,35 @@ function formatBytes(size) {
   if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
+// PDF capability gate: start
+const PDF_PARSER_UNAVAILABLE = "unsupported_pdf_parser";
+const PDF_UNSUPPORTED_MESSAGE = "当前没有在线的 Worker 声明 PDF 解析的部署能力，PDF 暂时无法导入。请启动已配置 PDF 解析服务的 Worker 后重试；文本、Markdown 和图片不受影响。";
 function fileKind(file) {
   if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) return "pdf";
   if (file.type.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(file.name)) return "ocr";
   if (/\.(md|markdown)$/i.test(file.name) || file.type === "text/markdown") return "markdown";
   return "text";
 }
+function pdfUnsupportedNotice(capabilities) {
+  // Only an explicit refusal blocks; servers without the report decide at upload.
+  return capabilities?.pdf_parsing?.available === false ? PDF_UNSUPPORTED_MESSAGE : null;
+}
+async function loadPdfCapability() {
+  try { return pdfUnsupportedNotice(await fetchJson("/v1/deployment/capabilities")); }
+  catch (_) { return null; }
+}
+function isPdfRefusal(error) {
+  return error?.status === 422 && error.code === PDF_PARSER_UNAVAILABLE;
+}
+async function splitRefusedPdfs(files) {
+  const pdfs = files.filter((file) => fileKind(file) === "pdf");
+  if (!pdfs.length || !(await loadPdfCapability())) return { importable: [...files], refusedPdfs: [] };
+  return { importable: files.filter((file) => fileKind(file) !== "pdf"), refusedPdfs: pdfs };
+}
+function refusedPdfMessage(refusedPdfs) {
+  return `${PDF_UNSUPPORTED_MESSAGE}未导入：${refusedPdfs.map((file) => `《${file.name}》`).join("、")}。`;
+}
+// PDF capability gate: end
 async function submitImportBatch(items) {
   if (!items.length) return null;
   try {
@@ -499,6 +531,7 @@ $("import-form").addEventListener("submit", (event) => {
   busy($("import-submit"), "正在添加…", async () => {
     const files = [...$("import-file").files];
     const items = [];
+    let refusedPdfs = [];
     if (state.importMode === "web") {
       const url = $("import-url").value.trim();
       if (!url) throw new Error("请输入网页 URL。");
@@ -520,7 +553,9 @@ $("import-form").addEventListener("submit", (event) => {
       }
     } else {
       if (files.length > 100) throw new Error("单批最多导入 100 项。");
-      for (const file of files) {
+      const split = await splitRefusedPdfs(files);
+      refusedPdfs = split.refusedPdfs;
+      for (const file of split.importable) {
         if (file.size > 50 * 1024 * 1024) throw new Error(`《${file.name}》超过 50 MiB。`);
         const kind = fileKind(file);
         const title = $("import-title").value.trim() || file.name;
@@ -528,7 +563,13 @@ $("import-form").addEventListener("submit", (event) => {
           const response = await fetchJson(`/v1/knowledge/pdf-imports?title=${encodeURIComponent(title)}&primary_domain_id=${encodeURIComponent($("import-domain").value)}`, {
             method: "POST", headers: { "Content-Type": "application/pdf", "Idempotency-Key": crypto.randomUUID(), "X-CSRF-Token": readCookie("zhiheng_csrf") },
             body: file,
+          }).catch((error) => {
+            // A parser worker can go offline between the check and the upload.
+            if (!isPdfRefusal(error)) throw error;
+            refusedPdfs.push(file);
+            return null;
           });
+          if (!response) continue;
           const id = response.task_id;
           items.push({ source_id: id, task_id: id, title, source_type: "pdf", filename: file.name, media_type: file.type });
           if (id) { state.processing.set(id, { title, kind: "pdf", label: "正在解析 PDF" }); renderProcessing(); pollPdfTask(id); }
@@ -569,10 +610,16 @@ $("import-form").addEventListener("submit", (event) => {
         if (id) { state.processing.set(id, { title, label: "已接收，等待处理" }); renderProcessing(); pollProcessing(id); }
       }
     }
+    if (!items.length && refusedPdfs.length) throw new Error(refusedPdfMessage(refusedPdfs));
     if (!items.length) throw new Error("请选择文件、粘贴文本或填写网页 URL。");
     await submitImportBatch(items);
-    $("import-form").reset(); state.previewFile = null; $("pdf-notice").hidden = true; $("ocr-notice").hidden = true; $("selected-files").replaceChildren();
-    $("import-dialog").close(); location.hash = "library";
+    $("import-form").reset(); state.previewFile = null; $("pdf-notice").hidden = true; $("pdf-unsupported-notice").hidden = true; $("ocr-notice").hidden = true; $("selected-files").replaceChildren();
+    if (refusedPdfs.length) {
+      // Keep the dialog open so the refused PDFs stay visible; the rest were imported.
+      message("import-error", `已导入其余 ${items.length} 项。${refusedPdfMessage(refusedPdfs)}`);
+    } else {
+      $("import-dialog").close(); location.hash = "library";
+    }
     await loadKnowledge(); await loadImportHistory();
   }, "import-error");
 });

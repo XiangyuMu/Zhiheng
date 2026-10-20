@@ -33,6 +33,7 @@ from zhiheng.jobs.knowledge_contract import (
     project_import_status,
 )
 from zhiheng.jobs.knowledge_indexing import KnowledgeJobRepository
+from zhiheng.jobs.worker_heartbeats import current_deployment_capabilities
 from zhiheng.knowledge import (
     KnowledgeIngestionService,
     KnowledgeRepository,
@@ -340,12 +341,24 @@ async def upload_pdf(
         "byte_size": len(body),
     }
     operation_key = f"knowledge.pdf-import:{user_id}:{idempotency_key}"
-    with session_scope(session_factory) as session:
-        receipt_id, replay = _begin_api_mutation(
-            session,
-            operation_key=operation_key,
-            operation_type="knowledge.pdf-import",
-            payload=payload,
+    try:
+        with session_scope(session_factory) as session:
+            receipt_id, replay = _begin_api_mutation(
+                session,
+                operation_key=operation_key,
+                operation_type="knowledge.pdf-import",
+                payload=payload,
+            )
+            if replay is None:
+                # An accepted upload still replays; a new one is refused (rolling
+                # back its receipt, so the same key succeeds once a parser-declaring
+                # worker is live) instead of queueing an import the worker can
+                # only settle as ``unsupported`` (ADR 0005).
+                _require_pdf_parsing(session)
+    except PdfParsingUnavailable as exc:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": exc.reason, "error_code": exc.code},
         )
     if replay is not None:
         return JSONResponse(status_code=202, content=replay.result)
@@ -1802,6 +1815,19 @@ def _begin_api_mutation(
         _insert_operation_receipt(session, operation_key, operation_type, request_hash),
         None,
     )
+
+
+class PdfParsingUnavailable(Exception):
+    def __init__(self, reason: str, code: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.code = code
+
+
+def _require_pdf_parsing(session: Session) -> None:
+    pdf_parsing = current_deployment_capabilities(session).pdf_parsing
+    if not pdf_parsing.available:
+        raise PdfParsingUnavailable(str(pdf_parsing.reason), str(pdf_parsing.error_code))
 
 
 def _operation_receipt(
