@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -342,6 +343,10 @@ class HybridRetriever:
         ]
         authorized = _filter_authorized_chunks(session, authorized, filters)
         authorized = sorted(authorized, key=lambda chunk: (-chunk.score, chunk.chunk_id))[:limit]
+        # Reads above see whatever the Worker last committed. Hold the write
+        # lock from the reseal until the caller commits the run, so a concurrent
+        # reindex cannot land between sealing, persisting and the final check.
+        _hold_sqlite_write_lock(session)
         resealed_chunks = self._authorizer.authorize_batch(
             session,
             [
@@ -446,6 +451,17 @@ class HybridRetriever:
             )
             for index, key in enumerate(ranked_keys, start=1)
         ]
+
+
+def _hold_sqlite_write_lock(session: Session) -> None:
+    connection = session.connection()
+    if connection.dialect.name != "sqlite":
+        return
+    driver_connection = connection.connection.driver_connection
+    # pysqlite only opens a transaction for DML; once one is open this
+    # connection already holds the write lock and a stable snapshot.
+    if isinstance(driver_connection, sqlite3.Connection) and not driver_connection.in_transaction:
+        session.execute(text("BEGIN IMMEDIATE"))
 
 
 def _supports_keyword(parameters: Mapping[str, Parameter], name: str) -> bool:

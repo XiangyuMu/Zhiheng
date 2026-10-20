@@ -7,6 +7,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.knowledge_helpers import stored_text_artifacts
@@ -27,6 +28,7 @@ from zhiheng.retrieval import (
     VectorRetriever,
 )
 from zhiheng.retrieval.contracts import RetrievalFilters
+from zhiheng.retrieval.repository import RetrievalRunRepository
 
 
 def _migrated_session_factory(tmp_path: Path) -> sessionmaker[Session]:
@@ -412,6 +414,97 @@ def test_hybrid_rejects_source_changed_after_persistence_before_response(tmp_pat
                 "中文 检索",
                 limit=5,
             )
+
+
+class _ConcurrentWorkerRunRepository:
+    """Lets another connection try to commit just before the run is persisted.
+
+    This is the window a Worker reindex used to hit: the manifest had passed its
+    first validation, so a commit landing here made the post-persistence check
+    fail and the answer request return 500.
+    """
+
+    def __init__(self, worker_factory: sessionmaker[Session], source_id: str) -> None:
+        self._worker_factory = worker_factory
+        self._source_id = source_id
+        self.worker_error: OperationalError | None = None
+
+    def create_run(
+        self,
+        session: Session,
+        *,
+        raw_query: str,
+        route: str,
+        started_at: float,
+        results: Sequence[AuthorizedChunk],
+        strategy_release_id: str,
+        manifest_hash: str | None = None,
+    ) -> str:
+        try:
+            with session_scope(self._worker_factory) as worker_session:
+                _reconfirm_knowledge(worker_session, self._source_id)
+        except OperationalError as exc:
+            self.worker_error = exc
+        return RetrievalRunRepository().create_run(
+            session,
+            raw_query=raw_query,
+            route=route,
+            started_at=started_at,
+            results=results,
+            strategy_release_id=strategy_release_id,
+            manifest_hash=manifest_hash,
+        )
+
+
+def _reconfirm_knowledge(session: Session, source_id: str) -> None:
+    session.execute(
+        text(
+            """
+            UPDATE knowledge_objects
+            SET confirmation_generation = confirmation_generation + 1
+            WHERE id = :source_id
+            """
+        ),
+        {"source_id": source_id},
+    )
+
+
+def test_hybrid_serializes_concurrent_worker_commit_instead_of_failing(tmp_path: Path) -> None:
+    session_factory = _migrated_session_factory(tmp_path)
+    db_path = tmp_path / "zhiheng.db"
+    worker_factory = create_session_factory(
+        create_sqlite_engine(
+            Settings(
+                environment="test",
+                database_url=f"sqlite:///{db_path}",
+                sqlite_busy_timeout_ms=50,
+            )
+        )
+    )
+    artifacts = stored_text_artifacts(
+        tmp_path,
+        "中文全文检索必须回查正式视图后，才能进入回答上下文。",
+    )
+    with session_scope(session_factory) as session:
+        chunk_id = _ingest(session, artifacts=artifacts)
+        candidate = _candidate_from_chunk(session, chunk_id)
+    run_repository = _ConcurrentWorkerRunRepository(worker_factory, candidate.source_id)
+
+    with session_scope(session_factory) as session:
+        result = HybridRetriever(
+            lexical=_CandidateLexicalRetriever(candidate),
+            run_repository=run_repository,
+        ).search_offline(session, "中文 检索", limit=5)
+        assert RetrievalAuthorizer().validate_manifest(session, result.manifest)
+
+    assert [chunk.chunk_id for chunk in result.manifest.chunks] == [chunk_id]
+    assert run_repository.worker_error is not None
+    assert "locked" in str(run_repository.worker_error)
+    # The Worker's retry lands once the answer's retrieval transaction commits.
+    with session_scope(worker_factory) as worker_session:
+        _reconfirm_knowledge(worker_session, candidate.source_id)
+    with session_scope(session_factory) as session:
+        assert not RetrievalAuthorizer().validate_manifest(session, result.manifest)
 
 
 def test_vector_retriever_filters_against_serving_view(tmp_path: Path) -> None:
