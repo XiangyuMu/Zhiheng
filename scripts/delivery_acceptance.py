@@ -125,8 +125,12 @@ def clean_environment() -> dict[str, str]:
     return cleaned
 
 
-def pytest_environment(env: dict[str, str]) -> dict[str, str]:
-    """Keep real acceptance routes and storage out of synthetic test fixtures."""
+def synthetic_environment(env: dict[str, str]) -> dict[str, str]:
+    """Keep real acceptance routes and storage out of the pytest and browser stages.
+
+    Both start their own synthetic API and Worker; a real MinerU declaration
+    without its parser URL would stop that Worker at startup.
+    """
     result = dict(env)
     for key in (
         "ZHIHENG_PDF_PARSER_BACKEND",
@@ -964,8 +968,8 @@ def main() -> int:
             else args.timeout + 30
         )
         step_env = env
-        if name == "pytest":
-            step_env = pytest_environment(env)
+        if name in {"pytest", "browser"}:
+            step_env = synthetic_environment(env)
         runtime_restart: dict[str, Any] | None = None
         if name == "pdf-parse":
             restart_command = os.environ.get("ZHIHENG_RESTART_WORKER_COMMAND")
