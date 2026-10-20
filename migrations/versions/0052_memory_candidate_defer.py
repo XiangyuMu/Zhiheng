@@ -18,15 +18,15 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0051_memory_candidate_defer"
-down_revision: str | Sequence[str] | None = "0050_unify_domain_catalog"
+revision = "0052_memory_candidate_defer"
+down_revision: str | Sequence[str] | None = "0051_unclassified_deferrals"
 branch_labels = None
 depends_on = None
 
 _OLD_STATUSES = (
     "'pending_confirmation', 'edited', 'confirmed', 'rejected', 'superseded', 'privacy_erased'"
 )
-_REBUILT = "memory_candidates_0051"
+_REBUILT = "memory_candidates_0052"
 _NEW_STATUSES = (
     "'pending_confirmation', 'edited', 'confirmed', 'rejected', 'superseded', "
     "'privacy_erased', 'deferred'"

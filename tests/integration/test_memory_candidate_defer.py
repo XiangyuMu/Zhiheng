@@ -218,7 +218,7 @@ def test_migration_keeps_existing_candidates_and_downgrade_returns_deferred_to_p
     db_path = tmp_path / "zhiheng.db"
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.upgrade(cfg, "0050_unify_domain_catalog")
+    command.upgrade(cfg, "0051_unclassified_deferrals")
     settings = Settings(environment="test", database_url=f"sqlite:///{db_path}")
     session_factory = create_session_factory(create_sqlite_engine(settings))
     repository = MemoryRepository()
@@ -243,7 +243,7 @@ def test_migration_keeps_existing_candidates_and_downgrade_returns_deferred_to_p
         )
         assert session.execute(text("PRAGMA foreign_key_check")).fetchall() == []
 
-    command.downgrade(cfg, "0050_unify_domain_catalog")
+    command.downgrade(cfg, "0051_unclassified_deferrals")
     with session_scope(session_factory) as session:
         status = session.execute(
             text("SELECT status FROM memory_candidates WHERE id = :id"), {"id": candidate_id}
