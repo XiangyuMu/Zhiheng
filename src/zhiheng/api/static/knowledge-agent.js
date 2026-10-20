@@ -77,6 +77,7 @@ function readableError(error) {
   if (error instanceof TypeError) return "连接中断，请检查网络后重试。已填写的内容会保留。";
   if (error.status === 401) return "登录已过期，请重新登录。";
   if (error.status === 404) return "这份内容已删除、更新或暂不可用，请刷新后重试。";
+  if (error.code === "retrieval_context_changed") return error.message;
   if (error.status === 409) return "内容状态已变化，请刷新后重试。";
   if (error.status === 403) return "当前操作未获授权，请检查登录或配置状态。";
   if (error.status >= 500) return "服务暂时不可用，请稍后重试。已填写的内容会保留。";
@@ -90,8 +91,11 @@ async function fetchJson(url, options = {}) {
     let detail = raw;
     try { detail = JSON.parse(raw).detail; } catch (_) { /* plain upstream failure */ }
     if (Array.isArray(detail)) detail = "请检查输入格式和长度后重试。";
+    const code = typeof detail?.code === "string" ? detail.code : null;
+    if (typeof detail?.reason === "string") detail = detail.reason;
     const error = new Error(typeof detail === "string" ? detail : "请求未完成，请重试。");
     error.status = response.status;
+    error.code = code;
     if (response.status === 401) {
       const next = location.pathname + location.search + location.hash;
       location.assign(`/login?next=${encodeURIComponent(next)}`);

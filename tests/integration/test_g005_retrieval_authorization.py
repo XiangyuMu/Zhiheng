@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.knowledge_helpers import stored_text_artifacts
@@ -27,7 +27,7 @@ from zhiheng.retrieval import (
     VectorIndexRepository,
     VectorRetriever,
 )
-from zhiheng.retrieval.contracts import RetrievalFilters
+from zhiheng.retrieval.contracts import RetrievalContextChangedError, RetrievalFilters
 from zhiheng.retrieval.repository import RetrievalRunRepository
 
 
@@ -367,6 +367,11 @@ def test_hybrid_degrades_without_raw_table_scan_fallback(tmp_path: Path) -> None
 
 
 class _MutatingRunRepository:
+    """Changes the source from the request's own session on every persistence."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
     def create_run(
         self,
         session: Session,
@@ -375,9 +380,19 @@ class _MutatingRunRepository:
         route: str,
         started_at: float,
         results: Sequence[AuthorizedChunk],
-        strategy_release_id: str | None = None,
+        strategy_release_id: str,
         manifest_hash: str | None = None,
     ) -> str:
+        self.calls += 1
+        run_id = RetrievalRunRepository().create_run(
+            session,
+            raw_query=raw_query,
+            route=route,
+            started_at=started_at,
+            results=results,
+            strategy_release_id=strategy_release_id,
+            manifest_hash=manifest_hash,
+        )
         session.execute(
             text(
                 """
@@ -391,7 +406,7 @@ class _MutatingRunRepository:
                 """
             )
         )
-        return "mutated-run"
+        return run_id
 
 
 def test_hybrid_rejects_source_changed_after_persistence_before_response(tmp_path: Path) -> None:
@@ -400,34 +415,38 @@ def test_hybrid_rejects_source_changed_after_persistence_before_response(tmp_pat
         tmp_path,
         "中文全文检索必须回查正式视图后，才能进入回答上下文。",
     )
+    run_repository = _MutatingRunRepository()
 
     with session_scope(session_factory) as session:
         chunk_id = _ingest(session, artifacts=artifacts)
         candidate = _candidate_from_chunk(session, chunk_id)
 
-        with pytest.raises(ValueError, match="changed before response"):
+        with pytest.raises(RetrievalContextChangedError, match="changed before response"):
             HybridRetriever(
                 lexical=_CandidateLexicalRetriever(candidate),
-                run_repository=_MutatingRunRepository(),
+                run_repository=run_repository,
             ).search_offline(
                 session,
                 "中文 检索",
                 limit=5,
             )
+        # Retried once; both stale runs were rolled back rather than left behind.
+        assert run_repository.calls == 2
+        assert session.execute(text("SELECT count(*) FROM retrieval_runs")).scalar_one() == 0
+        assert session.execute(text("SELECT count(*) FROM citation_records")).scalar_one() == 0
 
 
 class _ConcurrentWorkerRunRepository:
-    """Lets another connection try to commit just before the run is persisted.
+    """A Worker commit lands just before the first run is persisted.
 
-    This is the window a Worker reindex used to hit: the manifest had passed its
-    first validation, so a commit landing here made the post-persistence check
-    fail and the answer request return 500.
+    This is the window a reindex used to hit: the manifest had passed its first
+    validation, so the post-persistence check failed and the answer returned 500.
     """
 
     def __init__(self, worker_factory: sessionmaker[Session], source_id: str) -> None:
         self._worker_factory = worker_factory
         self._source_id = source_id
-        self.worker_error: OperationalError | None = None
+        self.calls = 0
 
     def create_run(
         self,
@@ -440,11 +459,10 @@ class _ConcurrentWorkerRunRepository:
         strategy_release_id: str,
         manifest_hash: str | None = None,
     ) -> str:
-        try:
+        self.calls += 1
+        if self.calls == 1:
             with session_scope(self._worker_factory) as worker_session:
                 _reconfirm_knowledge(worker_session, self._source_id)
-        except OperationalError as exc:
-            self.worker_error = exc
         return RetrievalRunRepository().create_run(
             session,
             raw_query=raw_query,
@@ -469,42 +487,96 @@ def _reconfirm_knowledge(session: Session, source_id: str) -> None:
     )
 
 
-def test_hybrid_serializes_concurrent_worker_commit_instead_of_failing(tmp_path: Path) -> None:
-    session_factory = _migrated_session_factory(tmp_path)
-    db_path = tmp_path / "zhiheng.db"
-    worker_factory = create_session_factory(
+def _impatient_worker_factory(tmp_path: Path) -> sessionmaker[Session]:
+    # A short busy timeout makes any write lock held by the request fail fast.
+    return create_session_factory(
         create_sqlite_engine(
             Settings(
                 environment="test",
-                database_url=f"sqlite:///{db_path}",
+                database_url=f"sqlite:///{tmp_path / 'zhiheng.db'}",
                 sqlite_busy_timeout_ms=50,
             )
         )
     )
+
+
+class _ListLexicalRetriever:
+    def __init__(self, candidates: Sequence[RetrievalCandidate]) -> None:
+        self._candidates = list(candidates)
+
+    def search(
+        self,
+        session: Session,
+        query: str,
+        *,
+        limit: int = 10,
+        filters: RetrievalFilters | None = None,
+    ) -> list[RetrievalCandidate]:
+        return self._candidates
+
+
+def test_hybrid_reseals_once_when_worker_commits_mid_request(tmp_path: Path) -> None:
+    session_factory = _migrated_session_factory(tmp_path)
+    with session_scope(session_factory) as session:
+        changed_chunk = _ingest(
+            session,
+            artifacts=stored_text_artifacts(tmp_path, "中文全文检索第一份资料。"),
+            title="第一份",
+            text_value="中文全文检索第一份资料。",
+        )
+        kept_chunk = _ingest(
+            session,
+            artifacts=stored_text_artifacts(tmp_path, "中文全文检索第二份资料。"),
+            title="第二份",
+            text_value="中文全文检索第二份资料。",
+        )
+        candidates = [
+            replace(_candidate_from_chunk(session, chunk_id), rank=rank)
+            for rank, chunk_id in enumerate((changed_chunk, kept_chunk), start=1)
+        ]
+    run_repository = _ConcurrentWorkerRunRepository(
+        _impatient_worker_factory(tmp_path), candidates[0].source_id
+    )
+
+    with session_scope(session_factory) as session:
+        result = HybridRetriever(
+            lexical=_ListLexicalRetriever(candidates),
+            run_repository=run_repository,
+        ).search_offline(session, "中文 检索", limit=5)
+        assert RetrievalAuthorizer().validate_manifest(session, result.manifest)
+
+    assert run_repository.calls == 2
+    assert [chunk.chunk_id for chunk in result.manifest.chunks] == [kept_chunk]
+    with session_scope(session_factory) as session:
+        runs = session.execute(text("SELECT id, manifest_hash FROM retrieval_runs")).all()
+        cited = session.execute(text("SELECT chunk_id FROM citation_records")).scalars().all()
+    assert [tuple(row) for row in runs] == [(result.run_id, str(result.manifest.seal))]
+    assert cited == [kept_chunk]
+
+
+def test_hybrid_retrieval_leaves_no_write_lock_once_committed(tmp_path: Path) -> None:
+    session_factory = _migrated_session_factory(tmp_path)
     artifacts = stored_text_artifacts(
         tmp_path,
         "中文全文检索必须回查正式视图后，才能进入回答上下文。",
     )
     with session_scope(session_factory) as session:
-        chunk_id = _ingest(session, artifacts=artifacts)
-        candidate = _candidate_from_chunk(session, chunk_id)
-    run_repository = _ConcurrentWorkerRunRepository(worker_factory, candidate.source_id)
+        candidate = _candidate_from_chunk(session, _ingest(session, artifacts=artifacts))
+    worker_factory = _impatient_worker_factory(tmp_path)
 
-    with session_scope(session_factory) as session:
-        result = HybridRetriever(
-            lexical=_CandidateLexicalRetriever(candidate),
-            run_repository=run_repository,
-        ).search_offline(session, "中文 检索", limit=5)
-        assert RetrievalAuthorizer().validate_manifest(session, result.manifest)
-
-    assert [chunk.chunk_id for chunk in result.manifest.chunks] == [chunk_id]
-    assert run_repository.worker_error is not None
-    assert "locked" in str(run_repository.worker_error)
-    # The Worker's retry lands once the answer's retrieval transaction commits.
-    with session_scope(worker_factory) as worker_session:
-        _reconfirm_knowledge(worker_session, candidate.source_id)
-    with session_scope(session_factory) as session:
+    session = session_factory()
+    try:
+        result = HybridRetriever(lexical=_CandidateLexicalRetriever(candidate)).search_offline(
+            session, "中文 检索", limit=5
+        )
+        # Answer paths commit the run before dispatching to a model; the still
+        # open session must not keep the Worker from writing during that call.
+        session.commit()
+        with session_scope(worker_factory) as worker_session:
+            _reconfirm_knowledge(worker_session, candidate.source_id)
         assert not RetrievalAuthorizer().validate_manifest(session, result.manifest)
+    finally:
+        session.close()
 
 
 def test_vector_retriever_filters_against_serving_view(tmp_path: Path) -> None:

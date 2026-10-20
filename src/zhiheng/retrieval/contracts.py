@@ -163,6 +163,12 @@ class RetrievalRunRepositoryPort(Protocol):
     ) -> str: ...
 
 
+class RetrievalContextChangedError(ValueError):
+    """Authorized sources kept changing while a manifest was sealed; retry the request."""
+
+    code = "retrieval_context_changed"
+
+
 @dataclass(frozen=True)
 class RouteDecision:
     route: QueryRoute

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import time
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -17,15 +16,19 @@ from zhiheng.evolution.releases import ReleaseContext
 from zhiheng.retrieval.authorization import RetrievalAuthorizer
 from zhiheng.retrieval.contracts import (
     AuthorizedChunk,
+    AuthorizedContextManifest,
     HybridRetrievalResult,
     RerankerPort,
     RetrievalCandidate,
+    RetrievalContextChangedError,
     RetrievalFilters,
     RetrievalRunRepositoryPort,
     RetrievalSource,
 )
 from zhiheng.retrieval.qualification import formal_searchable_sql
 from zhiheng.retrieval.repository import LexicalRetriever, RetrievalRunRepository, VectorRetriever
+
+_MANIFEST_SEAL_ATTEMPTS = 2
 
 
 class LexicalSearchPort(Protocol):
@@ -343,10 +346,43 @@ class HybridRetriever:
         ]
         authorized = _filter_authorized_chunks(session, authorized, filters)
         authorized = sorted(authorized, key=lambda chunk: (-chunk.score, chunk.chunk_id))[:limit]
-        # Reads above see whatever the Worker last committed. Hold the write
-        # lock from the reseal until the caller commits the run, so a concurrent
-        # reindex cannot land between sealing, persisting and the final check.
-        _hold_sqlite_write_lock(session)
+        # Retrieval reads are not one snapshot: a Worker commit can land between
+        # sealing and persisting the run. Reseal from a fresh read once before
+        # reporting a retryable context change. Run and citation audit rows are
+        # append-only, so a stale run is rolled back to its savepoint, never deleted.
+        for _attempt in range(_MANIFEST_SEAL_ATTEMPTS):
+            manifest = self._reseal(session, query, authorized)
+            if not self._authorizer.validate_manifest(session, manifest):
+                continue
+            session.execute(text("SAVEPOINT hybrid_manifest_run"))
+            run_id = self._run_repository.create_run(
+                session,
+                raw_query=query,
+                route="hybrid",
+                started_at=started_at,
+                results=manifest.chunks,
+                strategy_release_id=strategy_release_id,
+                manifest_hash=manifest.seal,
+            )
+            if self._authorizer.validate_manifest(session, manifest):
+                return HybridRetrievalResult(
+                    manifest=manifest,
+                    degraded_reasons=tuple(degraded),
+                    run_id=run_id,
+                )
+            session.execute(text("ROLLBACK TO SAVEPOINT hybrid_manifest_run"))
+            session.execute(text("RELEASE SAVEPOINT hybrid_manifest_run"))
+        raise RetrievalContextChangedError(
+            "authorized context manifest changed before response"
+        )
+
+    def _reseal(
+        self,
+        session: Session,
+        query: str,
+        authorized: Sequence[AuthorizedChunk],
+    ) -> AuthorizedContextManifest:
+        by_tuple = {chunk.authorization_tuple: chunk for chunk in authorized}
         resealed_chunks = self._authorizer.authorize_batch(
             session,
             [
@@ -365,37 +401,17 @@ class HybridRetriever:
                 for index, chunk in enumerate(authorized, start=1)
             ],
         )
-        resealed_chunks = [
-            replace(
-                chunk,
-                rank=index,
-                retrievers=authorized[index - 1].retrievers,
-                component_ranks=authorized[index - 1].component_ranks,
-            )
-            for index, chunk in enumerate(resealed_chunks, start=1)
-        ]
-        manifest = self._authorizer.seal_manifest(
+        return self._authorizer.seal_manifest(
             query_hash=sha256_text(query),
-            chunks=resealed_chunks,
-        )
-        if not self._authorizer.validate_manifest(session, manifest):
-            raise ValueError("authorized context manifest failed validation")
-
-        run_id = self._run_repository.create_run(
-            session,
-            raw_query=query,
-            route="hybrid",
-            started_at=started_at,
-            results=manifest.chunks,
-            strategy_release_id=strategy_release_id,
-            manifest_hash=manifest.seal,
-        )
-        if not self._authorizer.validate_manifest(session, manifest):
-            raise ValueError("authorized context manifest changed before response")
-        return HybridRetrievalResult(
-            manifest=manifest,
-            degraded_reasons=tuple(degraded),
-            run_id=run_id,
+            chunks=[
+                replace(
+                    chunk,
+                    rank=index,
+                    retrievers=by_tuple[chunk.authorization_tuple].retrievers,
+                    component_ranks=by_tuple[chunk.authorization_tuple].component_ranks,
+                )
+                for index, chunk in enumerate(resealed_chunks, start=1)
+            ],
         )
 
     def _rrf(
@@ -451,17 +467,6 @@ class HybridRetriever:
             )
             for index, key in enumerate(ranked_keys, start=1)
         ]
-
-
-def _hold_sqlite_write_lock(session: Session) -> None:
-    connection = session.connection()
-    if connection.dialect.name != "sqlite":
-        return
-    driver_connection = connection.connection.driver_connection
-    # pysqlite only opens a transaction for DML; once one is open this
-    # connection already holds the write lock and a stable snapshot.
-    if isinstance(driver_connection, sqlite3.Connection) and not driver_connection.in_transaction:
-        session.execute(text("BEGIN IMMEDIATE"))
 
 
 def _supports_keyword(parameters: Mapping[str, Parameter], name: str) -> bool:

@@ -19,6 +19,7 @@ from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextE
 from zhiheng.memory import MemoryRepository, MemoryValue
 from zhiheng.query import AnswerEnvelope, BudgetUsage, StopReason
 from zhiheng.retrieval import QueryRoute
+from zhiheng.retrieval.contracts import RetrievalContextChangedError
 
 
 def _client(tmp_path: Path) -> tuple[TestClient, sessionmaker[Session]]:
@@ -300,6 +301,63 @@ def test_answer_api_closes_receipt_transaction_before_answer_service(
 
     assert response.status_code == 200
     assert service.called
+
+
+class _ChangingRetrieval:
+    def answer(self, session: Session, query: str, **kwargs: Any) -> AnswerEnvelope:
+        del session, query, kwargs
+        raise RetrievalContextChangedError("authorized context manifest changed before response")
+
+    def search(self, session: Session, query: str, **kwargs: Any) -> Any:
+        del session, query, kwargs
+        raise RetrievalContextChangedError("authorized context manifest changed before response")
+
+
+def _receipt_status(session_factory: sessionmaker[Session], key: str) -> tuple[str, str]:
+    with session_scope(session_factory) as session:
+        row = session.execute(
+            text(
+                "SELECT status, json_extract(result_json, '$.reason') "
+                "FROM memory_operation_receipts WHERE operation_key LIKE :key"
+            ),
+            {"key": f"%{key}"},
+        ).one()
+    return str(row[0]), str(row[1])
+
+
+def test_answer_and_decision_report_retryable_409_when_sources_keep_changing(
+    tmp_path: Path,
+) -> None:
+    client, session_factory = _client(tmp_path)
+    csrf = _login(client)
+    assert isinstance(client.app, FastAPI)
+    client.app.state.query_answer_service = _ChangingRetrieval()
+    client.app.state.decision_context_retriever = _ChangingRetrieval()
+
+    answered = client.post(
+        "/v1/answers",
+        json={"query": "检索期间资料变化"},
+        headers=_headers(csrf, "answer-context-changed"),
+    )
+    analyzed = client.post(
+        "/v1/decisions/analyze",
+        json={
+            "problem": "是否学习量化投资？",
+            "options": [{"label": "learn", "description": "每周学习"}],
+        },
+        headers=_headers(csrf, "decision-context-changed"),
+    )
+
+    for response, key in (
+        (answered, "answer-context-changed"),
+        (analyzed, "decision-context-changed"),
+    ):
+        assert response.status_code == 409
+        assert response.json()["detail"] == {
+            "code": "retrieval_context_changed",
+            "reason": "资料在检索过程中刚刚更新，请重新提问。",
+        }
+        assert _receipt_status(session_factory, key) == ("failed", "retrieval_context_changed")
 
 
 def test_g005_ui_assets_are_authenticated_and_render_expected_controls(
