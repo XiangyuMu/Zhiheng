@@ -593,7 +593,7 @@ def test_stage_evidence_requires_delivery_report(tmp_path: Path) -> None:
         module.validate_stage_evidence(tmp_path, matrix, "same-sha")
 
 
-def test_pytest_environment_does_not_inherit_real_storage_or_routes() -> None:
+def test_synthetic_environment_does_not_inherit_real_storage_or_routes() -> None:
     module = collector()
     private = {
         "ZHIHENG_PDF_PARSER_BACKEND": "mineru",
@@ -604,10 +604,42 @@ def test_pytest_environment_does_not_inherit_real_storage_or_routes() -> None:
         "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH": "/real/objects",
     }
     original = dict(private, PATH="/bin", ZHIHENG_DELIVERY_EVIDENCE="/evidence")
-    isolated = module.pytest_environment(original)
+    isolated = module.synthetic_environment(original)
     assert not private.keys() & isolated.keys()
     assert isolated["ZHIHENG_DELIVERY_EVIDENCE"] == "/evidence"
     assert all(original[key] == value for key, value in private.items())
+
+
+def test_browser_stage_runs_synthetic_workers_without_the_real_pdf_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = collector()
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    output = tmp_path / "evidence"
+    monkeypatch.setenv("ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH", "/real/objects")
+    monkeypatch.setattr(sys, "argv", ["delivery", "--output", str(output)])
+    monkeypatch.setattr(module, "git", lambda root, *args: (
+        str(repo) if args == ("rev-parse", "--show-toplevel") else
+        "same-sha" if args == ("rev-parse", "HEAD") else ""
+    ))
+    monkeypatch.setattr(module, "load_pdf_evidence_matrix", lambda root: evidence_matrix())
+    monkeypatch.setattr(module, "mineru_command", lambda *args: ["synthetic"])
+    environments: dict[str, dict[str, str]] = {}
+
+    def run(root: Path, dest: Path, name: str, argv: list[str],
+            timeout: float | None, env: dict[str, str]) -> dict[str, Any]:
+        environments[name] = env
+        return {"name": name, "command": argv, "status": "passed", "exit_code": 0,
+                "seconds": 0.01}
+
+    monkeypatch.setattr(module, "execute", run)
+    module.main()
+    # The browser stage starts its own synthetic Worker, which must not inherit
+    # the real MinerU declaration (it has no parser URL and would refuse to start).
+    assert "ZHIHENG_PDF_PARSER_BACKEND" not in environments["browser"]
+    assert "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH" not in environments["browser"]
+    assert environments["pdf-parse"]["ZHIHENG_PDF_PARSER_BACKEND"] == "mineru"
 
 
 def test_runtime_checkout_is_preserved_for_real_restart_commands(
