@@ -7,6 +7,7 @@ from pypdf import PdfWriter
 from sqlalchemy import text
 
 from tests.integration.test_g005_api_impl import _client, _headers, _login
+from tests.knowledge_helpers import announce_pdf_parser_worker
 from zhiheng.core.ids import json_text, new_id
 from zhiheng.db.session import session_scope
 
@@ -20,8 +21,9 @@ def _pdf_bytes() -> bytes:
 
 
 def test_import_task_projection_lists_queued_pdf_with_progress(tmp_path: Path) -> None:
-    client, _session_factory = _client(tmp_path)
+    client, session_factory = _client(tmp_path)
     csrf = _login(client)
+    announce_pdf_parser_worker(session_factory)
     response = client.post(
         "/v1/knowledge/pdf-imports",
         params={"title": "projection fixture", "primary_domain_id": "technology.ai"},

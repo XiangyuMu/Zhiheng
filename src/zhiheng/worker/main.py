@@ -8,6 +8,7 @@ import os
 import signal
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Literal, cast
 
 from sqlalchemy.exc import OperationalError
@@ -39,6 +40,7 @@ from zhiheng.jobs.deployment_capabilities import (
     deployment_capabilities_configured,
     probe_pdf_parsing,
 )
+from zhiheng.jobs.worker_heartbeats import WorkerHeartbeat, record_worker_heartbeat
 from zhiheng.recovery import startup_recovery_barrier
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,7 @@ PdfExecutorFactory = Callable[[Settings], PdfParseJobExecutor]
 WorkerRole = Literal["worker", "publisher"]
 DEFAULT_IDLE_SECONDS = 2.0
 DEFAULT_BACKOFF_SECONDS = 5.0
+HEARTBEAT_THREAD_NAME = "worker-capability-heartbeat"
 
 
 def process_outbox_once(settings: Settings, *, limit: int = 10) -> int:
@@ -216,29 +219,84 @@ def serve_forever(
     backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
     knowledge_executor_factory: KnowledgeExecutorFactory | None = None,
     pdf_executor_factory: PdfExecutorFactory | None = None,
+    heartbeat: WorkerHeartbeat | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> int:
-    if not all(math.isfinite(value) and value > 0 for value in (idle_seconds, backoff_seconds)):
+    intervals = [idle_seconds, backoff_seconds]
+    if heartbeat is not None:
+        intervals.append(heartbeat.interval_seconds)
+    if not all(math.isfinite(value) and value > 0 for value in intervals):
         raise ValueError("worker wait intervals must be finite and positive")
-    while not stop_event.is_set():
-        try:
-            completed = run_once(
-                settings,
-                knowledge_executor_factory=knowledge_executor_factory,
-                role=role,
-                limit=limit,
-                worker_id=worker_id,
-                pdf_executor_factory=pdf_executor_factory,
-            )
-        except OperationalError:
-            logger.warning(
-                "worker database operation failed",
-                extra={"error_class": "OperationalError", "role": role},
-            )
-            _wait_for_stop(stop_event, backoff_seconds)
-            continue
-        if completed <= 0:
-            _wait_for_stop(stop_event, idle_seconds)
+    heartbeat_stop = threading.Event()
+    heartbeat_thread: threading.Thread | None = None
+    if heartbeat is not None:
+        # Report once before claiming work, then keep reporting from a thread so
+        # a batch that outlasts the stale window does not make the worker look offline.
+        report_heartbeat(settings, heartbeat, now=(clock or _utc_now)())
+        heartbeat_thread = threading.Thread(
+            target=_heartbeat_loop,
+            args=(settings, heartbeat, heartbeat_stop, clock or _utc_now),
+            name=HEARTBEAT_THREAD_NAME,
+            daemon=True,
+        )
+        heartbeat_thread.start()
+    try:
+        while not stop_event.is_set():
+            try:
+                completed = run_once(
+                    settings,
+                    knowledge_executor_factory=knowledge_executor_factory,
+                    role=role,
+                    limit=limit,
+                    worker_id=worker_id,
+                    pdf_executor_factory=pdf_executor_factory,
+                )
+            except OperationalError:
+                logger.warning(
+                    "worker database operation failed",
+                    extra={"error_class": "OperationalError", "role": role},
+                )
+                _wait_for_stop(stop_event, backoff_seconds)
+                continue
+            if completed <= 0:
+                _wait_for_stop(stop_event, idle_seconds)
+    finally:
+        heartbeat_stop.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join()
     return 0
+
+
+def _heartbeat_loop(
+    settings: Settings,
+    heartbeat: WorkerHeartbeat,
+    stop: threading.Event,
+    clock: Callable[[], datetime],
+) -> None:
+    while not stop.wait(heartbeat.interval_seconds):
+        report_heartbeat(settings, heartbeat, now=clock())
+
+
+def report_heartbeat(settings: Settings, heartbeat: WorkerHeartbeat, *, now: datetime) -> bool:
+    """Record this worker's declared deployment capabilities; a failure waits for the next beat."""
+
+    engine = create_sqlite_engine(settings)
+    try:
+        with session_scope(create_session_factory(engine)) as session:
+            record_worker_heartbeat(session, heartbeat, now=now)
+    except OperationalError:
+        logger.warning(
+            "worker heartbeat failed",
+            extra={"error_class": "OperationalError", "role": heartbeat.role},
+        )
+        return False
+    finally:
+        engine.dispose()
+    return True
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 def run() -> None:
@@ -309,6 +367,7 @@ def main(argv: list[str] | None = None) -> int:
         worker_id=args.worker_id,
         idle_seconds=args.idle_seconds,
         backoff_seconds=args.backoff_seconds,
+        heartbeat=WorkerHeartbeat.declare(role, capabilities, worker_id=args.worker_id),
     )
 
 

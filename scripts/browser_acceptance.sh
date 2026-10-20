@@ -98,7 +98,9 @@ export ZHIHENG_ENVIRONMENT="test"
 export ZHIHENG_API_HOST="127.0.0.1"
 export ZHIHENG_API_PORT="${PORT}"
 export ZHIHENG_EXTERNAL_MODELS_ENABLED="true"
-# The unsupported-PDF scenario needs PDF parsing declared off (ADR 0005).
+# PDF parsing is declared off (ADR 0005): uploads are refused while no live worker
+# declares a parser, and an upload accepted on another worker's announced parser
+# is claimed by this Worker and settles as unsupported.
 export ZHIHENG_PDF_PARSER_BACKEND="${ZHIHENG_PDF_PARSER_BACKEND:-none}"
 CURRENT_STAGE="migration"
 uv run python scripts/prepare_issue11_legacy_db.py "${DB_PATH}" >"${OUTPUT_DIR}/migration.log" 2>&1
@@ -133,6 +135,8 @@ fi
 BASE_URL="http://127.0.0.1:${PORT}"
 CURRENT_STAGE="import-polling"
 node --test tests/e2e/test_import_polling.cjs >"${OUTPUT_DIR}/import-polling.log" 2>&1
+CURRENT_STAGE="pdf-capability-gate"
+node --test tests/e2e/test_pdf_capability_gate.cjs >"${OUTPUT_DIR}/pdf-capability-gate.log" 2>&1
 run_stage "workspace-full" env ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs "${BASE_URL}" "${OUTPUT_DIR}/workspace-full"
 run_stage "review-relations" node tests/e2e/check_review_relations.cjs "${BASE_URL}" "${OUTPUT_DIR}/relations"
 run_stage "qualification" node tests/e2e/check_qualification.cjs "${BASE_URL}" "${OUTPUT_DIR}/qualification"
