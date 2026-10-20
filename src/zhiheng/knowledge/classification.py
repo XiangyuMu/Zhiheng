@@ -428,7 +428,13 @@ class ClassificationRepository:
         ]
 
     def unclassified(
-        self, session: Session, *, user_id: str, limit: int, offset: int
+        self,
+        session: Session,
+        *,
+        user_id: str,
+        limit: int,
+        offset: int,
+        include_deferred: bool = False,
     ) -> list[dict[str, Any]]:
         rows = session.execute(
             text(
@@ -436,7 +442,12 @@ class ClassificationRepository:
                 SELECT ko.id AS knowledge_object_id, ko.title, ko.primary_domain_id,
                        ko.lifecycle_status, ko.object_kind, ko.updated_at,
                        (SELECT substr(c.text, 1, 500) FROM chunks c
-                        WHERE c.source_id = ko.id ORDER BY c.chunk_no LIMIT 1) AS excerpt
+                        WHERE c.source_id = ko.id ORDER BY c.chunk_no LIMIT 1) AS excerpt,
+                       EXISTS (
+                         SELECT 1 FROM unclassified_deferrals ud
+                         WHERE ud.owner_user_id = ko.owner_user_id
+                           AND ud.knowledge_object_id = ko.id
+                       ) AS deferred
                 FROM knowledge_objects ko
                 WHERE ko.owner_user_id = :user_id
                   AND ko.lifecycle_status NOT IN ('privacy_erased', 'soft_deleted')
@@ -445,11 +456,21 @@ class ClassificationRepository:
                     WHERE kc.knowledge_object_id = ko.id
                       AND kc.confirmation_status = 'confirmed'
                   )
+                  AND (:include_deferred = 1 OR NOT EXISTS (
+                    SELECT 1 FROM unclassified_deferrals ud
+                    WHERE ud.owner_user_id = ko.owner_user_id
+                      AND ud.knowledge_object_id = ko.id
+                  ))
                 ORDER BY ko.updated_at DESC, ko.id DESC
                 LIMIT :limit OFFSET :offset
                 """
             ),
-            {"user_id": user_id, "limit": limit, "offset": offset},
+            {
+                "user_id": user_id,
+                "limit": limit,
+                "offset": offset,
+                "include_deferred": int(include_deferred),
+            },
         ).mappings()
         active = {
             str(domain_id)
@@ -461,11 +482,55 @@ class ClassificationRepository:
         for row in rows:
             item = dict(row)
             excerpt = str(item.pop("excerpt") or "")
+            item["deferred"] = bool(item["deferred"])
             item["suggested_primary_domain_id"] = _suggested_domain(
                 str(item["primary_domain_id"]), str(item["title"]), excerpt, active
             )
             items.append(item)
         return items
+
+    def defer_unclassified(
+        self, session: Session, *, user_id: str, knowledge_id: str
+    ) -> dict[str, Any]:
+        """Set the item's suggestion aside until the user restores it; nothing is assigned."""
+        self._require_owned_knowledge(session, user_id=user_id, knowledge_id=knowledge_id)
+        session.execute(
+            text(
+                """
+                INSERT INTO unclassified_deferrals (owner_user_id, knowledge_object_id, deferred_at)
+                VALUES (:owner, :knowledge, CURRENT_TIMESTAMP)
+                ON CONFLICT (owner_user_id, knowledge_object_id)
+                DO UPDATE SET deferred_at = CURRENT_TIMESTAMP
+                """
+            ),
+            {"owner": user_id, "knowledge": knowledge_id},
+        )
+        return {"knowledge_object_id": knowledge_id, "status": "deferred"}
+
+    def restore_unclassified(
+        self, session: Session, *, user_id: str, knowledge_id: str
+    ) -> dict[str, Any]:
+        self._require_owned_knowledge(session, user_id=user_id, knowledge_id=knowledge_id)
+        session.execute(
+            text(
+                "DELETE FROM unclassified_deferrals "
+                "WHERE owner_user_id = :owner AND knowledge_object_id = :knowledge"
+            ),
+            {"owner": user_id, "knowledge": knowledge_id},
+        )
+        return {"knowledge_object_id": knowledge_id, "status": "pending"}
+
+    @staticmethod
+    def _require_owned_knowledge(session: Session, *, user_id: str, knowledge_id: str) -> None:
+        found = session.execute(
+            text(
+                "SELECT 1 FROM knowledge_objects WHERE id = :id AND owner_user_id = :owner "
+                "AND lifecycle_status NOT IN ('privacy_erased', 'soft_deleted')"
+            ),
+            {"id": knowledge_id, "owner": user_id},
+        ).scalar_one_or_none()
+        if found is None:
+            raise ValueError("knowledge not found")
 
 
 def _suggested_domain(current: str, title: str, excerpt: str, active: set[str]) -> str | None:
