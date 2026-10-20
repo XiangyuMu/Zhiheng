@@ -177,10 +177,9 @@
       <p id="ocr-notice" class="notice" hidden>图片会进入 OCR 队列。系统会保存原图和 OCR 原文；低置信度结果需要确认后才会进入检索。</p>
       <label>资料标题<input id="import-title" maxlength="512" placeholder="默认使用文件名，粘贴内容时请填写" /></label>
       <label>或直接粘贴文本<textarea id="import-text" rows="6" placeholder="一段研究笔记、一篇文章，或需要留存的原文…"></textarea></label>
-      <label>归类<select id="import-domain"><option value="personal.notes">个人资料</option><option value="work.notes">研究与工作</option><option value="learning.notes">学习笔记</option></select></label>
       <label>重复内容<select id="duplicate-strategy"><option value="skip">检测到重复时跳过</option><option value="new_version">作为新版本导入</option><option value="new_document">另存为新资料</option></select></label>
       <p id="import-error" class="inline-error" role="alert" hidden></p>
-      <p class="field-help">点击添加即确认将内容保存到个人资料库，处理完成后可用于问答。</p>
+      <p class="field-help">点击添加即确认将内容保存到个人资料库，处理完成后可用于问答。新资料进入“未分类”，在那里确认主领域。</p>
       <div class="dialog-actions"><button type="button" class="secondary" data-close-dialog="import-dialog">暂不添加</button><button id="import-submit" type="submit" class="button">确认添加</button></div>
     </form>
   </dialog>

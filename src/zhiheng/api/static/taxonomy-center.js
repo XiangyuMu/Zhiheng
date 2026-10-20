@@ -8,7 +8,7 @@
     economics_finance_business: "经济、金融与商业",
   };
   const proposalLabels = { domain_structure: "领域结构调整", legacy_migration: "历史领域迁移" };
-  const statusLabels = { pending: "待审核", approved: "已生效" };
+  const statusLabels = { pending: "待审核", approved: "已生效", rolled_back: "已回滚" };
   let availableDomains = [];
   const labelForDomain = (id) => domainLabels[id]
     || availableDomains.find((domain) => domain.id === id)?.name || "未命名领域";
@@ -125,7 +125,32 @@
           } catch (error) { message.textContent = error.message; }
           finally { approve.disabled = false; approve.removeAttribute("aria-busy"); }
         });
-        row.append(approve);
+        if (item.status === "pending") row.append(approve);
+        if (item.status === "approved" && item.proposal_type === "legacy_migration") {
+          const rollback = document.createElement("button");
+          rollback.type = "button";
+          rollback.className = "secondary";
+          rollback.textContent = "回滚此迁移";
+          rollback.addEventListener("click", async () => {
+            if (rollback.disabled) return;
+            rollback.disabled = true;
+            rollback.setAttribute("aria-busy", "true");
+            try {
+              const result = await request(`/v1/taxonomy/proposals/${item.id}/rollback`, {
+                method: "POST", headers: {
+                  "Idempotency-Key": crypto.randomUUID(), "If-Match": item.etag || "",
+                },
+              });
+              const conflicts = result.result.result.conflicts || [];
+              message.textContent = conflicts.length
+                ? `迁移已回滚；${conflicts.length} 条资料在迁移后被再次修改，保持不变。`
+                : "迁移已回滚，资料恢复为迁移前的领域。";
+              await load();
+            } catch (error) { message.textContent = error.message; }
+            finally { rollback.disabled = false; rollback.removeAttribute("aria-busy"); }
+          });
+          row.append(rollback);
+        }
       }
       return row;
     }));

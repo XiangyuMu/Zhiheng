@@ -1,6 +1,6 @@
 # Domain Taxonomy
 
-This is the target taxonomy for personal knowledge, aiming for MECE primary-domain boundaries. It classifies knowledge by the primary problem domain it helps solve, independently of record type or mastery. The domain/type separation below is a design decision; runtime changes and migration of existing records remain pending.
+This is the taxonomy for personal knowledge, aiming for MECE primary-domain boundaries. It classifies knowledge by the primary problem domain it helps solve, independently of record type or mastery. The fourteen domains below are the only active domains in the runtime catalog; the earlier v1 domains are disabled but stay resolvable for history.
 
 ## Classification Rules
 
@@ -72,4 +72,6 @@ Secondary facets are optional tags or structured fields:
 
 Taxonomy versions are stored in SQLite and referenced by knowledge rows. A taxonomy proposal can suggest mappings, but only approved migrations can change formal primary domains. Old domain IDs remain resolvable for audit.
 
-The legacy primary-domain ID `personal_archive_experience` remains resolvable for existing records until an approved migration assigns their subject domains and records their types. This documentation change does not migrate stored data. See [the domain/type separation decision](../adr/0003-domain-and-record-type.md).
+New imports carry the placeholder primary domain `unassigned` and appear in the unclassified list. That list suggests a primary domain, and the user approves it.
+
+Records whose primary domain is outside the active catalog, such as `personal_archive_experience` or the dotted import IDs (`personal.notes`), move through a legacy-migration proposal (`POST /v1/taxonomy/proposals/legacy-migration` with `legacy_domain_id`). The user confirms each item's target in the taxonomy center before approving. The proposal keeps each item's before/after mapping, and an approved migration can be rolled back (`POST /v1/taxonomy/proposals/{id}/rollback`). Items changed again after the migration are left as they are. See [the domain/type separation decision](../adr/0003-domain-and-record-type.md).

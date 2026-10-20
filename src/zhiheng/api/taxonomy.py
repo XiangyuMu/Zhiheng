@@ -48,6 +48,9 @@ class LegacyMigrationRequest(BaseModel):
 
     mapping: dict[str, str] = Field(default_factory=dict)
     reason: str = Field(default="", max_length=2000)
+    legacy_domain_id: str = Field(
+        default="personal_archive_experience", min_length=1, max_length=128
+    )
 
 
 class DomainMigrationDecisionRequest(BaseModel):
@@ -230,6 +233,32 @@ def approve_taxonomy_proposal(
         operation_type="proposal.approve",
         payload=payload,
         action=lambda: repository.approve_proposal(
+            session,
+            user_id=user_id,
+            proposal_id=proposal_id,
+            expected_etag=if_match,
+            request_id=request.headers.get("X-Request-ID"),
+        ),
+    )
+
+
+@router.post("/v1/taxonomy/proposals/{proposal_id}/rollback")
+def rollback_taxonomy_proposal(
+    proposal_id: str,
+    session: SessionDep,
+    user_id: AuthDep,
+    idempotency_key: WriteDep,
+    if_match: IfMatchDep,
+    request: Request,
+) -> dict[str, Any]:
+    payload = {"proposal_id": proposal_id, "if_match": if_match}
+    return _mutation_response(
+        session,
+        user_id=user_id,
+        idempotency_key=idempotency_key,
+        operation_type="proposal.rollback",
+        payload=payload,
+        action=lambda: repository.rollback_proposal(
             session,
             user_id=user_id,
             proposal_id=proposal_id,

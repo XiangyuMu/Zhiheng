@@ -434,7 +434,9 @@ class ClassificationRepository:
             text(
                 """
                 SELECT ko.id AS knowledge_object_id, ko.title, ko.primary_domain_id,
-                       ko.lifecycle_status, ko.object_kind, ko.updated_at
+                       ko.lifecycle_status, ko.object_kind, ko.updated_at,
+                       (SELECT substr(c.text, 1, 500) FROM chunks c
+                        WHERE c.source_id = ko.id ORDER BY c.chunk_no LIMIT 1) AS excerpt
                 FROM knowledge_objects ko
                 WHERE ko.owner_user_id = :user_id
                   AND ko.lifecycle_status NOT IN ('privacy_erased', 'soft_deleted')
@@ -449,7 +451,33 @@ class ClassificationRepository:
             ),
             {"user_id": user_id, "limit": limit, "offset": offset},
         ).mappings()
-        return [dict(row) for row in rows]
+        active = {
+            str(domain_id)
+            for domain_id in session.execute(
+                text("SELECT id FROM domain_catalog WHERE status = 'active'")
+            ).scalars()
+        }
+        items = []
+        for row in rows:
+            item = dict(row)
+            excerpt = str(item.pop("excerpt") or "")
+            item["suggested_primary_domain_id"] = _suggested_domain(
+                str(item["primary_domain_id"]), str(item["title"]), excerpt, active
+            )
+            items.append(item)
+        return items
+
+
+def _suggested_domain(current: str, title: str, excerpt: str, active: set[str]) -> str | None:
+    """Keep an item's catalog domain; otherwise suggest one for the user to approve."""
+    if current in active:
+        return current
+    # Imported here: zhiheng.conclusions imports zhiheng.knowledge at module load.
+    from zhiheng.conclusions.classification import suggest_classification
+
+    suggested = suggest_classification(title=title, claim=excerpt, domain_id="")
+    domain_id = str(suggested["primary_domain_id"])
+    return domain_id if domain_id in active else None
 
 
 def _deletable(child_count: int, direct_knowledge_count: int) -> bool:
