@@ -10,7 +10,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import RowMapping, text
+from sqlalchemy import RowMapping, bindparam, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -252,8 +252,13 @@ def memory_center_js(_user_id: AuthDep) -> FileResponse:
 
 
 @router.get("/v1/memory/candidates", response_model=ItemsResponse)
-def list_candidates(session: SessionDep, _user_id: AuthDep, limit: int = 100) -> ItemsResponse:
-    return ItemsResponse(items=_list_candidates(session, limit=_limit(limit)))
+def list_candidates(
+    session: SessionDep,
+    _user_id: AuthDep,
+    state: Literal["pending", "deferred"] = "pending",
+    limit: int = 100,
+) -> ItemsResponse:
+    return ItemsResponse(items=_list_candidates(session, state=state, limit=_limit(limit)))
 
 
 @router.get("/v1/memory/formal", response_model=ItemsResponse)
@@ -547,6 +552,81 @@ def reject_candidate(
     return response
 
 
+@router.post("/v1/memory/candidates/{candidate_id}/defer", response_model=MutationResponse)
+def defer_candidate(
+    candidate_id: str,
+    payload: TransitionPayload,
+    session: SessionDep,
+    mutation: MutationDep,
+) -> MutationResponse:
+    return _transition_candidate(session, candidate_id, payload, mutation, verb="defer")
+
+
+@router.post("/v1/memory/candidates/{candidate_id}/restore", response_model=MutationResponse)
+def restore_candidate(
+    candidate_id: str,
+    payload: TransitionPayload,
+    session: SessionDep,
+    mutation: MutationDep,
+) -> MutationResponse:
+    return _transition_candidate(session, candidate_id, payload, mutation, verb="restore")
+
+
+@router.get("/v1/memory/candidates/{candidate_id}/history", response_model=ItemsResponse)
+def candidate_history(candidate_id: str, session: SessionDep, _user_id: AuthDep) -> ItemsResponse:
+    if _candidate_etag(session, candidate_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="candidate not found")
+    return ItemsResponse(items=repository.candidate_events(session, candidate_id))
+
+
+def _transition_candidate(
+    session: Session,
+    candidate_id: str,
+    payload: TransitionPayload,
+    mutation: tuple[str, str],
+    *,
+    verb: Literal["defer", "restore"],
+) -> MutationResponse:
+    idempotency_key, if_match = mutation
+    receipt_id, replay = _begin_api_mutation(
+        session,
+        operation_key=f"api:candidate:{verb}:{candidate_id}:{idempotency_key}",
+        operation_type=f"{verb}_memory_candidate",
+        payload={
+            "candidate_id": candidate_id,
+            "if_match": if_match,
+            "body": payload.model_dump(mode="json"),
+        },
+    )
+    if replay is not None:
+        return replay
+    _candidate_cas(session, candidate_id, if_match)
+    transition = (repository.defer_candidate if verb == "defer" else repository.restore_candidate)(
+        session,
+        candidate_id=candidate_id,
+        reason=payload.reason,
+        operation_key=f"domain:candidate:{verb}:{receipt_id}",
+    )
+    request_id = (
+        repository.request_confirmation(session, candidate_id=candidate_id)
+        if verb == "restore"
+        else None
+    )
+    response = MutationResponse(
+        status="completed",
+        result={
+            "receipt_id": receipt_id,
+            "candidate_id": candidate_id,
+            "event_id": transition.event_id,
+            "status": transition.status,
+            "request_id": request_id,
+            "etag": _candidate_etag(session, candidate_id),
+        },
+    )
+    _complete_api_mutation(session, receipt_id, response)
+    return response
+
+
 @router.patch("/v1/memory/items/{formal_memory_id}", response_model=MutationResponse)
 def patch_formal(
     formal_memory_id: str,
@@ -799,6 +879,14 @@ def _pending_or_new_request(session: Session, candidate_id: str) -> str:
     request_id = _latest_pending_request_id(session, candidate_id)
     if request_id is not None:
         return request_id
+    candidate_status = session.execute(
+        text("SELECT status FROM memory_candidates WHERE id = :id"), {"id": candidate_id}
+    ).scalar()
+    if candidate_status == "deferred":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="candidate is deferred; restore it before deciding",
+        )
     try:
         return repository.request_confirmation(session, candidate_id=candidate_id)
     except ValueError as exc:
@@ -827,7 +915,10 @@ def _formal_cas(session: Session, formal_memory_id: str, etag: str) -> None:
         )
 
 
-def _list_candidates(session: Session, *, limit: int) -> list[dict[str, Any]]:
+def _list_candidates(
+    session: Session, *, state: Literal["pending", "deferred"] = "pending", limit: int
+) -> list[dict[str, Any]]:
+    statuses = ("pending_confirmation", "edited") if state == "pending" else ("deferred",)
     rows = session.execute(
         text(
             """
@@ -835,12 +926,12 @@ def _list_candidates(session: Session, *, limit: int) -> list[dict[str, Any]]:
                    mcv.created_by_role, mcv.created_at AS version_created_at
             FROM memory_candidates mc
             JOIN memory_candidate_versions mcv ON mcv.id = mc.current_version_id
-            WHERE mc.status IN ('pending_confirmation', 'edited')
+            WHERE mc.status IN :statuses
             ORDER BY mc.updated_at DESC, mc.created_at DESC
             LIMIT :limit
             """
-        ),
-        {"limit": limit},
+        ).bindparams(bindparam("statuses", expanding=True)),
+        {"statuses": list(statuses), "limit": limit},
     ).mappings()
     items = [_candidate_row(row) for row in rows]
     return _decorate_memory_items(session, items, target_type="memory_candidate")

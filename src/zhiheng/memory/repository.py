@@ -60,6 +60,16 @@ class ConfirmationResult:
     status: str
 
 
+PENDING_CANDIDATE_STATUSES = frozenset({"pending_confirmation", "edited"})
+
+
+@dataclass(frozen=True)
+class CandidateTransition:
+    event_id: str
+    candidate_id: str
+    status: str
+
+
 class StaleConfirmationError(ValueError):
     pass
 
@@ -787,6 +797,153 @@ class MemoryRepository:
         result = ConfirmationResult(receipt_id, decision_id, None, None, None, "rejected")
         self._complete_receipt(session, receipt_id, result)
         return result
+
+    def defer_candidate(
+        self, session: Session, *, candidate_id: str, reason: str, operation_key: str
+    ) -> CandidateTransition:
+        """Set a pending candidate aside without deciding on it (GLOSSARY 延后).
+
+        The content and version stay as they are and nothing is confirmed. Open
+        confirmation requests are superseded so a decision prepared before the
+        deferral cannot land while it is deferred.
+        """
+        return self._transition_candidate(
+            session,
+            candidate_id=candidate_id,
+            event_type="deferred",
+            allowed_from=PENDING_CANDIDATE_STATUSES,
+            reason=reason,
+            operation_key=operation_key,
+        )
+
+    def restore_candidate(
+        self, session: Session, *, candidate_id: str, reason: str, operation_key: str
+    ) -> CandidateTransition:
+        """Return a deferred candidate to the status it was pending in."""
+        return self._transition_candidate(
+            session,
+            candidate_id=candidate_id,
+            event_type="restored",
+            allowed_from=frozenset({"deferred"}),
+            reason=reason,
+            operation_key=operation_key,
+        )
+
+    def candidate_events(self, session: Session, candidate_id: str) -> list[dict[str, Any]]:
+        rows = session.execute(
+            text(
+                """
+                SELECT id, candidate_id, event_type, from_status, to_status,
+                       candidate_version_id, reason, created_at
+                FROM memory_candidate_events
+                WHERE candidate_id = :candidate_id
+                ORDER BY created_at, rowid
+                """
+            ),
+            {"candidate_id": candidate_id},
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    def _transition_candidate(
+        self,
+        session: Session,
+        *,
+        candidate_id: str,
+        event_type: str,
+        allowed_from: frozenset[str],
+        reason: str,
+        operation_key: str,
+    ) -> CandidateTransition:
+        existing = (
+            session.execute(
+                text(
+                    """
+                    SELECT id, candidate_id, event_type, to_status
+                    FROM memory_candidate_events WHERE operation_key = :operation_key
+                    """
+                ),
+                {"operation_key": operation_key},
+            )
+            .mappings()
+            .first()
+        )
+        if existing is not None:
+            if existing["candidate_id"] != candidate_id or existing["event_type"] != event_type:
+                raise OperationConflictError("operation key was reused for another transition")
+            return CandidateTransition(
+                str(existing["id"]), candidate_id, str(existing["to_status"])
+            )
+        candidate = self._candidate(session, candidate_id)
+        if candidate is None:
+            raise ValueError("candidate not found")
+        from_status = str(candidate["status"])
+        if from_status not in allowed_from:
+            raise OperationConflictError(f"candidate cannot be {event_type} from {from_status}")
+        if event_type == "deferred":
+            to_status = "deferred"
+        else:
+            to_status = self._status_before_deferral(session, candidate_id)
+        event_id = new_id()
+        session.execute(
+            text(
+                """
+                INSERT INTO memory_candidate_events (
+                  id, candidate_id, event_type, from_status, to_status,
+                  candidate_version_id, reason, operation_key
+                )
+                VALUES (
+                  :id, :candidate_id, :event_type, :from_status, :to_status,
+                  :candidate_version_id, :reason, :operation_key
+                )
+                """
+            ),
+            {
+                "id": event_id,
+                "candidate_id": candidate_id,
+                "event_type": event_type,
+                "from_status": from_status,
+                "to_status": to_status,
+                "candidate_version_id": candidate["current_version_id"],
+                "reason": reason[:512],
+                "operation_key": operation_key,
+            },
+        )
+        session.execute(
+            text(
+                """
+                UPDATE memory_candidates
+                SET status = :to_status, updated_at = CURRENT_TIMESTAMP
+                WHERE id = :candidate_id AND status = :from_status
+                """
+            ),
+            {"candidate_id": candidate_id, "to_status": to_status, "from_status": from_status},
+        )
+        if event_type == "deferred":
+            session.execute(
+                text(
+                    """
+                    UPDATE memory_confirmation_requests
+                    SET status = 'superseded', updated_at = CURRENT_TIMESTAMP
+                    WHERE candidate_id = :candidate_id AND status = 'pending'
+                    """
+                ),
+                {"candidate_id": candidate_id},
+            )
+        return CandidateTransition(event_id, candidate_id, to_status)
+
+    def _status_before_deferral(self, session: Session, candidate_id: str) -> str:
+        previous = session.execute(
+            text(
+                """
+                SELECT from_status FROM memory_candidate_events
+                WHERE candidate_id = :candidate_id AND event_type = 'deferred'
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+                """
+            ),
+            {"candidate_id": candidate_id},
+        ).scalar()
+        return str(previous) if previous in PENDING_CANDIDATE_STATUSES else "pending_confirmation"
 
     def batch_confirm(
         self,

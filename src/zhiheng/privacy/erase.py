@@ -987,6 +987,12 @@ class PrivacyEraseService:
         )
         session.execute(
             text(
+                "UPDATE memory_candidate_events SET reason = '' WHERE candidate_id = :candidate_id"
+            ),
+            {"candidate_id": candidate_id},
+        )
+        session.execute(
+            text(
                 """
                 UPDATE memory_candidates
                 SET status = 'privacy_erased',
