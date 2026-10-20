@@ -6,7 +6,7 @@ This audit covers the repository-owned asset cleanup slice for `.gitignore`, tra
 
 ## Tracked asset findings
 
-- `.omx/ultragoal/brief.md` is retained because `docs/testing/g006-real-execution-handoff.md` and `docs/testing/remaining-invariant-gaps.md` cite it as historical acceptance and invariant evidence.
+- `.omx/ultragoal/brief.md` is retained because `docs/testing/g006-real-execution-handoff.md` cites it as historical acceptance evidence.
 - `.omx/ultragoal/goals.json` is retained because it summarizes the completed durable goals and points at the retained brief.
 - `.omx/ultragoal/quality-gate.json` is retained because it is the compact final quality-gate evidence and names the retained source artifacts.
 - `.omx/ultragoal/ledger.jsonl` is removed from Git tracking with the local file preserved. It is a large runtime audit log and is not directly referenced by repository tests or docs.
