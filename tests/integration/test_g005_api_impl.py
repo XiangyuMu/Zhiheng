@@ -353,9 +353,9 @@ def test_answer_and_decision_report_retryable_409_when_sources_keep_changing(
         (analyzed, "decision-context-changed"),
     ):
         assert response.status_code == 409
-        assert response.json()["detail"] == {
-            "code": "retrieval_context_changed",
-            "reason": "资料在检索过程中刚刚更新，请重新提问。",
+        assert response.json() == {
+            "detail": "资料在检索过程中刚刚更新，请重新提问。",
+            "error_code": "retrieval_context_changed",
         }
         assert _receipt_status(session_factory, key) == ("failed", "retrieval_context_changed")
 

@@ -167,6 +167,7 @@ class RetrievalContextChangedError(ValueError):
     """Authorized sources kept changing while a manifest was sealed; retry the request."""
 
     code = "retrieval_context_changed"
+    reason = "资料在检索过程中刚刚更新，请重新提问。"
 
 
 @dataclass(frozen=True)

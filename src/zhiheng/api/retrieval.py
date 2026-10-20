@@ -471,8 +471,9 @@ def answer_question(
             memory_topic_prefix=payload.memory_topic_prefix,
             conversation_context=conversation_context,
         )
-    except RetrievalContextChangedError as exc:
-        raise retrieval_context_changed(session, receipt_id) from exc
+    except RetrievalContextChangedError:
+        fail_receipt_for_context_change(session, receipt_id)
+        raise
     response = _answer_response(result, reason=decision.reason_code)
     if response.route.route != "structured":
         response.answer_provider_id = getattr(result, "model_provider_id", None)
@@ -554,11 +555,11 @@ def answer_question(
     return response
 
 
-def retrieval_context_changed(session: Session, receipt_id: str) -> HTTPException:
-    """Close the receipt and describe a retryable mid-request source change.
+def fail_receipt_for_context_change(session: Session, receipt_id: str) -> None:
+    """Close the receipt of a request whose sources changed mid-retrieval.
 
     Nothing was dispatched to a model, so a new request with a new idempotency
-    key can safely retrieve again.
+    key can safely retrieve again; the app renders the error as a retryable 409.
     """
     session.rollback()
     _complete_operation_receipt(
@@ -568,13 +569,6 @@ def retrieval_context_changed(session: Session, receipt_id: str) -> HTTPExceptio
         result={"reason": RetrievalContextChangedError.code},
     )
     session.commit()
-    return HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail={
-            "code": RetrievalContextChangedError.code,
-            "reason": "资料在检索过程中刚刚更新，请重新提问。",
-        },
-    )
 
 
 def _contextual_prompts(

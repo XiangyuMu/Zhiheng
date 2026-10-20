@@ -92,8 +92,6 @@ async function fetchJson(url, options = {}) {
     let code = null;
     try { ({ detail, error_code: code = null } = JSON.parse(raw)); } catch (_) { /* plain upstream failure */ }
     if (Array.isArray(detail)) detail = "请检查输入格式和长度后重试。";
-    const code = typeof detail?.code === "string" ? detail.code : null;
-    if (typeof detail?.reason === "string") detail = detail.reason;
     const error = new Error(typeof detail === "string" ? detail : "请求未完成，请重试。");
     error.status = response.status;
     error.code = code;

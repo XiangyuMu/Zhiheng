@@ -21,9 +21,9 @@ from zhiheng.api.retrieval import (
     WriteDep,
     _citation_payload,
     _idempotency_replay,
+    fail_receipt_for_context_change,
     get_db_session,
     require_user,
-    retrieval_context_changed,
 )
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import sha256_text
@@ -208,8 +208,9 @@ def analyze_decision(
             payload.evidence_query or payload.problem,
             deployment_secret=request.app.state.decision_settings.secret_key.get_secret_value(),
         )
-    except RetrievalContextChangedError as exc:
-        raise retrieval_context_changed(session, receipt_id) from exc
+    except RetrievalContextChangedError:
+        fail_receipt_for_context_change(session, receipt_id)
+        raise
     decision_request = DecisionRequest(
         problem=payload.problem,
         options=tuple(
