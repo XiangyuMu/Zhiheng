@@ -62,7 +62,11 @@ from zhiheng.retrieval import (
     StructuredLookupService,
     VectorIndexRepository,
 )
-from zhiheng.retrieval.contracts import AuthorizedContextManifest, RetrievalFilters
+from zhiheng.retrieval.contracts import (
+    AuthorizedContextManifest,
+    RetrievalContextChangedError,
+    RetrievalFilters,
+)
 from zhiheng.retrieval.embeddings import BgeM3QueryEmbedder, QueryEmbeddingUnavailableError
 from zhiheng.retrieval.replay import CitationReplayValidator
 from zhiheng.retrieval.repository import CitationContextRepository, LexicalRetriever
@@ -457,15 +461,19 @@ def answer_question(
         conversation_context = repository.context(
             session, conversation_id=payload.conversation_id, owner_user_id=user_id
         )
-    result = request.app.state.query_answer_service.answer(
-        session,
-        payload.query,
-        selector=payload.selector,
-        structured_value=payload.structured_value,
-        intent=payload.intent,
-        memory_topic_prefix=payload.memory_topic_prefix,
-        conversation_context=conversation_context,
-    )
+    try:
+        result = request.app.state.query_answer_service.answer(
+            session,
+            payload.query,
+            selector=payload.selector,
+            structured_value=payload.structured_value,
+            intent=payload.intent,
+            memory_topic_prefix=payload.memory_topic_prefix,
+            conversation_context=conversation_context,
+        )
+    except RetrievalContextChangedError:
+        fail_receipt_for_context_change(session, receipt_id)
+        raise
     response = _answer_response(result, reason=decision.reason_code)
     if response.route.route != "structured":
         response.answer_provider_id = getattr(result, "model_provider_id", None)
@@ -545,6 +553,22 @@ def answer_question(
             response=response.model_dump(mode="json"),
         )
     return response
+
+
+def fail_receipt_for_context_change(session: Session, receipt_id: str) -> None:
+    """Close the receipt of a request whose sources changed mid-retrieval.
+
+    Nothing was dispatched to a model, so a new request with a new idempotency
+    key can safely retrieve again; the app renders the error as a retryable 409.
+    """
+    session.rollback()
+    _complete_operation_receipt(
+        session,
+        receipt_id,
+        status_value="failed",
+        result={"reason": RetrievalContextChangedError.code},
+    )
+    session.commit()
 
 
 def _contextual_prompts(

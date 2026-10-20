@@ -21,6 +21,7 @@ from zhiheng.api.retrieval import (
     WriteDep,
     _citation_payload,
     _idempotency_replay,
+    fail_receipt_for_context_change,
     get_db_session,
     require_user,
 )
@@ -48,7 +49,7 @@ from zhiheng.retrieval import (
     RetrievalAuthorizer,
     StructuredLookupService,
 )
-from zhiheng.retrieval.contracts import AuthorizedContextManifest
+from zhiheng.retrieval.contracts import AuthorizedContextManifest, RetrievalContextChangedError
 from zhiheng.retrieval.replay import CitationReplayValidator
 
 router = APIRouter()
@@ -200,12 +201,16 @@ def analyze_decision(
     )
     session.commit()
 
-    manifest, citations, retrieval_run_id, release_id = _decision_context(
-        session,
-        request.app.state.decision_context_retriever,
-        payload.evidence_query or payload.problem,
-        deployment_secret=request.app.state.decision_settings.secret_key.get_secret_value(),
-    )
+    try:
+        manifest, citations, retrieval_run_id, release_id = _decision_context(
+            session,
+            request.app.state.decision_context_retriever,
+            payload.evidence_query or payload.problem,
+            deployment_secret=request.app.state.decision_settings.secret_key.get_secret_value(),
+        )
+    except RetrievalContextChangedError:
+        fail_receipt_for_context_change(session, receipt_id)
+        raise
     decision_request = DecisionRequest(
         problem=payload.problem,
         options=tuple(

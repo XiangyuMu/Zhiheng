@@ -14,7 +14,7 @@ import uvicorn
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -57,6 +57,7 @@ from zhiheng.models.configuration import (
 from zhiheng.models.registry import list_provider_definitions
 from zhiheng.privacy.gateway import preload_pii_analyzer
 from zhiheng.recovery import startup_recovery_barrier
+from zhiheng.retrieval.contracts import RetrievalContextChangedError
 from zhiheng.secrets import ProviderSecretStore
 
 SESSION_COOKIE = "zhiheng_session"
@@ -266,6 +267,16 @@ def create_app(
                 status_code=status.HTTP_303_SEE_OTHER,
             )
         return await http_exception_handler(request, exc)
+
+    @app.exception_handler(RetrievalContextChangedError)
+    async def retryable_retrieval_context_change(
+        request: Request, exc: RetrievalContextChangedError
+    ) -> Response:
+        del request
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": exc.reason, "error_code": exc.code},
+        )
 
     @app.exception_handler(RequestValidationError)
     async def redact_request_validation_error(
