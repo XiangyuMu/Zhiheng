@@ -24,6 +24,7 @@ from sqlalchemy import RowMapping, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from zhiheng.auth import SessionService
+from zhiheng.classification.taxonomy import UNASSIGNED_DOMAIN_ID
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import json_text, new_id, sha256_json, sha256_text
 from zhiheng.db.session import session_scope
@@ -60,7 +61,7 @@ class UserKnowledgeImportRequest(BaseModel):
 
     title: str = Field(min_length=1, max_length=512)
     text: str = Field(min_length=1)
-    primary_domain_id: str = Field(min_length=1, max_length=128)
+    primary_domain_id: str = Field(default=UNASSIGNED_DOMAIN_ID, min_length=1, max_length=128)
     media_type: str = Field(default="text/markdown", max_length=128)
     object_kind: str = Field(default="note", max_length=64)
     sensitivity_level: str = Field(default="private", max_length=32)
@@ -296,7 +297,7 @@ async def upload_pdf(
     user_id: AuthDep,
     idempotency_key: WriteDep,
     title: str,
-    primary_domain_id: str,
+    primary_domain_id: str = UNASSIGNED_DOMAIN_ID,
     backend: Literal["deepdoc", "mineru"] | None = None,
 ) -> PdfTaskResponse | JSONResponse:
     settings: Settings = request.app.state.knowledge_settings

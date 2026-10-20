@@ -60,6 +60,9 @@ PRIMARY_DOMAINS: tuple[DomainDefinition, ...] = (
     ),
 )
 
+# Imports carry no primary domain; the user approves one from the unclassified list.
+UNASSIGNED_DOMAIN_ID = "unassigned"
+
 RECORD_TYPES: tuple[dict[str, str], ...] = (
     {"id": "knowledge", "name": "知识条目", "description": "可独立理解的主题知识"},
     {
@@ -273,7 +276,16 @@ class TaxonomyRepository:
         user_id: str,
         mapping: dict[str, str],
         reason: str = "",
+        legacy_domain_id: str = "personal_archive_experience",
     ) -> dict[str, Any]:
+        active = session.execute(
+            text("SELECT id FROM domain_catalog WHERE id = :id AND status = 'active'"),
+            {"id": legacy_domain_id},
+        ).scalar_one_or_none()
+        if active is not None:
+            raise ValueError("legacy migration source must not be an active catalog domain")
+        # Only the former personal-archive domain implies a personal record type.
+        personal_source = legacy_domain_id == "personal_archive_experience"
         items: list[dict[str, Any]] = []
         rows = session.execute(
             text(
@@ -281,12 +293,12 @@ class TaxonomyRepository:
                 SELECT id, title, primary_domain_id, record_type, classification_revision
                 FROM knowledge_objects
                 WHERE owner_user_id = :owner
-                  AND primary_domain_id = 'personal_archive_experience'
-                  AND lifecycle_status <> 'privacy_erased'
+                  AND primary_domain_id = :legacy
+                  AND lifecycle_status NOT IN ('privacy_erased', 'soft_deleted')
                 ORDER BY created_at, id
                 """
             ),
-            {"owner": user_id},
+            {"owner": user_id, "legacy": legacy_domain_id},
         ).mappings()
         for row in rows:
             target = mapping.get(str(row["id"]))
@@ -304,13 +316,17 @@ class TaxonomyRepository:
                     },
                     "after": {
                         "primary_domain_id": target,
-                        "record_type": "personal_archive_experience",
+                        "record_type": (
+                            "personal_archive_experience"
+                            if personal_source
+                            else str(row["record_type"] or "knowledge")
+                        ),
                     },
                 }
             )
         preview = {
             "kind": "legacy_migration",
-            "legacy_domain_id": "personal_archive_experience",
+            "legacy_domain_id": legacy_domain_id,
             "items": items,
             "reason": reason,
             "approved_item_count": len(items),
@@ -319,9 +335,9 @@ class TaxonomyRepository:
             session,
             user_id=user_id,
             proposal_type="legacy_migration",
-            target_id="personal_archive_experience",
+            target_id=legacy_domain_id,
             base_revision=None,
-            payload={"mapping": mapping, "reason": reason},
+            payload={"mapping": mapping, "reason": reason, "legacy_domain_id": legacy_domain_id},
             preview=preview,
         )
 
@@ -339,7 +355,12 @@ class TaxonomyRepository:
             query += " AND status = :status"
             params["status"] = status
         query += " ORDER BY created_at DESC, id DESC LIMIT :limit"
-        return [self._proposal_row(row) for row in session.execute(text(query), params).mappings()]
+        proposals = [
+            self._proposal_row(row) for row in session.execute(text(query), params).mappings()
+        ]
+        for proposal in proposals:
+            proposal["etag"] = proposal_etag(proposal)
+        return proposals
 
     def get_proposal(
         self, session: Session, *, user_id: str, proposal_id: str
@@ -428,6 +449,88 @@ class TaxonomyRepository:
             "status": "approved" if completed else "pending",
             "result": result,
         }
+
+    def rollback_proposal(
+        self,
+        session: Session,
+        *,
+        user_id: str,
+        proposal_id: str,
+        expected_etag: str,
+        request_id: str | None,
+    ) -> dict[str, Any]:
+        """Restore every item an approved legacy migration moved, unless it changed since."""
+        proposal = self.get_proposal(session, user_id=user_id, proposal_id=proposal_id)
+        if proposal is None or proposal["proposal_type"] != "legacy_migration":
+            raise ValueError("legacy migration proposal not found")
+        if proposal["status"] == "rolled_back":
+            return {"proposal_id": proposal_id, "status": "rolled_back", "result": {}}
+        if proposal["status"] != "approved":
+            raise ValueError("only an approved legacy migration can be rolled back")
+        if expected_etag != proposal["etag"]:
+            raise ValueError("stale taxonomy proposal")
+        items = [dict(item) for item in proposal["preview"].get("items", [])]
+        restored: list[str] = []
+        conflicts: list[str] = []
+        for item in items:
+            if item.get("migration_status") != "applied":
+                continue
+            knowledge_id = str(item["knowledge_object_id"])
+            before = dict(item["applied_before"])
+            current = self.knowledge_assignment(session, user_id=user_id, knowledge_id=knowledge_id)
+            if (
+                current is None
+                or str(current["primary_domain_id"]) != str(item["applied_target_domain_id"])
+                or int(current["classification_revision"] or 0) != int(item["applied_revision"])
+            ):
+                conflicts.append(knowledge_id)
+                continue
+            self._apply_assignment(
+                session,
+                user_id=user_id,
+                knowledge_id=knowledge_id,
+                primary_domain_id=str(before["primary_domain_id"]),
+                record_type=str(before["record_type"]),
+                node_ids=[str(node_id) for node_id in before.get("classification_node_ids", [])],
+                request_id=request_id,
+                action="legacy_migration_rolled_back",
+                before={
+                    "primary_domain_id": str(current["primary_domain_id"]),
+                    "record_type": str(current["record_type"] or "knowledge"),
+                    "classification_revision": int(current["classification_revision"] or 0),
+                },
+            )
+            item["migration_status"] = "rolled_back"
+            restored.append(knowledge_id)
+        result = {"restored": restored, "conflicts": conflicts}
+        session.execute(
+            text(
+                "UPDATE taxonomy_proposals SET status='rolled_back', preview_json=:preview, "
+                "updated_at=CURRENT_TIMESTAMP WHERE id=:id AND owner_user_id=:owner "
+                "AND status='approved'"
+            ),
+            {
+                "id": proposal_id,
+                "owner": user_id,
+                "preview": json_text({**proposal["preview"], "items": items}),
+            },
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO taxonomy_proposal_events
+                  (id, proposal_id, owner_user_id, action, payload_json)
+                VALUES (:id, :proposal_id, :owner, 'rolled_back', :payload)
+                """
+            ),
+            {
+                "id": new_id(),
+                "proposal_id": proposal_id,
+                "owner": user_id,
+                "payload": json_text(result),
+            },
+        )
+        return {"proposal_id": proposal_id, "status": "rolled_back", "result": result}
 
     def update_domain_migration(
         self,
@@ -631,27 +734,36 @@ class TaxonomyRepository:
             node_ids = self._assignment_node_ids(
                 session, user_id=user_id, knowledge_id=knowledge_id
             )
+            record_type = str(
+                item.get("after", {}).get("record_type") or item["record_type"] or "knowledge"
+            )
+            applied_domain_id = (
+                str(current["primary_domain_id"])
+                if int(item.get("association_only", 0))
+                else str(target)
+            )
+            before = {
+                "primary_domain_id": str(item["primary_domain_id"]),
+                "record_type": str(item["record_type"] or "knowledge"),
+                "classification_revision": int(item["classification_revision"] or 0),
+                "classification_node_ids": node_ids,
+            }
             self._apply_assignment(
                 session,
                 user_id=user_id,
                 knowledge_id=knowledge_id,
-                primary_domain_id=(
-                    str(current["primary_domain_id"])
-                    if int(item.get("association_only", 0))
-                    else str(target)
-                ),
-                record_type=str(item["record_type"] or "knowledge"),
+                primary_domain_id=applied_domain_id,
+                record_type=record_type,
                 node_ids=node_ids,
                 request_id=None,
                 action="domain_migration_approved",
-                before={
-                    "primary_domain_id": str(item["primary_domain_id"]),
-                    "record_type": str(item["record_type"] or "knowledge"),
-                    "classification_revision": int(item["classification_revision"] or 0),
-                    "classification_node_ids": node_ids,
-                },
+                before=before,
             )
             item["migration_status"] = "applied"
+            # Keep the mapping record that a rollback restores from.
+            item["applied_before"] = before
+            item["applied_target_domain_id"] = applied_domain_id
+            item["applied_revision"] = before["classification_revision"] + 1
             decisions.pop(knowledge_id, None)
             applied.append(knowledge_id)
         source_domains = list(payload.get("source_domain_ids", []))
@@ -933,6 +1045,7 @@ class TaxonomyRepository:
 __all__ = [
     "DomainDefinition",
     "LEGACY_DOMAIN_MAPPING",
+    "UNASSIGNED_DOMAIN_ID",
     "PRIMARY_DOMAINS",
     "RECORD_TYPES",
     "TaxonomyRepository",

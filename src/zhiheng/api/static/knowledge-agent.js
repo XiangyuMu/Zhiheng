@@ -14,7 +14,7 @@ const state = {
   contextPrompts: [],
 };
 const screenNames = { research: "研究问答", library: "资料库", decisions: "方案比较", settings: "设置" };
-const domainNames = { "personal.notes": "个人资料", "work.notes": "研究与工作", "learning.notes": "学习笔记", "technology.ai": "人工智能", "finance.quant": "量化研究" };
+const domainNames = { unassigned: "未分类", "personal.notes": "个人资料", "work.notes": "研究与工作", "learning.notes": "学习笔记", "technology.ai": "人工智能", "finance.quant": "量化研究" };
 const stopNames = {
   completed: "有引用依据", evidence_only: "已找到原文", insufficient_evidence: "证据不足",
   no_new_authorized_evidence: "证据不足", model_failed: "回答暂不可用",
@@ -540,7 +540,7 @@ $("import-form").addEventListener("submit", (event) => {
       });
       if (preview.status !== "awaiting_confirmation") throw new Error(preview.error || "网页抓取未完成。");
       const response = await mutate("/v1/knowledge/imports", {
-        title: preview.title || title, text: preview.text, primary_domain_id: $("import-domain").value,
+        title: preview.title || title, text: preview.text,
         media_type: preview.media_type || "text/html", object_kind: "imported_web",
         source_metadata: { ...(preview.source_metadata || {}), url, import_strategy: $("duplicate-strategy").value },
       });
@@ -558,7 +558,7 @@ $("import-form").addEventListener("submit", (event) => {
         const kind = fileKind(file);
         const title = $("import-title").value.trim() || file.name;
         if (kind === "pdf") {
-          const response = await fetchJson(`/v1/knowledge/pdf-imports?title=${encodeURIComponent(title)}&primary_domain_id=${encodeURIComponent($("import-domain").value)}`, {
+          const response = await fetchJson(`/v1/knowledge/pdf-imports?title=${encodeURIComponent(title)}`, {
             method: "POST", headers: { "Content-Type": "application/pdf", "Idempotency-Key": crypto.randomUUID(), "X-CSRF-Token": readCookie("zhiheng_csrf") },
             body: file,
           }).catch((error) => {
@@ -574,7 +574,7 @@ $("import-form").addEventListener("submit", (event) => {
           continue;
         }
         if (kind === "ocr") {
-          const response = await fetchJson(`/v1/knowledge/ocr-imports?title=${encodeURIComponent(title)}&primary_domain_id=${encodeURIComponent($("import-domain").value)}`, {
+          const response = await fetchJson(`/v1/knowledge/ocr-imports?title=${encodeURIComponent(title)}`, {
             method: "POST", headers: { "Content-Type": file.type || "application/octet-stream", "Idempotency-Key": crypto.randomUUID(), "X-CSRF-Token": readCookie("zhiheng_csrf") },
             body: file,
           });
@@ -589,7 +589,7 @@ $("import-form").addEventListener("submit", (event) => {
         if (!content || content.includes("\0")) throw new Error(`《${file.name}》不是有效文本文件。`);
         if (new TextEncoder().encode(content).length > 10 * 1024 * 1024) throw new Error(`《${file.name}》超过 10 MB。`);
         const response = await mutate("/v1/knowledge/imports", {
-          title, text: content, primary_domain_id: $("import-domain").value,
+          title, text: content,
           media_type: kind === "markdown" ? "text/markdown" : "text/plain",
           object_kind: "imported_document",
           source_metadata: { filename: file.name, size: file.size, import_strategy: $("duplicate-strategy").value },
@@ -602,7 +602,7 @@ $("import-form").addEventListener("submit", (event) => {
       if (pasted && !files.length) {
         if (pasted.includes("\0") || new TextEncoder().encode(pasted).length > 10 * 1024 * 1024) throw new Error("粘贴内容超过 10 MB 或包含非文本字符。");
         const title = $("import-title").value.trim() || "未命名笔记";
-        const response = await mutate("/v1/knowledge/imports", { title, text: pasted, primary_domain_id: $("import-domain").value, media_type: "text/markdown", object_kind: "imported_document", source_metadata: { import_strategy: $("duplicate-strategy").value } });
+        const response = await mutate("/v1/knowledge/imports", { title, text: pasted, media_type: "text/markdown", object_kind: "imported_document", source_metadata: { import_strategy: $("duplicate-strategy").value } });
         const id = response.result?.knowledge_object_id;
         items.push({ source_id: id, title, source_type: "markdown", media_type: "text/markdown" });
         if (id) { state.processing.set(id, { title, label: "已接收，等待处理" }); renderProcessing(); pollProcessing(id); }
@@ -1774,7 +1774,8 @@ function renderUnclassified() {
     const domainSelect = document.createElement("select");
     domainSelect.setAttribute("aria-label", `${item.title} 的主领域`);
     domainSelect.append(new Option("选择主领域", ""), ...(state.taxonomy || []).map((domain) => new Option(domain.name, domain.id)));
-    domainSelect.value = (state.taxonomy || []).some((domain) => domain.id === item.primary_domain_id) ? item.primary_domain_id : "";
+    const suggested = item.suggested_primary_domain_id;
+    domainSelect.value = (state.taxonomy || []).some((domain) => domain.id === suggested) ? suggested : "";
     const nodeSelect = document.createElement("select");
     nodeSelect.setAttribute("aria-label", `${item.title} 的分类`);
     const refreshNodes = () => { nodeSelect.replaceChildren(...classificationOptions(domainSelect.value)); nodeSelect.disabled = !domainSelect.value; };
