@@ -8,7 +8,9 @@
     economics_finance_business: "经济、金融与商业",
   };
   const proposalLabels = { domain_structure: "领域结构调整", legacy_migration: "历史领域迁移" };
-  const statusLabels = { pending: "待审核", approved: "已生效", rolled_back: "已回滚" };
+  const statusLabels = {
+    pending: "待审核", deferred: "已延后", rejected: "已拒绝", approved: "已生效", rolled_back: "已回滚",
+  };
   let availableDomains = [];
   const labelForDomain = (id) => domainLabels[id]
     || availableDomains.find((domain) => domain.id === id)?.name || "未命名领域";
@@ -70,7 +72,7 @@
           const select = document.createElement("select");
           const defer = document.createElement("option");
           defer.value = "";
-          defer.textContent = "稍后处理";
+          defer.textContent = "未选目标";
           select.append(defer);
           entryTargets.forEach((id) => {
             const option = document.createElement("option");

@@ -4,7 +4,16 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -57,6 +66,12 @@ class DomainMigrationDecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target_domain_id: str | None = Field(default=None, max_length=64)
+
+
+class RejectProposalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(default="", max_length=2000)
 
 
 def install_taxonomy_routes(app: Any) -> None:
@@ -137,9 +152,16 @@ def get_taxonomy(session: SessionDep, _user_id: AuthDep) -> dict[str, Any]:
 
 @router.get("/v1/taxonomy/proposals")
 def list_taxonomy_proposals(
-    session: SessionDep, user_id: AuthDep, response: Response
+    session: SessionDep,
+    user_id: AuthDep,
+    response: Response,
+    status_filter: str | None = Query(
+        default=None,
+        alias="status",
+        pattern="^(pending|deferred|approved|rejected|rolled_back)$",
+    ),
 ) -> dict[str, Any]:
-    items = repository.list_proposals(session, user_id=user_id)
+    items = repository.list_proposals(session, user_id=user_id, status=status_filter)
     response.headers["ETag"] = f"taxonomy-list:{len(items)}"
     return {"items": items}
 
@@ -264,6 +286,75 @@ def rollback_taxonomy_proposal(
             proposal_id=proposal_id,
             expected_etag=if_match,
             request_id=request.headers.get("X-Request-ID"),
+        ),
+    )
+
+
+@router.post("/v1/taxonomy/proposals/{proposal_id}/reject")
+def reject_taxonomy_proposal(
+    proposal_id: str,
+    session: SessionDep,
+    user_id: AuthDep,
+    idempotency_key: WriteDep,
+    if_match: IfMatchDep,
+    request: RejectProposalRequest | None = None,
+) -> dict[str, Any]:
+    reason = request.reason if request is not None else ""
+    payload = {"proposal_id": proposal_id, "if_match": if_match, "reason": reason}
+    return _mutation_response(
+        session,
+        user_id=user_id,
+        idempotency_key=idempotency_key,
+        operation_type="proposal.reject",
+        payload=payload,
+        action=lambda: repository.reject_proposal(
+            session,
+            user_id=user_id,
+            proposal_id=proposal_id,
+            expected_etag=if_match,
+            reason=reason,
+        ),
+    )
+
+
+@router.post("/v1/taxonomy/proposals/{proposal_id}/defer")
+def defer_taxonomy_proposal(
+    proposal_id: str,
+    session: SessionDep,
+    user_id: AuthDep,
+    idempotency_key: WriteDep,
+    if_match: IfMatchDep,
+) -> dict[str, Any]:
+    payload = {"proposal_id": proposal_id, "if_match": if_match}
+    return _mutation_response(
+        session,
+        user_id=user_id,
+        idempotency_key=idempotency_key,
+        operation_type="proposal.defer",
+        payload=payload,
+        action=lambda: repository.defer_proposal(
+            session, user_id=user_id, proposal_id=proposal_id, expected_etag=if_match
+        ),
+    )
+
+
+@router.post("/v1/taxonomy/proposals/{proposal_id}/restore")
+def restore_taxonomy_proposal(
+    proposal_id: str,
+    session: SessionDep,
+    user_id: AuthDep,
+    idempotency_key: WriteDep,
+    if_match: IfMatchDep,
+) -> dict[str, Any]:
+    payload = {"proposal_id": proposal_id, "if_match": if_match}
+    return _mutation_response(
+        session,
+        user_id=user_id,
+        idempotency_key=idempotency_key,
+        operation_type="proposal.restore",
+        payload=payload,
+        action=lambda: repository.restore_proposal(
+            session, user_id=user_id, proposal_id=proposal_id, expected_etag=if_match
         ),
     )
 
