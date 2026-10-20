@@ -461,14 +461,16 @@ class ClassificationRepository:
         for row in rows:
             item = dict(row)
             excerpt = str(item.pop("excerpt") or "")
-            item["suggested_primary_domain_id"] = _suggested_domain(
+            item["suggested_primary_domain_id"] = suggested_primary_domain(
                 str(item["primary_domain_id"]), str(item["title"]), excerpt, active
             )
             items.append(item)
         return items
 
 
-def _suggested_domain(current: str, title: str, excerpt: str, active: set[str]) -> str | None:
+def suggested_primary_domain(
+    current: str, title: str, excerpt: str, active: set[str]
+) -> str | None:
     """Keep an item's catalog domain; otherwise suggest one for the user to approve."""
     if current in active:
         return current

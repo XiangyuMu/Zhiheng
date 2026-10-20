@@ -373,7 +373,7 @@ class PersonalUpdateService:
                 """
                 UPDATE personal_prompts
                 SET status=:status, resolved_at=CURRENT_TIMESTAMP
-                WHERE id=:id AND prompt_kind='missing' AND status='pending'
+                WHERE id=:id AND prompt_kind='missing' AND status IN ('pending', 'deferred')
                 """
             ),
             {"id": prompt_id, "status": "deferred" if decision == "defer" else "skipped"},
@@ -382,6 +382,21 @@ class PersonalUpdateService:
             raise ValueError("prompt not found")
         status = "skipped" if decision == "skip" else "deferred"
         return {"prompt_id": prompt_id, "status": status}
+
+    def restore_missing_prompt(self, session: Session, prompt_id: str) -> dict[str, Any]:
+        result = session.execute(
+            text(
+                """
+                UPDATE personal_prompts
+                SET status='pending', resolved_at=NULL
+                WHERE id=:id AND prompt_kind='missing' AND status='deferred'
+                """
+            ),
+            {"id": prompt_id},
+        )
+        if int(getattr(result, "rowcount", 0)) != 1:
+            raise ValueError("deferred prompt not found")
+        return {"prompt_id": prompt_id, "status": "pending"}
 
     def defer_conflict(
         self, session: Session, conflict_id: str, *, owner_user_id: str = "default"
@@ -414,6 +429,33 @@ class PersonalUpdateService:
         )
         return {"conflict_id": conflict_id, "status": "deferred"}
 
+    def restore_conflict(
+        self, session: Session, conflict_id: str, *, owner_user_id: str = "default"
+    ) -> dict[str, Any]:
+        restored = session.execute(
+            text(
+                """
+                UPDATE memory_conflicts
+                SET resolution = NULL
+                WHERE id = :id AND status = 'pending' AND resolution = 'deferred'
+                """
+            ),
+            {"id": conflict_id},
+        )
+        if int(getattr(restored, "rowcount", 0)) != 1:
+            raise ValueError("deferred conflict not found")
+        session.execute(
+            text(
+                """
+                UPDATE personal_conflicts
+                SET status = 'pending'
+                WHERE id = :id AND owner_user_id = :owner AND status = 'deferred'
+                """
+            ),
+            {"id": conflict_id, "owner": owner_user_id},
+        )
+        return {"conflict_id": conflict_id, "status": "pending"}
+
     def skip_conflict(
         self, session: Session, conflict_id: str, *, owner_user_id: str = "default"
     ) -> dict[str, Any]:
@@ -427,7 +469,8 @@ class PersonalUpdateService:
             text(
                 """
                 UPDATE memory_conflicts
-                SET resolution = 'skipped'
+                SET status = 'dismissed', resolution = 'skipped',
+                    resolved_at = CURRENT_TIMESTAMP
                 WHERE id = :id AND status = 'pending'
                 """
             ),
@@ -437,7 +480,7 @@ class PersonalUpdateService:
             text(
                 """
                 UPDATE personal_conflicts
-                SET status = 'skipped'
+                SET status = 'skipped', resolved_at = CURRENT_TIMESTAMP
                 WHERE id = :id AND owner_user_id = :owner
                 """
             ),
