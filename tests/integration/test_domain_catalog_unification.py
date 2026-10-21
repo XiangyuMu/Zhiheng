@@ -96,7 +96,7 @@ def test_downgrade_restores_the_v1_catalog_rows(tmp_path: Path) -> None:
     config = _alembic(db_path)
     command.upgrade(config, "head")
 
-    command.downgrade(config, "-1")
+    command.downgrade(config, "0049_worker_heartbeats")
 
     catalog = _catalog(db_path)
     assert catalog["relationships_communication"]["name"] == "Relationships and Communication"

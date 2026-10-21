@@ -14,6 +14,8 @@ from zhiheng.conclusions import (
     get_extraction_review_result,
     list_extraction_review_results,
 )
+from zhiheng.conclusions.extraction import resolve_extraction_supplement
+from zhiheng.core.config import Settings
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
 
@@ -23,8 +25,8 @@ AuthDep = Annotated[str, Depends(require_user)]
 repo = ConclusionRepository()
 
 
-def _formalize_conclusion(
-    request: Request,
+def formalize_conclusion(
+    settings: Settings,
     session: Session,
     user: str,
     entry_id: str,
@@ -55,9 +57,7 @@ def _formalize_conclusion(
     premises = item.get("premises", [])
     condition = "、".join(str(p.get("text", "")) for p in premises if not p.get("confirmed", False))
     text_value = f"如果{condition}，则{item['claim']}" if condition else str(item["claim"])
-    artifacts = knowledge_object_store_for_settings(
-        request.app.state.knowledge_settings
-    ).write_text_artifacts(text_value)
+    artifacts = knowledge_object_store_for_settings(settings).write_text_artifacts(text_value)
     evidence = TextEvidenceInput(
         title=str(item["title"]),
         text=text_value,
@@ -233,7 +233,7 @@ def supplement_draft(
     if run is None:
         raise HTTPException(404, "extraction run not found")
     try:
-        return repo.create_draft(
+        draft = repo.create_draft(
             session,
             user,
             str(run["source"]["id"]),
@@ -242,6 +242,8 @@ def supplement_draft(
         )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+    resolve_extraction_supplement(session, user, str(run["id"]))
+    return draft
 
 
 @router.post("/{entry_id}/defer")
@@ -305,7 +307,9 @@ def approve(
         result = repo.approve(session, user, entry_id, etag, key)
         item = repo.get(session, user, entry_id)
         assert item is not None
-        result["knowledge_id"] = _formalize_conclusion(request, session, user, entry_id, item)
+        result["knowledge_id"] = formalize_conclusion(
+            request.app.state.knowledge_settings, session, user, entry_id, item
+        )
         return result
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -346,8 +350,8 @@ def _decide_relation(
         if decision == "approved":
             item = repo.get(session, user, str(result["left_id"]))
             assert item is not None
-            result["knowledge_id"] = _formalize_conclusion(
-                request,
+            result["knowledge_id"] = formalize_conclusion(
+                request.app.state.knowledge_settings,
                 session,
                 user,
                 str(result["left_id"]),

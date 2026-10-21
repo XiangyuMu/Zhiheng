@@ -364,25 +364,31 @@ fs.mkdirSync(output, { recursive: true });
       await page.goto(`${base}/review-center`);
       await page.locator('#total').filter({ hasText: /[2-9]/ }).waitFor();
       assert(await page.getByText('结论草稿').first().isVisible());
-      await page.locator(`button.queue-item[data-entry-id=\"${second.id}\"]`).click();
+      // 待处理 sends a/r/d after its 5 second undo window; each decision waits for it.
+      const open = async (id) => {
+        await page.locator(`button.queue-item[data-entry-id="${id}"]`).click();
+        await page.locator(`#detail[data-ready="conclusion_draft:${id}"]`).waitFor();
+      };
+      const decide = (name) => page.locator('#detail').getByRole('button', { name, exact: true }).click();
+      await open(second.id);
       assert((await page.locator('#detail').innerText()).includes('固定条件'));
-      await page.getByRole('button', { name: '稍后处理' }).click();
+      await decide('延后');
       await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
       await page.locator('#queue').filter({ hasText: '浏览器审核草稿' }).waitFor();
       await page.reload();
       await page.locator('#queue').filter({ hasText: '浏览器审核草稿' }).waitFor();
-      await page.locator(`button.queue-item[data-entry-id=\"${first.id}\"]`).click();
-      await page.getByRole('button', { name: '批准' }).click();
+      await open(first.id);
+      await decide('批准');
       await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
       assert.equal((await apiJson(`/v1/conclusions/${first.id}`)).status, 'formal');
       assert.equal((await apiJson(`/v1/conclusions/${second.id}`)).status, 'deferred');
       page.once('dialog', async (dialog) => { await dialog.accept('固定条件下复习需要更多样本（已修订）'); });
-      await page.locator(`button.queue-item[data-entry-id="${third.id}"]`).click();
-      await page.getByRole('button', { name: '修订' }).click();
-      await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
+      await open(third.id);
+      await decide('修订');
+      await page.locator('#message').filter({ hasText: '修订已保存' }).waitFor();
       assert.equal((await apiJson(`/v1/conclusions/${third.id}`)).claim, '固定条件下复习需要更多样本（已修订）');
-      await page.locator(`button.queue-item[data-entry-id="${fourth.id}"]`).click();
-      await page.getByRole('button', { name: '拒绝' }).click();
+      await open(fourth.id);
+      await decide('拒绝');
       await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
       assert.equal((await apiJson(`/v1/conclusions/${fourth.id}`)).status, 'rejected');
       await noOverflow(); await shot('review-desktop');
@@ -411,7 +417,8 @@ fs.mkdirSync(output, { recursive: true });
       await page.locator('#question').fill('我现在居住在哪个城市？');
       await page.locator('#answer-form button[type="submit"]').click();
       await page.locator('#context-prompt-dialog').waitFor({ state: 'visible', timeout: 20000 });
-      await page.getByRole('button', { name: '跳过' }).last().click();
+      // A conflict offers the same choices as 待处理: keep the existing record.
+      await page.getByRole('button', { name: '保留已有记录' }).last().click();
       await page.locator('#toast').filter({ hasText: '提示已处理' }).waitFor();
       await page.locator('#question').fill('qzxv742919 未记录的天文学结论');
       await page.locator('#answer-form button[type="submit"]').click();
@@ -420,7 +427,7 @@ fs.mkdirSync(output, { recursive: true });
     });
     await check('every screen fits narrow viewports', async () => {
       await page.setViewportSize({ width: 390, height: 844 });
-      for (const [name, route] of [['research','/knowledge-agent#research'],['library','/knowledge-agent#library'],['comparison','/knowledge-agent#decisions'],['settings','/knowledge-agent#settings'],['context','/memory-center'],['review','/review-center'],['system','/evolution-center'],['login','/login']]) {
+      for (const [name, route] of [['research','/knowledge-agent#research'],['library','/knowledge-agent#library'],['comparison','/knowledge-agent#decisions'],['settings','/knowledge-agent#settings'],['context','/memory-center'],['taxonomy','/taxonomy-center'],['review','/review-center'],['system','/evolution-center'],['login','/login']]) {
         await page.goto(base + route);
         await page.locator('main').waitFor();
         if (name === 'review') {

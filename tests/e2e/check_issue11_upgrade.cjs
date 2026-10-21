@@ -44,9 +44,11 @@ fs.mkdirSync(output, { recursive: true });
   }
   try {
     await login();
-    const before = await api("/v1/review/summary?limit=500");
-    const legacy = before.conclusions.find((item) => item.id === "issue11-legacy-entry");
-    assert(legacy, "legacy conclusion was lost during migration");
+    const pendingDrafts = () => api("/v1/review/items?type=conclusion_draft&deferred=include&limit=500");
+    const before = await pendingDrafts();
+    assert(before.items.some((item) => item.id === "issue11-legacy-entry"),
+      "legacy conclusion was lost during migration");
+    const legacy = await api("/v1/conclusions/issue11-legacy-entry");
     assert.equal(legacy.status, "draft");
     const source = await api("/v1/conclusions/sources", { method: "POST", body: { text: "Issue 11 新审核原文" } });
     const draft = await api("/v1/conclusions", { method: "POST", body: {
@@ -58,20 +60,23 @@ fs.mkdirSync(output, { recursive: true });
     await page.locator(`button.queue-item[data-entry-id="${draft.id}"]`).waitFor();
     await page.locator(`button.queue-item[data-entry-id="issue11-legacy-entry"]`).waitFor();
     await page.locator(`button.queue-item[data-entry-id="issue11-legacy-entry"]`).click();
+    await page.locator('#detail[data-ready="conclusion_draft:issue11-legacy-entry"]').waitFor();
     const legacyDetail = await page.locator("#detail").innerText();
     assert(legacyDetail.includes("历史结论在升级后仍可读取"));
     await page.locator(`button.queue-item[data-entry-id="${draft.id}"]`).click();
+    await page.locator(`#detail[data-ready="conclusion_draft:${draft.id}"]`).waitFor();
     assert((await page.locator("#detail").innerText()).includes("升级后仍可创建新草稿"));
     const approvalResponse = page.waitForResponse((response) =>
-      response.url().endsWith(`/v1/conclusions/${draft.id}/approve`) && response.request().method() === "POST");
-    await page.getByRole("button", { name: "批准", exact: true }).click();
+      response.url().endsWith(`/v1/review/items/conclusion_draft/${draft.id}/approve`) && response.request().method() === "POST");
+    // 待处理 sends the approval after its 5 second undo window.
+    await page.locator("#detail").getByRole("button", { name: "批准", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     const approvalBody = await (await approvalResponse).json();
     const approved = await api(`/v1/conclusions/${draft.id}`);
     assert.equal(approved.status, "formal");
-    assert(approvalBody.knowledge_id);
-    const after = await api("/v1/review/summary?limit=500");
-    assert(after.conclusions.some((item) => item.id === "issue11-legacy-entry"));
+    assert(approvalBody.result.knowledge_id);
+    const after = await pendingDrafts();
+    assert(after.items.some((item) => item.id === "issue11-legacy-entry"));
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({
       status: "passed",
       checks: [
@@ -84,7 +89,7 @@ fs.mkdirSync(output, { recursive: true });
         new_draft_id: draft.id,
         review_action: "approve",
         approved_status: approved.status,
-        approved_knowledge_id: approvalBody.knowledge_id,
+        approved_knowledge_id: approvalBody.result.knowledge_id,
         legacy_detail_visible: true,
       },
       browserErrors: errors,

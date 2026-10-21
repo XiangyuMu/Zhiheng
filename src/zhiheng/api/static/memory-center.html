@@ -9,28 +9,8 @@
   <body>
     <a class="skip-link" href="#memory-list">跳到上下文列表</a>
     <div class="workspace">
-      <aside class="sidebar" aria-label="工作空间导航">
-        <a class="brand" href="/knowledge-agent#research">
-          <span class="brand-mark" aria-hidden="true">知</span>
-          <span>知衡<small>研究与知识</small></span>
-        </a>
-        <nav class="nav-group" aria-label="研究">
-          <p class="nav-label">工作空间</p>
-          <a class="nav-link" href="/knowledge-agent#research"><span class="nav-icon" aria-hidden="true">◌</span>研究问答</a>
-          <a class="nav-link" href="/knowledge-agent#library"><span class="nav-icon" aria-hidden="true">▤</span>资料库</a>
-        </nav>
-        <nav class="nav-group" aria-label="工具">
-          <p class="nav-label">更多工具</p>
-          <a class="nav-link" href="/knowledge-agent#decisions"><span class="nav-icon" aria-hidden="true">⇄</span>方案比较</a>
-          <a class="nav-link" href="/memory-center" aria-current="page"><span class="nav-icon" aria-hidden="true">◎</span>个人上下文</a>
-          <a class="nav-link" href="/review-center"><span class="nav-icon" aria-hidden="true">✓</span>集中审核</a>
-        </nav>
-        <div class="sidebar-footer">
-          <p class="sidebar-note">回到原文，<br />让知识有据可循。</p>
-          <a class="nav-link" href="/knowledge-agent#settings"><span class="nav-icon" aria-hidden="true">⚙</span>设置</a>
-          <a class="nav-link" href="/evolution-center"><span class="nav-icon" aria-hidden="true">↗</span>系统改进</a>
-        </div>
-      </aside>
+      <aside class="sidebar" aria-label="工作空间导航" data-app-sidebar data-current="memory"></aside>
+      <script src="/app-shell.js"></script>
 
       <div class="workspace-body">
         <header class="topbar">
@@ -70,7 +50,7 @@
             <div class="tablist" role="tablist" aria-label="记忆分类">
               <button class="tab is-active" id="tab-candidates" role="tab" aria-selected="true" aria-controls="panel-candidates" data-view="candidates">
                 候选
-                <span class="count" data-count="candidates">0</span>
+                <span class="count" data-count="candidates" data-pending-number="memory_candidate">0</span>
               </button>
               <button class="tab" id="tab-formal" role="tab" aria-selected="false" aria-controls="panel-formal" data-view="formal">
                 正式
@@ -109,8 +89,6 @@
 
           <section class="bulk-bar" id="bulk-bar" aria-label="批量操作" hidden>
             <span id="bulk-count">已选择 0 条</span>
-            <button type="button" data-bulk-action="confirm">批量确认</button>
-            <button type="button" data-bulk-action="reject">批量拒绝</button>
             <button type="button" data-bulk-action="delete">批量删除</button>
             <button type="button" data-bulk-action="restore">批量恢复</button>
             <button class="secondary" type="button" id="clear-selection">清除选择</button>
@@ -122,12 +100,12 @@
                 <div>
                   <p class="eyebrow">记忆列表</p>
                   <h2 id="view-title">候选记忆</h2>
-                  <p id="view-description">等待确认的用户记忆，推断内容必须确认后才会生效。</p>
+                  <p id="view-description">记忆候选在待处理中逐条确认，推断内容必须确认后才会生效。</p>
                 </div>
                 <span id="view-badge" class="view-badge">candidate</span>
               </div>
 
-              <div class="view-panel is-active" id="panel-candidates" role="tabpanel" aria-labelledby="tab-candidates" data-panel="candidates"></div>
+              <div class="view-panel is-active" id="panel-candidates" role="tabpanel" aria-labelledby="tab-candidates" data-panel="candidates"><a class="pending-link" data-pending-type="memory_candidate" href="/review-center?type=memory_candidate">待处理 → 去处理</a></div>
               <div class="view-panel" id="panel-formal" role="tabpanel" aria-labelledby="tab-formal" data-panel="formal" hidden></div>
               <div class="view-panel" id="panel-history" role="tabpanel" aria-labelledby="tab-history" data-panel="history" hidden></div>
               <div class="view-panel" id="panel-trash" role="tabpanel" aria-labelledby="tab-trash" data-panel="trash" hidden></div>

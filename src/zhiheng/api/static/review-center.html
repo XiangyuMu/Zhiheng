@@ -1,11 +1,71 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>集中审核 · 知衡</title><link rel="stylesheet" href="/review-center.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>待处理 · 知衡</title><link rel="stylesheet" href="/review-center.css"></head>
 <body class="kb-page">
-<main class="shell">
-  <header class="header"><div><p class="eyebrow">知衡 / 知识成熟</p><h1>集中审核</h1><p class="lead">跨会话查看结论草稿和个人信息冲突。关闭页面不会批准任何内容。</p></div><nav><a href="/knowledge-agent">研究问答</a><a href="/memory-center">个人上下文</a></nav></header>
-  <section class="summary" aria-label="待审核数量"><div><strong id="total">0</strong><span>待处理</span></div><div><strong id="conclusion-count">0</strong><span>结论草稿</span></div><div><strong id="relation-count">0</strong><span>关系建议</span></div><div><strong id="conflict-count">0</strong><span>个人冲突</span></div><div><strong id="extraction-count">0</strong><span>提炼待补充</span></div><button id="refresh" type="button">刷新</button></section>
-  <p id="message" class="message" role="status"></p>
-  <section class="layout"><div><h2>审核队列</h2><div id="queue" class="queue" aria-live="polite"></div></div><aside id="detail" class="detail" aria-live="polite"><p class="muted">选择一项查看完整内容。</p></aside></section>
-</main><script src="/review-center.js" defer></script>
+<a class="skip-link" href="#queue">跳到待处理列表</a>
+<div class="workspace">
+<aside class="sidebar" aria-label="工作空间导航" data-app-sidebar data-current="pending"></aside>
+<script src="/app-shell.js"></script>
+<div class="workspace-body">
+<main class="shell pending-page">
+  <header class="header">
+    <div><p class="eyebrow">知衡 / 知识成熟</p><h1>待处理</h1><p class="lead">生效前需要你决定的事项。关闭页面不会批准任何内容。</p></div>
+    <div class="header-actions"><button id="shortcut-button" class="secondary small" type="button" aria-keyshortcuts="?">快捷键 ?</button><button id="refresh" class="secondary small" type="button">刷新</button></div>
+  </header>
+  <nav class="type-filters" aria-label="按类型筛选">
+    <button type="button" class="type-filter" data-type="" aria-keyshortcuts="0"><kbd>0</kbd>全部 <strong id="total" class="filter-count">0</strong></button>
+    <button type="button" class="type-filter" data-type="conclusion_draft" aria-keyshortcuts="1"><kbd>1</kbd>结论草稿 <strong class="filter-count" data-count="conclusion_draft">0</strong></button>
+    <button type="button" class="type-filter" data-type="relation_suggestion" aria-keyshortcuts="2"><kbd>2</kbd>关系建议 <strong class="filter-count" data-count="relation_suggestion">0</strong></button>
+    <button type="button" class="type-filter" data-type="personal_conflict" aria-keyshortcuts="3"><kbd>3</kbd>个人信息冲突 <strong class="filter-count" data-count="personal_conflict">0</strong></button>
+    <button type="button" class="type-filter" data-type="missing_info_prompt" aria-keyshortcuts="4"><kbd>4</kbd>缺失信息询问 <strong class="filter-count" data-count="missing_info_prompt">0</strong></button>
+    <button type="button" class="type-filter" data-type="extraction_supplement" aria-keyshortcuts="5"><kbd>5</kbd>待补充的提炼 <strong class="filter-count" data-count="extraction_supplement">0</strong></button>
+    <button type="button" class="type-filter" data-type="memory_candidate" aria-keyshortcuts="6"><kbd>6</kbd>记忆候选 <strong class="filter-count" data-count="memory_candidate">0</strong></button>
+    <button type="button" class="type-filter" data-type="classification" aria-keyshortcuts="7"><kbd>7</kbd>分类 <strong class="filter-count" data-count="classification">0</strong></button>
+  </nav>
+  <div class="list-options">
+    <label class="inline-option"><input id="show-deferred" type="checkbox"> 只看已延后</label>
+    <label class="inline-option">排序 <select id="sort-order" aria-label="排序"><option value="oldest">最早优先</option><option value="newest">最新优先</option></select></label>
+  </div>
+  <p id="message" class="message" role="status" aria-live="polite"></p>
+  <section id="layout" class="layout" data-view="list">
+    <div class="list-pane">
+      <div id="batch-bar" class="batch-bar" role="region" aria-label="批量操作" hidden>
+        <strong id="batch-count">已选 0 项</strong>
+        <div class="batch-actions">
+          <button type="button" class="small" data-batch-action="approve" aria-keyshortcuts="Shift+A" aria-describedby="batch-reason">批准 <kbd>⇧A</kbd></button>
+          <button type="button" class="small danger" data-batch-action="reject" aria-keyshortcuts="Shift+R">拒绝 <kbd>⇧R</kbd></button>
+          <button type="button" class="small secondary" data-batch-action="defer" aria-keyshortcuts="Shift+D">延后 <kbd>⇧D</kbd></button>
+          <button id="batch-clear" class="quiet small" type="button">清除选择</button>
+        </div>
+        <p id="batch-reason" class="batch-reason" hidden></p>
+      </div>
+      <h2 id="queue-heading" class="sr-only">待处理列表</h2><div id="queue" class="queue" aria-labelledby="queue-heading" aria-busy="true"><p class="kb-loading">正在读取待处理事项…</p></div></div>
+    <aside id="detail" class="detail" aria-label="详情" tabindex="-1"><p class="muted">选择一项查看完整内容。</p></aside>
+  </section>
+  <div id="undo-toast" class="undo-toast" role="status" aria-live="polite" hidden><span id="undo-text"></span><button id="undo-button" class="secondary small" type="button" aria-keyshortcuts="u">撤销 <kbd>u</kbd></button></div>
+  <dialog id="shortcut-help" class="kb-dialog shortcut-help" aria-labelledby="shortcut-title">
+    <h2 id="shortcut-title">快捷键</h2>
+    <dl class="shortcut-list">
+      <dt><kbd>j</kbd> / <kbd>k</kbd></dt><dd>下一项 / 上一项</dd>
+      <dt><kbd>Enter</kbd></dt><dd>打开详情；无建议的未分类资料打开领域选择</dd>
+      <dt><kbd>Esc</kbd></dt><dd>窄屏时从详情返回列表</dd>
+      <dt><kbd>a</kbd></dt><dd>批准当前项（逐项批准的类型需先看到详情）</dd>
+      <dt><kbd>r</kbd></dt><dd>拒绝当前项</dd>
+      <dt><kbd>d</kbd></dt><dd>延后当前项</dd>
+      <dt><kbd>x</kbd></dt><dd>选中或取消选中当前项</dd>
+      <dt><kbd>Shift+A</kbd></dt><dd>批准所有选中项（仅分类和明确陈述的记忆候选；含需逐条批准的类型时不可用）</dd>
+      <dt><kbd>Shift+R</kbd></dt><dd>拒绝所有选中项</dd>
+      <dt><kbd>Shift+D</kbd></dt><dd>延后所有选中项</dd>
+      <dt><kbd>u</kbd></dt><dd>5 秒内撤销上一个动作（含批量动作）</dd>
+      <dt><kbd>1</kbd>–<kbd>7</kbd></dt><dd>按类型筛选</dd>
+      <dt><kbd>0</kbd></dt><dd>显示全部类型</dd>
+      <dt><kbd>?</kbd></dt><dd>显示本帮助</dd>
+    </dl>
+    <p class="muted">输入框获得焦点时快捷键不生效。</p>
+    <form method="dialog"><button id="shortcut-close" type="submit">关闭</button></form>
+  </dialog>
+</main>
+</div>
+</div>
+<script src="/review-center.js" defer></script>
 </body></html>

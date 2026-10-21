@@ -24,8 +24,8 @@
 - Context: long desktop reading sessions; occasional narrow-screen review.
 
 ## Information architecture
-- Primary navigation: 研究问答 / 资料库.
-- Secondary navigation: 方案比较 / 个人上下文.
+- Primary navigation: 研究问答 / 资料库 / 待处理 (badge: undeferred pending items from `GET /v1/review/counts`, hidden at 0, `99+` above 99; ADR 0011).
+- Secondary navigation: 方案比较 / 个人上下文 / 分类中心.
 - Utility navigation: 设置 / 系统改进.
 - `/knowledge-agent#research` (default) is the focused question/answer workspace.
 - `/knowledge-agent#library` is the searchable current-material list and detail reader.
@@ -58,7 +58,7 @@
 - Extend existing vanilla HTML/CSS/JS; preserve API clients and DOM IDs where practical.
 - Shared authenticated design tokens and shell live in `knowledge-agent.css`; secondary styles import this through `/knowledge-agent.css` then scope page-specific additions.
 - Shared shell classes: `workspace`, `sidebar`, `brand`, `brand-mark`, `nav-group`, `nav-label`, `nav-link`, `nav-icon`, `sidebar-footer`, `workspace-body`, `topbar`, `topbar-path`, `page-content`, `page-heading`, `eyebrow`, `panel`, `button`, `secondary`, `badge`, `muted`, `empty-state`, `toolbar`, `toast`.
-- Each page embeds the same navigation. Use `aria-current=page` on active link. Sidebar horizontal compact navigation below 760px.
+- Every workspace page mounts the one shared sidebar: `<aside class="sidebar" data-app-sidebar data-current="<key>">` followed by `<script src="/app-shell.js"></script>`; never hand-copy nav links. The shell sets `aria-current=page` on the current link and recounts the badge after every `/v1/` write (or a `zhiheng:pending-changed` window event), across tabs. The sidebar becomes horizontal compact navigation at ≤900px, ADR 0008's main collapse breakpoint.
 - Variants: primary/secondary/quiet/danger buttons; neutral/success/warning badges; loading/empty/error lists; source reader; upload form.
 - Source-reader text uses textContent/text nodes and mark, never untrusted HTML.
 
@@ -71,8 +71,9 @@
 
 ## Responsive behavior
 - Desktop >=1100px: persistent sidebar, generous reading space, source reader on right.
-- Tablet 760–1099px: narrower content, comparison scrolls within its own container.
-- Mobile <760px: sidebar becomes compact header/navigation, panels stack, dialogs fit viewport, no body horizontal scrolling.
+- Tablet 901–1099px: persistent sidebar, narrower content, comparison scrolls within its own container.
+- ≤900px (ADR 0008): sidebar becomes compact header/navigation, forms go single-column, tables scroll in their own container, dialogs near full width, 待处理 splits list and detail into separate screens.
+- Mobile ≤760px: additionally tighter spacing, remaining panels stack, 44px touch targets, no body horizontal scrolling.
 - Touch: all actions explicit, no tooltips as the sole instruction.
 
 ## Interaction states

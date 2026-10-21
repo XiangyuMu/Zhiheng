@@ -15,6 +15,17 @@ from zhiheng.conclusions.relations import relation_explanation, relation_kind
 from zhiheng.core.ids import json_text, new_id, sha256_json
 
 
+def relation_etag(relation_id: str, status: str, left_version: Any, right_version: Any) -> str:
+    return sha256_json(
+        {
+            "id": relation_id,
+            "status": status,
+            "left_version": int(left_version),
+            "right_version": int(right_version),
+        }
+    )
+
+
 class ConclusionRepository:
     @staticmethod
     def _event_timestamp() -> str:
@@ -390,6 +401,22 @@ class ConclusionRepository:
             session, owner, key, {"entry_id": entry_id, "etag": etag, "decision": decision}, result
         )
 
+    def restore_draft(self, session: Session, owner: str, entry_id: str) -> dict[str, Any]:
+        """Return a deferred draft to the pending queue unchanged."""
+        restored = cast(
+            CursorResult[Any],
+            session.execute(
+                text(
+                    "UPDATE conclusion_entries SET status='draft' "
+                    "WHERE id=:id AND owner_user_id=:o AND status='deferred'"
+                ),
+                {"id": entry_id, "o": owner},
+            ),
+        )
+        if restored.rowcount != 1:
+            raise ValueError("deferred conclusion not found")
+        return {"id": entry_id, "status": "draft"}
+
     def context(self, session: Session, owner: str, query: str) -> list[dict[str, Any]]:
         ConclusionApplicabilityService().sweep(session)
         rows = session.execute(
@@ -524,11 +551,12 @@ class ConclusionRepository:
             if duplicate is not None:
                 continue
             relation_id = new_id()
+            created_at = self._event_timestamp()
             session.execute(
                 text(
                     "INSERT INTO conclusion_relations "
-                    "(id,owner_user_id,left_id,right_id,kind,status,left_version,right_version) "
-                    "VALUES (:id,:o,:left,:right,:kind,'proposed',:lv,:rv)"
+                    "(id,owner_user_id,left_id,right_id,kind,status,left_version,right_version,"
+                    "created_at) VALUES (:id,:o,:left,:right,:kind,'proposed',:lv,:rv,:created_at)"
                 ),
                 {
                     "id": relation_id,
@@ -538,6 +566,7 @@ class ConclusionRepository:
                     "kind": kind,
                     "lv": item["version"],
                     "rv": old_payload.get("version", 1),
+                    "created_at": created_at,
                 },
             )
             session.execute(
@@ -556,7 +585,7 @@ class ConclusionRepository:
                     "rv": old_payload.get("version", 1),
                     "ls": item["source"]["id"],
                     "rs": row["source_id"],
-                    "created_at": self._event_timestamp(),
+                    "created_at": created_at,
                 },
             )
             proposals.append(
@@ -571,6 +600,10 @@ class ConclusionRepository:
                     "left_source_id": item["source"]["id"],
                     "right_source_id": row["source_id"],
                     "explanation": relation_explanation(kind),
+                    "created_at": created_at,
+                    "etag": relation_etag(
+                        relation_id, "proposed", item["version"], old_payload.get("version", 1)
+                    ),
                 }
             )
         self._write(session, owner, operation_key, {"entry_id": entry_id}, {"items": proposals})
@@ -673,6 +706,13 @@ class ConclusionRepository:
                     "left_claim": left_payload.get("claim"),
                     "right_claim": right_payload.get("claim"),
                     "explanation": relation_explanation(str(row["kind"])),
+                    "created_at": row["created_at"],
+                    "etag": relation_etag(
+                        str(row["id"]),
+                        str(row["status"]),
+                        row["left_version"],
+                        row["right_version"],
+                    ),
                     "history": history_by_relation.get(str(row["id"]), []),
                 }
             )
@@ -825,3 +865,49 @@ class ConclusionRepository:
         return self._write(
             session, owner, key, {"relation_id": relation_id, "decision": decision}, result
         )
+
+    def restore_relation(self, session: Session, owner: str, relation_id: str) -> dict[str, Any]:
+        """Return a deferred relation suggestion to review and record it in history."""
+        row = (
+            session.execute(
+                text(
+                    "SELECT r.*, le.source_id AS left_source_id, re.source_id AS right_source_id "
+                    "FROM conclusion_relations r "
+                    "JOIN conclusion_entries le ON le.id=r.left_id AND le.owner_user_id=r.owner_user_id "
+                    "JOIN conclusion_entries re ON re.id=r.right_id AND re.owner_user_id=r.owner_user_id "
+                    "WHERE r.id=:id AND r.owner_user_id=:o AND r.status='deferred'"
+                ),
+                {"id": relation_id, "o": owner},
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            raise ValueError("deferred relation not found")
+        session.execute(
+            text(
+                "UPDATE conclusion_relations SET status='proposed' "
+                "WHERE id=:id AND owner_user_id=:o AND status='deferred'"
+            ),
+            {"id": relation_id, "o": owner},
+        )
+        session.execute(
+            text(
+                "INSERT INTO conclusion_relation_events "
+                "(id,relation_id,owner_user_id,from_status,to_status,actor_user_id,"
+                "left_version,right_version,left_source_id,right_source_id,created_at) "
+                "VALUES (:id,:relation,:o,'deferred','proposed',:actor,:lv,:rv,:ls,:rs,:created_at)"
+            ),
+            {
+                "id": new_id(),
+                "relation": relation_id,
+                "o": owner,
+                "actor": owner,
+                "lv": row["left_version"],
+                "rv": row["right_version"],
+                "ls": row["left_source_id"],
+                "rs": row["right_source_id"],
+                "created_at": self._event_timestamp(),
+            },
+        )
+        return {"id": relation_id, "status": "proposed"}

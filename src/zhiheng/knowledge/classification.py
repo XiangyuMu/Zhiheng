@@ -23,6 +23,20 @@ class ClassificationNode:
     status: str
 
 
+# Knowledge `ko` is unclassified until it has a confirmed classification or the
+# user has confirmed its primary domain (approving the suggested domain counts).
+UNCLASSIFIED_SQL = """
+    NOT EXISTS (
+      SELECT 1 FROM knowledge_classifications kc
+      WHERE kc.knowledge_object_id = ko.id AND kc.confirmation_status = 'confirmed'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM classification_change_events ce
+      WHERE ce.knowledge_object_id = ko.id AND ce.source = 'user'
+    )
+"""
+
+
 # What blocks deleting a classification: child classifications, or confirmed
 # knowledge classified directly into it. There is no lifecycle filter: knowledge in
 # the recycle bin counts because it can be restored and deleting its classification
@@ -428,28 +442,45 @@ class ClassificationRepository:
         ]
 
     def unclassified(
-        self, session: Session, *, user_id: str, limit: int, offset: int
+        self,
+        session: Session,
+        *,
+        user_id: str,
+        limit: int,
+        offset: int,
+        include_deferred: bool = False,
     ) -> list[dict[str, Any]]:
         rows = session.execute(
             text(
-                """
+                f"""
                 SELECT ko.id AS knowledge_object_id, ko.title, ko.primary_domain_id,
                        ko.lifecycle_status, ko.object_kind, ko.updated_at,
                        (SELECT substr(c.text, 1, 500) FROM chunks c
-                        WHERE c.source_id = ko.id ORDER BY c.chunk_no LIMIT 1) AS excerpt
+                        WHERE c.source_id = ko.id ORDER BY c.chunk_no LIMIT 1) AS excerpt,
+                       EXISTS (
+                         SELECT 1 FROM unclassified_deferrals ud
+                         WHERE ud.owner_user_id = ko.owner_user_id
+                           AND ud.knowledge_object_id = ko.id
+                       ) AS deferred
                 FROM knowledge_objects ko
                 WHERE ko.owner_user_id = :user_id
                   AND ko.lifecycle_status NOT IN ('privacy_erased', 'soft_deleted')
-                  AND NOT EXISTS (
-                    SELECT 1 FROM knowledge_classifications kc
-                    WHERE kc.knowledge_object_id = ko.id
-                      AND kc.confirmation_status = 'confirmed'
-                  )
+                  AND {UNCLASSIFIED_SQL}
+                  AND (:include_deferred = 1 OR NOT EXISTS (
+                    SELECT 1 FROM unclassified_deferrals ud
+                    WHERE ud.owner_user_id = ko.owner_user_id
+                      AND ud.knowledge_object_id = ko.id
+                  ))
                 ORDER BY ko.updated_at DESC, ko.id DESC
                 LIMIT :limit OFFSET :offset
                 """
             ),
-            {"user_id": user_id, "limit": limit, "offset": offset},
+            {
+                "user_id": user_id,
+                "limit": limit,
+                "offset": offset,
+                "include_deferred": int(include_deferred),
+            },
         ).mappings()
         active = {
             str(domain_id)
@@ -457,27 +488,136 @@ class ClassificationRepository:
                 text("SELECT id FROM domain_catalog WHERE status = 'active'")
             ).scalars()
         }
+        rejected = self.rejected_suggestions(session, user_id=user_id)
         items = []
         for row in rows:
             item = dict(row)
             excerpt = str(item.pop("excerpt") or "")
-            item["suggested_primary_domain_id"] = _suggested_domain(
-                str(item["primary_domain_id"]), str(item["title"]), excerpt, active
+            item["deferred"] = bool(item["deferred"])
+            item["suggested_primary_domain_id"] = suggested_primary_domain(
+                str(item["primary_domain_id"]),
+                str(item["title"]),
+                excerpt,
+                active,
+                rejected.get(str(item["knowledge_object_id"]), frozenset()),
             )
             items.append(item)
         return items
 
+    def defer_unclassified(
+        self, session: Session, *, user_id: str, knowledge_id: str
+    ) -> dict[str, Any]:
+        """Set the item's suggestion aside until the user restores it; nothing is assigned."""
+        self._require_owned_knowledge(session, user_id=user_id, knowledge_id=knowledge_id)
+        session.execute(
+            text(
+                """
+                INSERT INTO unclassified_deferrals (owner_user_id, knowledge_object_id, deferred_at)
+                VALUES (:owner, :knowledge, CURRENT_TIMESTAMP)
+                ON CONFLICT (owner_user_id, knowledge_object_id)
+                DO UPDATE SET deferred_at = CURRENT_TIMESTAMP
+                """
+            ),
+            {"owner": user_id, "knowledge": knowledge_id},
+        )
+        return {"knowledge_object_id": knowledge_id, "status": "deferred"}
 
-def _suggested_domain(current: str, title: str, excerpt: str, active: set[str]) -> str | None:
-    """Keep an item's catalog domain; otherwise suggest one for the user to approve."""
+    def reject_suggested_domain(
+        self, session: Session, *, user_id: str, knowledge_id: str, domain_id: str
+    ) -> dict[str, Any]:
+        """The user rejects the suggested domain: nothing is assigned and it is not suggested
+        again, so the item stays unclassified until the user chooses a domain."""
+        self._require_owned_knowledge(session, user_id=user_id, knowledge_id=knowledge_id)
+        session.execute(
+            text(
+                """
+                INSERT INTO classification_change_events
+                  (id, knowledge_object_id, actor_user_id, action, before_json, after_json,
+                   source, request_id)
+                VALUES (:id, :knowledge_id, :user_id, 'suggestion_rejected', :before, :after,
+                        'user_rejected', NULL)
+                """
+            ),
+            {
+                "id": new_id(),
+                "knowledge_id": knowledge_id,
+                "user_id": user_id,
+                "before": json_text({"suggested_primary_domain_id": domain_id}),
+                "after": json_text({"rejected_primary_domain_id": domain_id}),
+            },
+        )
+        return {
+            "knowledge_object_id": knowledge_id,
+            "status": "suggestion_rejected",
+            "rejected_primary_domain_id": domain_id,
+        }
+
+    @staticmethod
+    def rejected_suggestions(session: Session, *, user_id: str) -> dict[str, frozenset[str]]:
+        """Suggested domains the user rejected, per knowledge object."""
+        rows = session.execute(
+            text(
+                """
+                SELECT e.knowledge_object_id,
+                       json_extract(e.after_json, '$.rejected_primary_domain_id') AS domain_id
+                FROM classification_change_events e
+                JOIN knowledge_objects ko ON ko.id = e.knowledge_object_id
+                WHERE ko.owner_user_id = :user_id AND e.action = 'suggestion_rejected'
+                  AND json_extract(e.after_json, '$.rejected_primary_domain_id') IS NOT NULL
+                """
+            ),
+            {"user_id": user_id},
+        ).all()
+        rejected: dict[str, set[str]] = {}
+        for knowledge_id, domain_id in rows:
+            rejected.setdefault(str(knowledge_id), set()).add(str(domain_id))
+        return {knowledge_id: frozenset(domains) for knowledge_id, domains in rejected.items()}
+
+    def restore_unclassified(
+        self, session: Session, *, user_id: str, knowledge_id: str
+    ) -> dict[str, Any]:
+        self._require_owned_knowledge(session, user_id=user_id, knowledge_id=knowledge_id)
+        session.execute(
+            text(
+                "DELETE FROM unclassified_deferrals "
+                "WHERE owner_user_id = :owner AND knowledge_object_id = :knowledge"
+            ),
+            {"owner": user_id, "knowledge": knowledge_id},
+        )
+        return {"knowledge_object_id": knowledge_id, "status": "pending"}
+
+    @staticmethod
+    def _require_owned_knowledge(session: Session, *, user_id: str, knowledge_id: str) -> None:
+        found = session.execute(
+            text(
+                "SELECT 1 FROM knowledge_objects WHERE id = :id AND owner_user_id = :owner "
+                "AND lifecycle_status NOT IN ('privacy_erased', 'soft_deleted')"
+            ),
+            {"id": knowledge_id, "owner": user_id},
+        ).scalar_one_or_none()
+        if found is None:
+            raise ValueError("knowledge not found")
+
+
+def suggested_primary_domain(
+    current: str,
+    title: str,
+    excerpt: str,
+    active: set[str],
+    rejected: frozenset[str] = frozenset(),
+) -> str | None:
+    """Keep an item's catalog domain; otherwise suggest one for the user to approve.
+
+    A domain the user rejected for this item is never suggested again.
+    """
     if current in active:
-        return current
+        return None if current in rejected else current
     # Imported here: zhiheng.conclusions imports zhiheng.knowledge at module load.
     from zhiheng.conclusions.classification import suggest_classification
 
     suggested = suggest_classification(title=title, claim=excerpt, domain_id="")
     domain_id = str(suggested["primary_domain_id"])
-    return domain_id if domain_id in active else None
+    return domain_id if domain_id in active and domain_id not in rejected else None
 
 
 def _deletable(child_count: int, direct_knowledge_count: int) -> bool:
@@ -485,4 +625,4 @@ def _deletable(child_count: int, direct_knowledge_count: int) -> bool:
     return child_count == 0 and direct_knowledge_count == 0
 
 
-__all__ = ["ClassificationNode", "ClassificationRepository"]
+__all__ = ["UNCLASSIFIED_SQL", "ClassificationNode", "ClassificationRepository"]

@@ -10,7 +10,7 @@ const evidenceRoot = path.dirname(output);
 
 const requirements = {
   review: {
-    path: "review-center-issue9/checks.json",
+    path: "pending-issue9/checks.json",
     labels: [
       "review queue shows the draft count and full draft detail",
       "unapproved draft is restored after closing and re-login",

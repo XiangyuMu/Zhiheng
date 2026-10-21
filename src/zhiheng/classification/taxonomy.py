@@ -383,7 +383,131 @@ class TaxonomyRepository:
             return None
         result = self._proposal_row(row)
         result["etag"] = proposal_etag(result)
+        result["history"] = [
+            {
+                "action": str(event["action"]),
+                "payload": json.loads(str(event["payload_json"])),
+                "created_at": event["created_at"],
+            }
+            for event in session.execute(
+                text(
+                    """
+                    SELECT action, payload_json, created_at FROM taxonomy_proposal_events
+                    WHERE proposal_id = :id AND owner_user_id = :owner
+                    ORDER BY created_at, rowid
+                    """
+                ),
+                {"id": proposal_id, "owner": user_id},
+            ).mappings()
+        ]
         return result
+
+    def reject_proposal(
+        self,
+        session: Session,
+        *,
+        user_id: str,
+        proposal_id: str,
+        expected_etag: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """Close a proposal without touching any assignment; the proposal and reason stay."""
+        return self._transition(
+            session,
+            user_id=user_id,
+            proposal_id=proposal_id,
+            expected_etag=expected_etag,
+            from_statuses={"pending", "deferred"},
+            to_status="rejected",
+            event_payload={"reason": reason},
+            decided=True,
+        )
+
+    def defer_proposal(
+        self, session: Session, *, user_id: str, proposal_id: str, expected_etag: str
+    ) -> dict[str, Any]:
+        """Set a proposal aside undecided; nothing is applied and it has no wake-up time."""
+        return self._transition(
+            session,
+            user_id=user_id,
+            proposal_id=proposal_id,
+            expected_etag=expected_etag,
+            from_statuses={"pending"},
+            to_status="deferred",
+            event_payload={},
+            decided=False,
+        )
+
+    def restore_proposal(
+        self, session: Session, *, user_id: str, proposal_id: str, expected_etag: str
+    ) -> dict[str, Any]:
+        """Return a deferred proposal to pending; its creation time is kept."""
+        return self._transition(
+            session,
+            user_id=user_id,
+            proposal_id=proposal_id,
+            expected_etag=expected_etag,
+            from_statuses={"deferred"},
+            to_status="pending",
+            event_payload={},
+            decided=False,
+        )
+
+    def _transition(
+        self,
+        session: Session,
+        *,
+        user_id: str,
+        proposal_id: str,
+        expected_etag: str,
+        from_statuses: set[str],
+        to_status: str,
+        event_payload: dict[str, Any],
+        decided: bool,
+    ) -> dict[str, Any]:
+        proposal = self.get_proposal(session, user_id=user_id, proposal_id=proposal_id)
+        if proposal is None:
+            raise ValueError("taxonomy proposal not found")
+        if proposal["status"] == to_status:
+            return {"proposal_id": proposal_id, "status": to_status, "etag": proposal["etag"]}
+        if proposal["status"] not in from_statuses:
+            raise ValueError(f"taxonomy proposal cannot become {to_status}")
+        if expected_etag != proposal["etag"]:
+            raise ValueError("stale taxonomy proposal")
+        decided_sql = (
+            ", decided_at = CURRENT_TIMESTAMP, decided_by_user_id = :user" if decided else ""
+        )
+        session.execute(
+            text(
+                f"UPDATE taxonomy_proposals SET status = :to, updated_at = CURRENT_TIMESTAMP"
+                f"{decided_sql} WHERE id = :id AND owner_user_id = :owner AND status = :from"
+            ),
+            {
+                "to": to_status,
+                "from": proposal["status"],
+                "id": proposal_id,
+                "owner": user_id,
+                "user": user_id,
+            },
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO taxonomy_proposal_events
+                  (id, proposal_id, owner_user_id, action, payload_json)
+                VALUES (:id, :proposal_id, :owner, :action, :payload)
+                """
+            ),
+            {
+                "id": new_id(),
+                "proposal_id": proposal_id,
+                "owner": user_id,
+                "action": to_status if to_status != "pending" else "restored",
+                "payload": json_text(event_payload),
+            },
+        )
+        etag = proposal_etag({**proposal, "status": to_status})
+        return {"proposal_id": proposal_id, "status": to_status, "etag": etag}
 
     def approve_proposal(
         self,
@@ -397,7 +521,8 @@ class TaxonomyRepository:
         proposal = self.get_proposal(session, user_id=user_id, proposal_id=proposal_id)
         if proposal is None:
             raise ValueError("taxonomy proposal not found")
-        if proposal["status"] != "pending":
+        # Deferring is not a decision: a deferred proposal can still be approved.
+        if proposal["status"] not in {"pending", "deferred"}:
             return proposal
         if expected_etag != proposal["etag"]:
             raise ValueError("stale taxonomy proposal")
@@ -414,7 +539,7 @@ class TaxonomyRepository:
         else:
             raise ValueError("unsupported taxonomy proposal")
         completed = proposal_type not in {"domain_structure", "legacy_migration"} or (
-            not result.get("deferred") and not result.get("conflicts")
+            not result.get("undecided") and not result.get("conflicts")
         )
         if completed:
             session.execute(
@@ -423,10 +548,21 @@ class TaxonomyRepository:
                     UPDATE taxonomy_proposals
                     SET status = 'approved', decided_at = CURRENT_TIMESTAMP,
                         decided_by_user_id = :user, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = :id AND owner_user_id = :owner AND status = 'pending'
+                    WHERE id = :id AND owner_user_id = :owner
+                      AND status IN ('pending', 'deferred')
                     """
                 ),
                 {"id": proposal_id, "owner": user_id, "user": user_id},
+            )
+        else:
+            # Items still need a decision, so the proposal is pending again.
+            session.execute(
+                text(
+                    "UPDATE taxonomy_proposals SET status = 'pending', "
+                    "updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = :id AND owner_user_id = :owner AND status = 'deferred'"
+                ),
+                {"id": proposal_id, "owner": user_id},
             )
         session.execute(
             text(
@@ -577,7 +713,8 @@ class TaxonomyRepository:
         selected = next((item for item in items if str(item["id"]) == knowledge_id), None)
         if selected is None:
             raise ValueError("knowledge is not affected by this proposal")
-        selected["migration_status"] = "selected" if target_domain_id else "deferred"
+        # "undecided" means no target chosen yet; it is not the pending-inbox 延后 state.
+        selected["migration_status"] = "selected" if target_domain_id else "undecided"
         selected["target_domain_id"] = target_domain_id
         payload["decisions"] = {
             str(item["id"]): item.get("target_domain_id")
@@ -701,7 +838,7 @@ class TaxonomyRepository:
                 )
                 created.append(str(item["id"]))
         applied: list[str] = []
-        deferred: list[str] = []
+        undecided: list[str] = []
         affected = proposal["preview"].get(
             "affected_knowledge", proposal["preview"].get("items", [])
         )
@@ -719,7 +856,7 @@ class TaxonomyRepository:
                 continue
             target = decisions.get(knowledge_id)
             if target is None:
-                deferred.append(knowledge_id)
+                undecided.append(knowledge_id)
                 continue
             current = self.knowledge_assignment(session, user_id=user_id, knowledge_id=knowledge_id)
             if (
@@ -790,7 +927,7 @@ class TaxonomyRepository:
             "operation": payload.get("operation", "legacy_migration"),
             "created_domain_ids": created,
             "applied": applied,
-            "deferred": deferred,
+            "undecided": undecided,
             "conflicts": conflicts,
         }
 

@@ -137,12 +137,18 @@ CURRENT_STAGE="import-polling"
 node --test tests/e2e/test_import_polling.cjs >"${OUTPUT_DIR}/import-polling.log" 2>&1
 CURRENT_STAGE="pdf-capability-gate"
 node --test tests/e2e/test_pdf_capability_gate.cjs >"${OUTPUT_DIR}/pdf-capability-gate.log" 2>&1
+CURRENT_STAGE="app-shell"
+node --test tests/e2e/test_app_shell.cjs >"${OUTPUT_DIR}/app-shell.log" 2>&1
+CURRENT_STAGE="pending-page"
+node --test tests/e2e/test_pending_page.cjs >"${OUTPUT_DIR}/pending-page.log" 2>&1
+CURRENT_STAGE="pending-entry-points"
+node --test tests/e2e/test_pending_entry_points.cjs >"${OUTPUT_DIR}/pending-entry-points.log" 2>&1
 run_stage "workspace-full" env ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs "${BASE_URL}" "${OUTPUT_DIR}/workspace-full"
 run_stage "review-relations" node tests/e2e/check_review_relations.cjs "${BASE_URL}" "${OUTPUT_DIR}/relations"
 run_stage "qualification" node tests/e2e/check_qualification.cjs "${BASE_URL}" "${OUTPUT_DIR}/qualification"
 run_stage "delivery-contracts" node tests/e2e/check_delivery_contracts.cjs "${BASE_URL}" "${OUTPUT_DIR}/delivery-contracts"
 run_stage "context-prompts-issue8" node tests/e2e/check_context_prompts_issue8.cjs "${BASE_URL}" "${OUTPUT_DIR}/context-prompts-issue8"
-run_stage "review-center-issue9" node tests/e2e/check_review_center_issue9.cjs "${BASE_URL}" "${OUTPUT_DIR}/review-center-issue9"
+run_stage "pending-issue9" node tests/e2e/check_pending_issue9.cjs "${BASE_URL}" "${OUTPUT_DIR}/pending-issue9"
 run_stage "issue11-upgrade" node tests/e2e/check_issue11_upgrade.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue11-upgrade"
 run_stage "issue12-relations" node tests/e2e/check_issue12_relations.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue12-relations"
 run_stage "issue14-writes" node tests/e2e/check_issue14_writes.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue14-writes"

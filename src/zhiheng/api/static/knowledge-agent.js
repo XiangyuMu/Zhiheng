@@ -113,17 +113,6 @@ function mutate(url, payload, ifMatch = "*") {
 function readCookie(name) {
   return document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) || "";
 }
-async function loadReviewCount() {
-  try {
-    const summary = await fetchJson("/v1/review/summary?limit=500");
-    const count = Number(summary.counts?.total || 0);
-    const badge = $("review-nav-count");
-    badge.textContent = count ? String(count) : "";
-    badge.hidden = count === 0;
-  } catch (_) {
-    // The review link remains usable when its optional count request is unavailable.
-  }
-}
 function navigate(screen, focus = false) {
   const aliases = { "knowledge-library": "library", "model-config": "settings" };
   screen = aliases[screen] || screen;
@@ -227,30 +216,73 @@ function openContextPrompt(prompt) {
   } else values.hidden = true;
   input.value = "";
   inputLabel.hidden = prompt.kind !== "missing" && prompt.kind !== "conflict";
-  $("context-prompt-confirm").hidden = prompt.kind !== "conflict";
+  const conflict = prompt.kind === "conflict";
+  $("context-prompt-confirm").hidden = !conflict;
+  $("context-prompt-skip").textContent = conflict ? "保留已有记录" : "跳过";
   $("context-prompt-supplement").hidden = false;
   $("context-prompt-error").hidden = true;
   const decide = async (decision) => {
-    const body = { decision };
-    if (decision === "confirm" && prompt.candidate_etag) body.candidate_etag = prompt.candidate_etag;
-    if (decision === "supplement") {
-      const text = input.value.trim();
-      if (!text) { $("context-prompt-error").textContent = "请填写需要补充的信息，或选择稍后处理。"; $("context-prompt-error").hidden = false; return; }
-      body.value = { text };
-      body.state_key = prompt.state_key;
-    }
-    await mutate(`/v1/personal-updates/context-prompts/${encodeURIComponent(prompt.id)}/decision`, body);
+    const text = input.value.trim();
+    if (decision === "supplement" && !text) { $("context-prompt-error").textContent = "请填写需要补充的信息，或选择稍后处理。"; $("context-prompt-error").hidden = false; return; }
+    await decideContextPrompt(prompt, decision, text);
     dialog.close();
-    showToast(decision === "defer" ? "已保留为待办。" : "提示已处理。 ");
+    showToast(decision === "defer" ? "已保留为待办。" : "提示已处理。");
   };
   [
-    ["context-prompt-skip", "skip"], ["context-prompt-defer", "defer"],
+    ["context-prompt-skip", conflict ? "reject" : "skip"], ["context-prompt-defer", "defer"],
     ["context-prompt-supplement", "supplement"], ["context-prompt-confirm", "confirm"],
   ].forEach(([id, decision]) => {
     const button = $(id);
     button.onclick = () => busy(button, "处理中…", () => decide(decision));
   });
   dialog.showModal();
+}
+
+// The research dialog is ADR 0002's active prompt, but it decides through exactly the
+// actions 待处理 uses (#85, ADR 0011): defer and skip are inbox actions guarded by the
+// inbox etag; choosing between conflicting records and supplementing go to the same
+// routes as the 待处理 detail.
+const PROMPT_PENDING_TYPES = { conflict: "personal_conflict", missing: "missing_info_prompt" };
+async function pendingPromptItem(prompt) {
+  const params = new URLSearchParams({ type: PROMPT_PENDING_TYPES[prompt.kind], deferred: "include", limit: "500" });
+  const listing = await fetchJson(`/v1/review/items?${params}`);
+  const item = (listing.items || []).find((entry) => entry.id === prompt.id);
+  if (!item) throw new Error("这条提示已经处理过了，请刷新后重试。");
+  return item;
+}
+const inboxAction = (item, verb) => mutate(
+  `/v1/review/items/${encodeURIComponent(item.type)}/${encodeURIComponent(item.id)}/${verb}`, {}, item.etag,
+);
+// The research question needs the prompt again, so a deferred one is restored before it is
+// decided (a deferred item only offers 恢复, ADR 0011); the fresh item carries the etags.
+async function livePromptItem(prompt) {
+  const item = await pendingPromptItem(prompt);
+  if (!item.deferred) return item;
+  await inboxAction(item, "restore");
+  return pendingPromptItem(prompt);
+}
+async function decideContextPrompt(prompt, decision, text) {
+  if (decision === "defer") {
+    const item = await pendingPromptItem(prompt);
+    if (item.deferred) return;
+    await inboxAction(item, "defer");
+    return;
+  }
+  if (decision === "skip") {
+    const item = await livePromptItem(prompt);
+    if (!item.actions.includes("reject")) throw new Error("这条提示不能这样处理，请到待处理中查看。");
+    await inboxAction(item, "reject");
+    return;
+  }
+  if (decision === "confirm" || decision === "reject") {
+    const etag = (await livePromptItem(prompt)).detail?.candidate_etag;
+    if (!etag) throw new Error("这条冲突已经变化，请到待处理中查看。");
+    await mutate(`/v1/personal-updates/conflicts/${encodeURIComponent(prompt.id)}/decision`, { decision }, etag);
+    return;
+  }
+  await mutate(`/v1/personal-updates/context-prompts/${encodeURIComponent(prompt.id)}/decision`, {
+    decision: "supplement", value: { text }, state_key: prompt.state_key,
+  });
 }
 
 function renderMemoryImpact(response) {
@@ -1725,7 +1757,7 @@ async function createClassification(domain, parent) {
   try {
     await send("/v1/classifications", "POST", { domain_id: domain.id, parent_id: parent?.id || null, name });
     showToast(`已新建分类「${name}」。`);
-    await loadClassifications(); renderUnclassified();
+    await loadClassifications();
   } catch (error) { showToast(readableError(error)); }
 }
 async function renameClassification(item) {
@@ -1734,7 +1766,7 @@ async function renameClassification(item) {
   try {
     await send(`/v1/classifications/${encodeURIComponent(item.id)}`, "PATCH", { name });
     showToast(`已重命名为「${name}」。`);
-    await loadClassifications(); renderUnclassified();
+    await loadClassifications();
   } catch (error) { showToast(readableError(error)); }
 }
 async function deleteClassification(item) {
@@ -1744,56 +1776,10 @@ async function deleteClassification(item) {
       "X-CSRF-Token": readCookie("zhiheng_csrf"), "Idempotency-Key": crypto.randomUUID() } });
     if (!response.ok) throw Object.assign(new Error(response.status === 400 ? "请先移走其中的资料或子分类。" : "删除未完成，请重试。"), { status: response.status });
     showToast(`已删除分类「${item.name}」。`);
-    await loadClassifications(); renderUnclassified();
+    await loadClassifications();
   } catch (error) { showToast(readableError(error)); }
 }
-async function loadUnclassified() {
-  try {
-    const response = await fetchJson("/v1/knowledge/unclassified");
-    state.unclassified = response.items || [];
-    renderUnclassified();
-  } catch (error) {
-    $("unclassified-list").replaceChildren(node("li", readableError(error), "muted"));
-  }
-}
-function classificationOptions(domainId) {
-  const domain = (state.taxonomy || []).find((item) => item.id === domainId);
-  const options = [new Option("不选分类（只确认主领域）", "")];
-  const byId = new Map((domain?.nodes || []).map((item) => [item.id, item]));
-  (domain?.nodes || []).filter((item) => item.status === "active").forEach((item) => {
-    const parent = item.parent_id ? byId.get(item.parent_id) : null;
-    options.push(new Option(parent ? `${parent.name} / ${item.name}` : item.name, item.id));
-  });
-  return options;
-}
-function renderUnclassified() {
-  if (!state.unclassified) return;
-  if (!state.unclassified.length) { $("unclassified-list").replaceChildren(node("li", "所有资料都已归类。", "muted")); return; }
-  $("unclassified-list").replaceChildren(...state.unclassified.map((item) => {
-    const li = node("li", undefined, "unclassified-item");
-    const domainSelect = document.createElement("select");
-    domainSelect.setAttribute("aria-label", `${item.title} 的主领域`);
-    domainSelect.append(new Option("选择主领域", ""), ...(state.taxonomy || []).map((domain) => new Option(domain.name, domain.id)));
-    const suggested = item.suggested_primary_domain_id;
-    domainSelect.value = (state.taxonomy || []).some((domain) => domain.id === suggested) ? suggested : "";
-    const nodeSelect = document.createElement("select");
-    nodeSelect.setAttribute("aria-label", `${item.title} 的分类`);
-    const refreshNodes = () => { nodeSelect.replaceChildren(...classificationOptions(domainSelect.value)); nodeSelect.disabled = !domainSelect.value; };
-    domainSelect.addEventListener("change", refreshNodes); refreshNodes();
-    const confirmButton = action("确认归类", () => busy(confirmButton, "保存中…", async () => {
-      if (!domainSelect.value) throw new Error("请先选择主领域。");
-      await send(`/v1/knowledge/${encodeURIComponent(item.knowledge_object_id)}/classifications`, "PUT", {
-        primary_domain_id: domainSelect.value, node_ids: nodeSelect.value ? [nodeSelect.value] : [] });
-      showToast(`「${item.title}」已归类。`);
-      await Promise.all([loadUnclassified(), loadClassifications()]);
-      await loadKnowledge();
-    }).catch((error) => showToast(readableError(error))), "secondary small");
-    li.append(node("strong", item.title), domainSelect, nodeSelect, confirmButton);
-    return li;
-  }));
-}
 $("refresh-classifications").addEventListener("click", () => busy($("refresh-classifications"), "刷新中…", loadClassifications));
-$("refresh-unclassified").addEventListener("click", () => busy($("refresh-unclassified"), "刷新中…", async () => { await loadClassifications(); await loadUnclassified(); }));
 $("add-classification").addEventListener("click", () => {
   const domains = state.taxonomy || [];
   if (!domains.length) { showToast("领域尚未读取，请稍后重试。"); return; }
@@ -1804,5 +1790,4 @@ $("add-classification").addEventListener("click", () => {
 });
 loadKnowledge();
 loadPersistentImportTasks();
-loadClassifications().then(loadUnclassified);
-loadReviewCount();
+loadClassifications();

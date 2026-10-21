@@ -29,26 +29,23 @@ def _draft(client: TestClient, csrf: str, key: str) -> dict[str, Any]:
     return dict(response.json())
 
 
-def test_review_center_summary_exposes_details_and_defer_is_reopenable(tmp_path: Path) -> None:
+def test_review_summary_route_is_gone_and_items_carry_drafts(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
     csrf = _login(client)
     draft = _draft(client, csrf, "review-center")
-    summary = client.get("/v1/review/summary")
-    assert summary.status_code == 200
-    body = summary.json()
-    item = next(item for item in body["conclusions"] if item["id"] == draft["id"])
-    assert item["premises"][0]["text"] == "固定条件"
-    assert item["source"]["text"]
-    assert "relations" in item
+    assert client.get("/v1/review/summary").status_code == 404
+    listing = client.get("/v1/review/items", params={"type": "conclusion_draft"}).json()
+    item = next(item for item in listing["items"] if item["id"] == draft["id"])
     deferred = client.post(
-        f"/v1/conclusions/{draft['id']}/defer",
-        json={},
-        headers=_headers(csrf, "review-center-defer", draft["etag"]),
+        f"/v1/review/items/conclusion_draft/{draft['id']}/defer",
+        headers=_headers(csrf, "review-center-defer", item["etag"]),
     )
     assert deferred.status_code == 200, deferred.text
-    reopened = client.get("/v1/review/summary").json()
-    reopened_item = next(item for item in reopened["conclusions"] if item["id"] == draft["id"])
-    assert reopened_item["status"] == "deferred"
+    assert client.get("/v1/review/counts").json()["by_type"]["conclusion_draft"] == 0
+    reopened = client.get(
+        "/v1/review/items", params={"type": "conclusion_draft", "deferred": "only"}
+    ).json()
+    assert [entry["id"] for entry in reopened["items"]] == [draft["id"]]
 
 
 def test_review_center_page_and_scripts_are_available(tmp_path: Path) -> None:
@@ -56,8 +53,10 @@ def test_review_center_page_and_scripts_are_available(tmp_path: Path) -> None:
     _login(client)
     page = client.get("/review-center")
     assert page.status_code == 200
-    assert "集中审核" in page.text
-    assert "/v1/review/summary" in client.get("/review-center.js").text
+    assert "<h1>待处理</h1>" in page.text
+    script = client.get("/review-center.js").text
+    assert "/v1/review/items" in script
+    assert "/v1/review/counts" in script
 
 
 def test_review_and_context_scripts_send_write_preconditions(tmp_path: Path) -> None:
@@ -68,3 +67,4 @@ def test_review_and_context_scripts_send_write_preconditions(tmp_path: Path) -> 
     assert '"If-Match": etag' in review_script
     assert '"If-Match": ifMatch' in knowledge_script
     assert "/v1/personal-updates/context-prompts/" in knowledge_script
+    assert "/v1/review/items/" in knowledge_script

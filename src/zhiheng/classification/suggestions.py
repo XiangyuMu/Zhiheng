@@ -429,6 +429,24 @@ class ClassificationSuggestionService:
         updated["status"] = "rejected"
         return _suggestion_from_row(updated)
 
+    def list(
+        self, session: Session, *, owner_user_id: str, status: str, limit: int = 100
+    ) -> list[ClassificationSuggestion]:
+        rows = session.execute(
+            text(
+                """
+                SELECT id, knowledge_object_id, owner_user_id, candidate_json,
+                       confidence, explanation, status
+                FROM classification_suggestions
+                WHERE owner_user_id = :owner AND status = :status
+                ORDER BY created_at, id
+                LIMIT :limit
+                """
+            ),
+            {"owner": owner_user_id, "status": status, "limit": limit},
+        ).mappings()
+        return [_suggestion_from_row(cast(Mapping[str, Any], row)) for row in rows]
+
     @staticmethod
     def _owned_suggestion(
         session: Session, suggestion_id: str, owner_user_id: str

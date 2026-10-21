@@ -354,6 +354,14 @@ def design_tokens_css(_user_id: AuthDep) -> FileResponse:
     return _static_file("design-tokens.css", "text/css; charset=utf-8")
 
 
+@router.get("/app-shell.js", include_in_schema=False)
+def app_shell_js(_user_id: AuthDep) -> FileResponse:
+    """Shared workspace sidebar and pending badge used by every workspace page."""
+    response = _static_file("app-shell.js", "text/javascript; charset=utf-8")
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 @router.get("/knowledge-agent.js", include_in_schema=False)
 def knowledge_agent_js(_user_id: AuthDep) -> FileResponse:
     return _static_file("knowledge-agent.js", "text/javascript; charset=utf-8")

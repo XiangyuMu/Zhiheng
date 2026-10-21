@@ -75,34 +75,47 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
       evidence: [{ text: source.text }],
     } });
   }
+  async function openDetail(id) {
+    await page.locator(`button.queue-item[data-entry-id="${id}"]`).click();
+    await page.locator(`#detail[data-ready="conclusion_draft:${id}"]`).waitFor();
+  }
   try {
     await login();
-    const beforeReview = await api("/v1/review/summary?limit=500");
+    const beforeReview = await api("/v1/review/counts");
     const drafts = await Promise.all([0, 1, 2].map(createDraft));
     evidence.drafts = drafts.map((draft) => draft.id);
-    const afterCreate = await api("/v1/review/summary?limit=500");
+    const afterCreate = await api("/v1/review/counts");
 
     // A draft must be visible as a count on the ordinary conversation page, without
     // redirecting the user into the review center or opening a detail automatically.
     await page.goto(`${base}/knowledge-agent#research`);
     await page.locator("#screen-research").waitFor({ state: "visible" });
-    await page.locator("#review-nav-count").waitFor({ state: "visible" });
-    assert(Number(await page.locator("#review-nav-count").innerText()) >= 3);
+    await page.locator("#pending-nav-count").waitFor({ state: "visible" });
+    // The drafts were written from this same page (only the hash changes), so the shared
+    // badge recounts after those writes without a reload. The worker may still add
+    // pending items, so the badge is only a lower bound here.
+    await page.waitForFunction(() => {
+      const text = document.querySelector("#pending-nav-count")?.textContent || "";
+      return text === "99+" || Number(text) >= 3;
+    });
+    const pendingBadge = await page.locator("#pending-nav-count").innerText();
+    const pendingCounts = await api("/v1/review/counts");
     assert(!page.url().includes("/review-center"));
     assert.equal(await page.locator("#detail").count(), 0);
     evidence.navigation = {
       research_url: page.url(),
-      review_badge: Number(await page.locator("#review-nav-count").innerText()),
-      review_summary_total: afterCreate.counts.total,
+      review_badge: pendingBadge,
+      pending_counts_total: pendingCounts.total,
+      pending_total_after_create: afterCreate.total,
       review_not_opened_automatically: true,
     };
 
     await page.goto(`${base}/review-center`);
     await page.locator("#total").waitFor({ state: "visible" });
     await page.locator("#queue").filter({ hasText: `Issue 9 草稿 ${tag}-0` }).waitFor();
-    assert(Number(await page.locator("#conclusion-count").innerText())
-      >= Number(beforeReview.counts?.conclusions || 0) + 3);
-    await page.locator(`button.queue-item[data-entry-id="${drafts[0].id}"]`).click();
+    assert(Number(await page.locator('[data-count="conclusion_draft"]').innerText())
+      >= Number(beforeReview.by_type?.conclusion_draft || 0) + 3);
+    await openDetail(drafts[0].id);
     const firstDetail = await page.locator("#detail").innerText();
     assert(firstDetail.includes(`Issue 9 草稿 ${tag}-0`));
     assert(firstDetail.includes(`固定条件下复习有效 ${tag}-0`));
@@ -128,15 +141,17 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     evidence.recovery.push("draft_restored_after_relogin");
 
     // Keep a stale detail open, mutate through the real API, then verify UI conflict and retry.
-    await page.locator(`button.queue-item[data-entry-id="${drafts[1].id}"]`).click();
+    await openDetail(drafts[1].id);
     const stale = await api(`/v1/conclusions/${drafts[1].id}`);
     await api(`/v1/conclusions/${drafts[1].id}`, { method: "PATCH", body: { claim: `外部更新 ${tag}` },
       headers: { "If-Match": stale.etag } });
+    // 待处理 sends the approval only after its 5 second undo window.
     await page.locator("#detail").getByRole("button", { name: "批准", exact: true }).click();
     await page.locator("#message").filter({ hasText: /变化|changed|版本/ }).waitFor();
+    await page.locator(`button.queue-item[data-entry-id="${drafts[1].id}"] .queue-error`).waitFor();
     evidence.decisions.push("version_conflict_shown");
     await page.locator("#refresh").click();
-    await page.locator(`button.queue-item[data-entry-id="${drafts[1].id}"]`).click();
+    await openDetail(drafts[1].id);
     await page.locator("#detail").getByRole("button", { name: "批准", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     assert.equal((await api(`/v1/conclusions/${drafts[1].id}`)).status, "formal");
@@ -145,7 +160,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
 
     // Open the third draft in the real review UI, cancel revision, wait for a bounded
     // idle period, and then leave the page without selecting an approval action.
-    await page.locator(`button.queue-item[data-entry-id="${drafts[2].id}"]`).click();
+    await openDetail(drafts[2].id);
     const thirdDetail = await page.locator("#detail").innerText();
     assert(thirdDetail.includes(`Issue 9 草稿 ${tag}-2`));
     assert(thirdDetail.includes(`固定条件下复习有效 ${tag}-2`));
@@ -197,7 +212,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
       "closing review without an action does not approve the draft",
       "cancelled revision and bounded idle preserve the pending draft",
     ], evidence, browserErrors }, null, 2));
-    await page.screenshot({ path: path.join(output, "issue9-review-center.png"), fullPage: true });
+    await page.screenshot({ path: path.join(output, "issue9-pending.png"), fullPage: true });
   } catch (error) {
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "failed", evidence,
       browserErrors, error: error.stack || String(error) }, null, 2));

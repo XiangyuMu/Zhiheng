@@ -10,25 +10,8 @@
 <body>
   <a class="skip-link" href="#main-content">跳到主要内容</a>
   <div class="workspace">
-    <aside class="sidebar" aria-label="工作空间导航">
-      <a class="brand" href="/knowledge-agent#research"><span class="brand-mark" aria-hidden="true">知</span><span>知衡<small>研究与知识</small></span></a>
-      <nav class="nav-group" aria-label="研究">
-        <p class="nav-label">工作空间</p>
-        <a class="nav-link" href="#research" data-nav="research" aria-current="page"><span class="nav-icon" aria-hidden="true">◌</span>研究问答</a>
-        <a class="nav-link" href="#library" data-nav="library"><span class="nav-icon" aria-hidden="true">▤</span>资料库<span id="library-nav-count" class="nav-count"></span></a>
-      </nav>
-      <nav class="nav-group" aria-label="工具">
-        <p class="nav-label">更多工具</p>
-        <a class="nav-link" href="#decisions" data-nav="decisions"><span class="nav-icon" aria-hidden="true">⇄</span>方案比较</a>
-          <a class="nav-link" href="/memory-center"><span class="nav-icon" aria-hidden="true">◎</span>个人上下文</a>
-          <a class="nav-link" href="/review-center"><span class="nav-icon" aria-hidden="true">✓</span>集中审核<span id="review-nav-count" class="nav-count" aria-label="待审核数量"></span></a>
-      </nav>
-      <div class="sidebar-footer">
-        <p class="sidebar-note">回到原文，<br />让知识有据可循。</p>
-        <a class="nav-link" href="#settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">⚙</span>设置</a>
-        <a class="nav-link" href="/evolution-center"><span class="nav-icon" aria-hidden="true">↗</span>系统改进</a>
-      </div>
-    </aside>
+    <aside class="sidebar" aria-label="工作空间导航" data-app-sidebar data-current="research"></aside>
+    <script src="/app-shell.js"></script>
     <div class="workspace-body">
       <header class="topbar">
         <p class="topbar-path">工作空间 <span aria-hidden="true">/</span> <strong id="screen-label">研究问答</strong></p>
@@ -108,9 +91,9 @@
                 <div id="classification-tree" class="classification-tree" aria-live="polite"><p class="empty-state">正在读取分类…</p></div>
               </div>
               <div>
-                <div class="section-heading compact-heading"><h3>未分类资料</h3><button id="refresh-unclassified" type="button" class="quiet small">刷新</button></div>
-                <p class="field-help">尚未确认分类的资料会出现在这里，确认后自动移出。</p>
-                <ul id="unclassified-list" class="unclassified-list" aria-live="polite"><li class="muted">正在读取未分类资料…</li></ul>
+                <div class="section-heading compact-heading"><h3>未分类资料</h3></div>
+                <p class="field-help">未分类资料和分类调整都在待处理中确认主领域。</p>
+                <a class="pending-link" data-pending-type="classification" href="/review-center?type=classification">待处理 → 去处理</a>
               </div>
             </div>
           </section>
@@ -179,7 +162,7 @@
       <label>或直接粘贴文本<textarea id="import-text" rows="6" placeholder="一段研究笔记、一篇文章，或需要留存的原文…"></textarea></label>
       <label>重复内容<select id="duplicate-strategy"><option value="skip">检测到重复时跳过</option><option value="new_version">作为新版本导入</option><option value="new_document">另存为新资料</option></select></label>
       <p id="import-error" class="inline-error" role="alert" hidden></p>
-      <p class="field-help">点击添加即确认将内容保存到个人资料库，处理完成后可用于问答。新资料进入“未分类”，在那里确认主领域。</p>
+      <p class="field-help">点击添加即确认将内容保存到个人资料库，处理完成后可用于问答。新资料进入“未分类”，在待处理中确认主领域。</p>
       <div class="dialog-actions"><button type="button" class="secondary" data-close-dialog="import-dialog">暂不添加</button><button id="import-submit" type="submit" class="button">确认添加</button></div>
     </form>
   </dialog>
@@ -237,7 +220,7 @@
     <div id="context-prompt-values" class="notice" hidden></div>
     <label id="context-prompt-input-label" hidden>补充信息<textarea id="context-prompt-input" rows="3" placeholder="填写后只会作为待确认的个人信息处理"></textarea></label>
     <p id="context-prompt-error" class="inline-error" role="alert" hidden></p>
-    <div class="dialog-actions"><button id="context-prompt-skip" type="button" class="secondary">跳过</button><button id="context-prompt-defer" type="button" class="secondary">稍后处理</button><button id="context-prompt-supplement" type="button" class="secondary" hidden>补充并保存</button><button id="context-prompt-confirm" type="button" class="button" hidden>确认当前记录</button></div>
+    <div class="dialog-actions"><button id="context-prompt-skip" type="button" class="secondary">跳过</button><button id="context-prompt-defer" type="button" class="secondary">稍后处理</button><button id="context-prompt-supplement" type="button" class="secondary" hidden>补充并保存</button><button id="context-prompt-confirm" type="button" class="button" hidden>采用新记录</button></div>
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script src="/knowledge-agent.js" defer></script>

@@ -57,6 +57,12 @@ pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 .nav-link[aria-current="page"] { background: #e3eaf8; color: #2b54a1; font-weight: 600; }
 .nav-icon { width: 19px; font-size: 19px; line-height: 1; text-align: center; }
 .nav-count { margin-left: auto; font-size: 11px; color: var(--muted); }
+.nav-label-text { min-width: 0; }
+.nav-badge { min-width: 22px; padding: 1px var(--kb-space-2); border-radius: 999px; background: var(--kb-accent); color: var(--kb-surface); font-weight: 600; line-height: 18px; text-align: center; }
+.nav-badge[hidden] { display: none; }
+/* "N 待处理 → 去处理": the only entry a page keeps for a pending type (#85, ADR 0011). */
+.pending-link { display: inline-flex; align-items: center; min-height: var(--kb-control-height); padding: 0 var(--kb-space-3); border: 1px solid var(--kb-accent); border-radius: var(--kb-radius-md); color: var(--kb-accent); font-weight: 600; text-decoration: none; }
+.pending-link:hover { background: var(--kb-accent); color: var(--kb-surface); }
 .sidebar-footer { margin-top: auto; }
 .sidebar-note { font-size: 12px; line-height: 1.8; color: #77808e; padding: 16px 12px; }
 .workspace-body { min-width: 0; }
@@ -265,10 +271,13 @@ mark { background: #fbebbb; color: #463618; padding: 2px 0; }
 .toast-action { margin-left: 8px; background: transparent; border: 1px solid rgba(255,255,255,.6); color: #fff; border-radius: 6px; padding: 2px 10px; font-size: 13px; cursor: pointer; }
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 50; background: #263347; color: #fff; border-radius: 10px; padding: 13px 20px; font-size: 13px; box-shadow: var(--shadow); max-width: min(560px,calc(100% - 32px)); }
 @media (max-width: 1100px) { .page-content { padding: 32px; } .topbar { padding: 0 28px; } .decision-layout { grid-template-columns: 1fr; } .decision-note { display: none; } .starter-grid { gap: 8px; } button.starter { padding: 14px; } }
-@media (max-width: 760px) {
+/* The shared sidebar collapses into compact navigation at ADR 0008's <=900px breakpoint. */
+@media (max-width: 900px) {
   .workspace { display: block; } .sidebar { position: relative; height: auto; padding: 15px 16px 10px; display: block; border-right: 0; border-bottom: 1px solid var(--line); }
   .brand { margin: 0 0 12px; padding: 0; font-size: 19px; } .brand-mark { width: 32px; height: 34px; font-size: 20px; } .brand small { display: inline; margin-left: 10px; font-size: 10px; }
   .nav-group, .sidebar-footer { display: contents; } .nav-label, .sidebar-note { display: none; } .nav-link { display: inline-flex; font-size: 12px; padding: 8px 10px; min-height: 38px; margin: 1px; gap: 6px; } .nav-icon { font-size: 15px; width: 15px; } .nav-count { font-size: 10px; }
+}
+@media (max-width: 760px) {
   .topbar { min-height: 58px; padding: 10px 20px; } .topbar-path { font-size: 11px; } .topbar-tools .badge { display: none; }
   .page-content { padding: 24px 20px 32px; } .page-heading { margin: 4px 0 24px; } h1 { font-size: 26px; } .page-heading > button { font-size: 12px; padding: 8px 12px; }
   .research-intro { padding-top: 22px; margin-bottom: 25px; } .research-intro h1 { font-size: 27px; } .research-intro .lead { font-size: 13px; }
@@ -300,6 +309,3 @@ mark { background: #fbebbb; color: #463618; padding: 2px 0; }
 .classification-domain summary { cursor: pointer; display: flex; gap: 6px; align-items: baseline; }
 .classification-domain ul { list-style: none; margin: 4px 0 0; padding-left: 18px; }
 .classification-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 3px 0; }
-.unclassified-item { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line, #e3e7ee); }
-.unclassified-item strong { flex: 1 1 100%; }
-.unclassified-item select { max-width: 100%; }
