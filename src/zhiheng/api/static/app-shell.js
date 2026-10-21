@@ -82,6 +82,27 @@
     else link?.removeAttribute("aria-label");
   }
 
+  // Pages that used to handle one pending type only show its count and link to 待处理
+  // filtered to it (#85): `<a data-pending-type="memory_candidate">` becomes
+  // "N 待处理 → 去处理", and `[data-pending-number="memory_candidate"]` shows N.
+  let lastCounts = null;
+  function typeCount(type) {
+    return Math.max(0, Math.floor(Number(lastCounts?.by_type?.[type]) || 0));
+  }
+  function showPendingLinks() {
+    if (!lastCounts) return;
+    document.querySelectorAll("a[data-pending-type]").forEach((link) => {
+      const type = link.dataset.pendingType;
+      link.href = `/review-center?type=${encodeURIComponent(type)}`;
+      link.textContent = `${typeCount(type)} 待处理 → 去处理`;
+      link.dataset.loaded = "true";
+    });
+    document.querySelectorAll("[data-pending-number]").forEach((count) => {
+      count.textContent = String(typeCount(count.dataset.pendingNumber));
+    });
+  }
+  document.addEventListener("DOMContentLoaded", showPendingLinks);
+
   const nativeFetch = window.fetch.bind(window);
   let requestSeq = 0;
   async function refreshPendingCount() {
@@ -93,7 +114,10 @@
       });
       if (!response.ok) return;
       const body = await response.json();
-      if (seq === requestSeq) showPendingCount(body.total);
+      if (seq !== requestSeq) return;
+      lastCounts = body;
+      showPendingCount(body.total);
+      showPendingLinks();
     } catch (_) {
       // The 待处理 link stays usable when its optional count is unavailable.
     }
@@ -132,6 +156,6 @@
   });
 
   document.querySelectorAll("[data-app-sidebar]").forEach(render);
-  window.ZhihengShell = { refreshPendingCount, formatPendingCount };
+  window.ZhihengShell = { refreshPendingCount, formatPendingCount, showPendingLinks };
   refreshPendingCount();
 })();

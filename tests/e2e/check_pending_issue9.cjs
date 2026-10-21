@@ -84,7 +84,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     const beforeReview = await api("/v1/review/counts");
     const drafts = await Promise.all([0, 1, 2].map(createDraft));
     evidence.drafts = drafts.map((draft) => draft.id);
-    const afterCreate = await api("/v1/review/summary?limit=500");
+    const afterCreate = await api("/v1/review/counts");
 
     // A draft must be visible as a count on the ordinary conversation page, without
     // redirecting the user into the review center or opening a detail automatically.
@@ -106,7 +106,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
       research_url: page.url(),
       review_badge: pendingBadge,
       pending_counts_total: pendingCounts.total,
-      review_summary_total: afterCreate.counts.total,
+      pending_total_after_create: afterCreate.total,
       review_not_opened_automatically: true,
     };
 

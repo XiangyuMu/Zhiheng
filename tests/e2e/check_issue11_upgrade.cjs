@@ -44,9 +44,11 @@ fs.mkdirSync(output, { recursive: true });
   }
   try {
     await login();
-    const before = await api("/v1/review/summary?limit=500");
-    const legacy = before.conclusions.find((item) => item.id === "issue11-legacy-entry");
-    assert(legacy, "legacy conclusion was lost during migration");
+    const pendingDrafts = () => api("/v1/review/items?type=conclusion_draft&deferred=include&limit=500");
+    const before = await pendingDrafts();
+    assert(before.items.some((item) => item.id === "issue11-legacy-entry"),
+      "legacy conclusion was lost during migration");
+    const legacy = await api("/v1/conclusions/issue11-legacy-entry");
     assert.equal(legacy.status, "draft");
     const source = await api("/v1/conclusions/sources", { method: "POST", body: { text: "Issue 11 新审核原文" } });
     const draft = await api("/v1/conclusions", { method: "POST", body: {
@@ -73,8 +75,8 @@ fs.mkdirSync(output, { recursive: true });
     const approved = await api(`/v1/conclusions/${draft.id}`);
     assert.equal(approved.status, "formal");
     assert(approvalBody.result.knowledge_id);
-    const after = await api("/v1/review/summary?limit=500");
-    assert(after.conclusions.some((item) => item.id === "issue11-legacy-entry"));
+    const after = await pendingDrafts();
+    assert(after.items.some((item) => item.id === "issue11-legacy-entry"));
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({
       status: "passed",
       checks: [

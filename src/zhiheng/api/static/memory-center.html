@@ -50,7 +50,7 @@
             <div class="tablist" role="tablist" aria-label="记忆分类">
               <button class="tab is-active" id="tab-candidates" role="tab" aria-selected="true" aria-controls="panel-candidates" data-view="candidates">
                 候选
-                <span class="count" data-count="candidates">0</span>
+                <span class="count" data-count="candidates" data-pending-number="memory_candidate">0</span>
               </button>
               <button class="tab" id="tab-formal" role="tab" aria-selected="false" aria-controls="panel-formal" data-view="formal">
                 正式
@@ -89,8 +89,6 @@
 
           <section class="bulk-bar" id="bulk-bar" aria-label="批量操作" hidden>
             <span id="bulk-count">已选择 0 条</span>
-            <button type="button" data-bulk-action="confirm">批量确认</button>
-            <button type="button" data-bulk-action="reject">批量拒绝</button>
             <button type="button" data-bulk-action="delete">批量删除</button>
             <button type="button" data-bulk-action="restore">批量恢复</button>
             <button class="secondary" type="button" id="clear-selection">清除选择</button>
@@ -102,12 +100,12 @@
                 <div>
                   <p class="eyebrow">记忆列表</p>
                   <h2 id="view-title">候选记忆</h2>
-                  <p id="view-description">等待确认的用户记忆，推断内容必须确认后才会生效。</p>
+                  <p id="view-description">记忆候选在待处理中逐条确认，推断内容必须确认后才会生效。</p>
                 </div>
                 <span id="view-badge" class="view-badge">candidate</span>
               </div>
 
-              <div class="view-panel is-active" id="panel-candidates" role="tabpanel" aria-labelledby="tab-candidates" data-panel="candidates"></div>
+              <div class="view-panel is-active" id="panel-candidates" role="tabpanel" aria-labelledby="tab-candidates" data-panel="candidates"><a class="pending-link" data-pending-type="memory_candidate" href="/review-center?type=memory_candidate">待处理 → 去处理</a></div>
               <div class="view-panel" id="panel-formal" role="tabpanel" aria-labelledby="tab-formal" data-panel="formal" hidden></div>
               <div class="view-panel" id="panel-history" role="tabpanel" aria-labelledby="tab-history" data-panel="history" hidden></div>
               <div class="view-panel" id="panel-trash" role="tabpanel" aria-labelledby="tab-trash" data-panel="trash" hidden></div>

@@ -417,7 +417,8 @@ fs.mkdirSync(output, { recursive: true });
       await page.locator('#question').fill('我现在居住在哪个城市？');
       await page.locator('#answer-form button[type="submit"]').click();
       await page.locator('#context-prompt-dialog').waitFor({ state: 'visible', timeout: 20000 });
-      await page.getByRole('button', { name: '跳过' }).last().click();
+      // A conflict offers the same choices as 待处理: keep the existing record.
+      await page.getByRole('button', { name: '保留已有记录' }).last().click();
       await page.locator('#toast').filter({ hasText: '提示已处理' }).waitFor();
       await page.locator('#question').fill('qzxv742919 未记录的天文学结论');
       await page.locator('#answer-form button[type="submit"]').click();

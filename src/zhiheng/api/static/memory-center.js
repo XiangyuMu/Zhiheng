@@ -1,12 +1,8 @@
 const API = {
-  candidates: "/v1/memory/candidates",
   formal: "/v1/memory/formal",
   history: "/v1/memory/history",
   trash: "/v1/memory/trash",
-  confirm: (id) => `/v1/memory/candidates/${encodeURIComponent(id)}/confirm`,
-  editCandidate: (id) => `/v1/memory/candidates/${encodeURIComponent(id)}`,
   editItem: (id) => `/v1/memory/items/${encodeURIComponent(id)}`,
-  reject: (id) => `/v1/memory/candidates/${encodeURIComponent(id)}/reject`,
   deleteItem: (id) => `/v1/memory/items/${encodeURIComponent(id)}`,
   restore: (id) => `/v1/memory/items/${encodeURIComponent(id)}/restore`,
   rollback: (id) => `/v1/memory/items/${encodeURIComponent(id)}/rollback`,
@@ -18,12 +14,11 @@ const API = {
 };
 
 const VIEW_COPY = {
+  // Memory candidates are decided in 待处理 (#85, ADR 0011); this tab only links there.
   candidates: {
     title: "候选记忆",
     badge: "candidate",
-    description: "等待确认的用户记忆，推断内容必须确认后才会生效。",
-    emptyTitle: "暂无候选记忆",
-    emptyCopy: "当前没有等待确认的记忆。Agent 之后提取到偏好、目标或约束时，会先出现在这里。",
+    description: "记忆候选在待处理中逐条确认或拒绝，推断内容必须确认后才会生效。",
   },
   formal: {
     title: "正式记忆",
@@ -70,7 +65,6 @@ const SENSITIVITY_LABELS = {
 const state = {
   activeView: "candidates",
   items: {
-    candidates: [],
     formal: [],
     history: [],
     trash: [],
@@ -384,7 +378,7 @@ function renderAll() {
 function updateCounts() {
   els.counts.forEach((count) => {
     const view = count.dataset.count;
-    count.textContent = String(state.items[view].length);
+    if (state.items[view]) count.textContent = String(state.items[view].length);
   });
 }
 
@@ -418,6 +412,11 @@ function updateViewChrome() {
 }
 
 function renderActiveView() {
+  if (!state.items[state.activeView]) {
+    // The candidates panel keeps its static "N 待处理 → 去处理" link.
+    renderBulkBar();
+    return;
+  }
   const panel = document.querySelector(`[data-panel="${state.activeView}"]`);
   panel.replaceChildren();
 
@@ -505,25 +504,14 @@ function memoryCard(item) {
   const value = el("p", "memory-value", stringifyValue(item.object_json ?? item.value_json ?? item.value ?? item.proposed_value_json));
   const meta = el("dl", "card-meta");
 
-  if (item.view === "candidates") {
-    appendMeta(meta, "提取方式", extractionLabel(item));
-    appendMeta(meta, "生成理由", item.rationale || "后端未返回生成理由");
-    appendMeta(meta, "修改依据", item.change_reason || item.reason || "后端未返回修改依据");
-    appendMeta(meta, "版本绑定证据", evidenceSummary(item));
-    appendMeta(meta, "潜在影响", impactSummary(item));
-    appendMeta(meta, "状态", item.status || "pending");
-    appendMeta(meta, "有效期", validitySummary(item));
-    appendMeta(meta, "置信度依据", confidenceExplanation(item));
-  } else {
-    appendMeta(meta, "当前版本", item.current_version_id || item.version_no || item.version_id || "未返回");
-    appendMeta(meta, "确认批次", item.confirmation_generation || "未返回");
-    appendMeta(meta, "生成/修改依据", basisSummary(item));
-    appendMeta(meta, "版本绑定证据", evidenceSummary(item));
-    appendMeta(meta, "影响", impactSummary(item));
-    appendMeta(meta, "时间", formatTime(item.updated_at || item.created_at || item.decided_at));
-    appendMeta(meta, "有效期", validitySummary(item));
-    appendMeta(meta, "置信度依据", confidenceExplanation(item));
-  }
+  appendMeta(meta, "当前版本", item.current_version_id || item.version_no || item.version_id || "未返回");
+  appendMeta(meta, "确认批次", item.confirmation_generation || "未返回");
+  appendMeta(meta, "生成/修改依据", basisSummary(item));
+  appendMeta(meta, "版本绑定证据", evidenceSummary(item));
+  appendMeta(meta, "影响", impactSummary(item));
+  appendMeta(meta, "时间", formatTime(item.updated_at || item.created_at || item.decided_at));
+  appendMeta(meta, "有效期", validitySummary(item));
+  appendMeta(meta, "置信度依据", confidenceExplanation(item));
 
   const actions = el("div", "card-actions");
   addCardActions(actions, item);
@@ -548,15 +536,6 @@ function memoryCard(item) {
 }
 
 function addCardActions(actions, item) {
-  if (item.view === "candidates") {
-    actions.append(
-      actionButton("确认", () => confirmItem(item)),
-      actionButton("编辑", () => openEditDialog(item), "ghost"),
-      actionButton("拒绝", () => rejectItem(item), "danger"),
-    );
-    return;
-  }
-
   if (item.view === "formal") {
     actions.append(
       actionButton("编辑", () => openEditDialog(item), "ghost"),
@@ -613,13 +592,6 @@ function renderDetail() {
     ["版本绑定证据", evidenceSummary(item)],
     ["影响", impactSummary(item)],
   ];
-
-  if (item.view === "candidates") {
-    fields.push(["提取方式", extractionLabel(item)]);
-    fields.push(["生成理由", item.rationale || "未返回"]);
-    fields.push(["修改依据", item.change_reason || item.reason || "未返回"]);
-    fields.push(["潜在影响", impactSummary(item)]);
-  }
 
   fields.forEach(([label, value]) => appendDetail(label, value));
   addCardActions(els.detailActions, item);
@@ -717,7 +689,6 @@ function renderBulkBar() {
 }
 
 function bulkActionAllowed(action, view) {
-  if (view === "candidates") return action === "confirm" || action === "reject";
   if (view === "formal") return action === "delete";
   if (view === "trash") return action === "restore";
   return false;
@@ -748,14 +719,6 @@ async function handleBulkAction(action) {
   } catch (error) {
     handleMutationError(error);
   }
-}
-
-async function confirmItem(item) {
-  await runMutation(() => mutate(API.confirm(item.id), { item, body: { decision: "confirmed" } }), "已确认，等待后端发布正式批次。");
-}
-
-async function rejectItem(item) {
-  await runMutation(() => mutate(API.reject(item.id), { item, body: { decision: "rejected" } }), "已拒绝候选记忆。");
 }
 
 async function deleteItem(item) {
@@ -810,9 +773,9 @@ function openEditDialog(item) {
   state.editingItem = item;
   els.editValue.value = stringifyValue(item.object_json ?? item.value_json ?? item.value ?? item.proposed_value_json);
   els.editReason.value = "";
-  els.editScope.textContent = item.view === "formal" ? "编辑正式记忆" : "编辑候选";
-  els.editTitle.textContent = item.view === "formal" ? "追加一个正式版本" : "调整候选内容";
-  els.editSubmit.textContent = item.view === "formal" ? "保存为新正式版本" : "保存为新候选版本";
+  els.editScope.textContent = "编辑正式记忆";
+  els.editTitle.textContent = "追加一个正式版本";
+  els.editSubmit.textContent = "保存为新正式版本";
   els.dialog.showModal();
   els.editValue.focus();
 }
@@ -827,8 +790,7 @@ async function submitEdit() {
   if (!item) return;
 
   try {
-    const isFormal = item.view === "formal";
-    await mutate(isFormal ? API.editItem(item.id) : API.editCandidate(item.id), {
+    await mutate(API.editItem(item.id), {
       method: "PATCH",
       item,
       body: {
@@ -837,7 +799,7 @@ async function submitEdit() {
       },
     });
     closeDialog();
-    showToast(isFormal ? "已追加正式记忆版本。" : "已保存为新的候选版本。");
+    showToast("已追加正式记忆版本。");
     await loadAllViews();
   } catch (error) {
     handleMutationError(error);
@@ -909,7 +871,7 @@ function sourceClass(item) {
 
 function extractionLabel(item) {
   const kind = item.candidate_type || item.extraction_kind;
-  if (!kind) return item.view === "candidates" ? "提取方式未返回" : "正式版本";
+  if (!kind) return "正式版本";
   return SOURCE_LABELS[kind] || kind;
 }
 

@@ -17,9 +17,7 @@ from zhiheng.api.memory import (
     get_db_session,
     require_user,
 )
-from zhiheng.conclusions import ConclusionRepository, list_extraction_review_results
-from zhiheng.memory.personal_updates import PersonalUpdateService
-from zhiheng.memory.repository import MemoryRepository
+from zhiheng.conclusions import ConclusionRepository
 from zhiheng.pending import (
     PENDING_TYPES,
     ActionUnavailableError,
@@ -199,30 +197,6 @@ def perform_pending_batch(
     )
     _complete_api_mutation(session, receipt_id, response)
     return response.model_dump()
-
-
-@router.get("/summary")
-def summary(session: SessionDep, user: AuthDep, limit: int = 100) -> dict[str, Any]:
-    bounded = max(1, min(limit, 500))
-    conclusions = ConclusionRepository().list_drafts(session, user, limit=bounded)
-    extraction_runs = list_extraction_review_results(session, user, limit=bounded)
-    conflicts = PersonalUpdateService().list_conflicts(session, limit=bounded)
-    memory_repo = MemoryRepository()
-    for conflict in conflicts:
-        candidate_id = conflict.get("candidate_id")
-        if candidate_id:
-            conflict["candidate_etag"] = memory_repo.candidate_etag(session, str(candidate_id))
-    return {
-        "counts": {
-            "conclusions": len(conclusions),
-            "conflicts": len(conflicts),
-            "total": len(conclusions) + len(conflicts),
-            "extractions": len(extraction_runs),
-        },
-        "conclusions": conclusions,
-        "conflicts": conflicts,
-        "extraction_runs": extraction_runs,
-    }
 
 
 def install_review_routes(app: FastAPI) -> None:

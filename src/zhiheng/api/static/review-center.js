@@ -28,8 +28,13 @@
   const DONE = { approve: "已批准", reject: "已拒绝", defer: "已延后" };
 
   const $ = (id) => document.getElementById(id);
+  // Other pages link here pre-filtered, e.g. /review-center?type=memory_candidate (#85).
+  const initialType = () => {
+    const type = new URLSearchParams(location.search).get("type") || "";
+    return TYPES.includes(type) ? type : "";
+  };
   const state = {
-    type: "",
+    type: initialType(),
     deferred: false,
     order: "oldest",
     items: [],

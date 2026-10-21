@@ -102,10 +102,9 @@ fs.mkdirSync(output, { recursive: true });
     await page.locator(".queue-item").filter({ hasText: "关系建议" }).nth(2).waitFor();
     await check("relation suggestions appear in the central review queue", async () => {
       assert((await page.locator(".queue-item").filter({ hasText: "关系建议" }).count()) >= 3);
-      const review = await apiJson("/v1/review/summary");
-      const target = review.conclusions.flatMap((item) => item.relations || [])
-        .find((relation) => relation.left_claim?.includes("每天复习无效")
-          && relation.right_claim?.includes("每天复习有效"));
+      const review = await apiJson("/v1/review/items?type=relation_suggestion&limit=500");
+      const target = review.items.find((relation) => relation.title?.includes("每天复习无效")
+        && relation.summary?.includes("每天复习有效"));
       assert(target?.id, "expected a relation between the new and formal conclusions");
       await page.locator(`button.queue-item[data-entry-id="${target.id}"]`).click();
       await page.locator(`#detail[data-ready="relation_suggestion:${target.id}"]`).waitFor();

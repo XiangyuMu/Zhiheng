@@ -37,11 +37,11 @@
 | 8 | 明确时间变化保留历史；无法由时间解释的不一致进入冲突 | `memory/personal_updates.py`、冲突查询/上下文提示 | `tests/integration/test_conclusion_applicability.py`、`tests/e2e/check_workspace_full.cjs` | **实现入口+局部测试入口**。真实浏览器脚本有冲突提示，但尚未证明“历史保留+时序更新”完整链路 |
 | 9 | 冲突可确认、补充、稍后处理或跳过；相关回答按条件回答或暂缓，无关回答继续 | `query/conflicts.py`、`api/memory.py`、上下文提示 UI | `tests/integration/test_memory_context.py`、`tests/e2e/check_workspace_full.cjs` | **实现入口+测试入口**。需在最终浏览器运行中保存弹窗选择、持久待办和回答资格证据；关闭/超时不批准仍需明确断言 |
 | 10 | 缺失信息只在实质影响任务时提示，说明原因并允许跳过 | 上下文提示判定和前端提示组件 | `tests/e2e/check_workspace_full.cjs`、相关 memory/context 集成测试 | **部分实现证据**。`check_delivery_contracts.cjs` 通过真实页面与持久化 API 验证延期、跳过、补充和无关回答 |
-| 11 | 普通对话只显示待审核数量；主动打开审核中心后可恢复草稿并执行审核 | `api/static/review-center.*`、`api/conclusions.py` | `tests/integration/test_conclusion_lifecycle.py`、`tests/e2e/check_workspace_full.cjs` | **实现入口+测试入口**。需真实浏览器确认普通对话不被逐条打断、刷新/重新登录后待办仍在 |
+| 11 | 普通对话只在侧栏显示待处理数量；主动打开待处理后可恢复草稿并执行审核 | `api/static/review-center.*`（待处理，ADR 0011）、`api/review.py`（`/v1/review/items`、`/counts`、动作与批量路由）、`api/static/app-shell.js` | `tests/integration/test_pending_inbox.py`、`test_review_center.py`、`tests/e2e/test_pending_page.cjs`、`check_workspace_full.cjs`、`check_pending_issue9.cjs` | **实现入口+测试入口**。旧集中审核与 `/v1/review/summary` 已删除；需真实浏览器确认普通对话不被逐条打断、刷新/重新登录后待办仍在 |
 | 12 | 易变信息相关复用时复核；稳定信息不因时间流逝被改写 | 适用性和个人信息有效期字段 | `tests/integration/test_conclusion_applicability.py`、`tests/integration/test_memory_context.py` | **局部测试入口**。缺少一条明确的浏览器用户场景和“稳定信息不重复询问”证据，属于首版验收待补 |
 | 13 | 唯一主领域、跨域关联；个人档案与经历是独立记录类型；同一条目不重复存储 | `classification/taxonomy.py`、结论分类 API/审核 | `tests/integration/test_topic_taxonomy.py`、`test_conclusion_classification.py` | **实现入口+测试入口**。需在最终浏览器或 HTTP 证据中证明分类与记录类型同时展示且不产生重复正式条目 |
-| 14 | 新条目分类随审核；已有分类及领域结构的变更需批准，历史可追溯 | `classification/suggestions.py`、分类审核和 ETag | `tests/integration/test_conclusion_classification.py`、`test_topic_taxonomy.py`、`test_classification_node_errors.py` | **实现入口+测试入口**。`check_delivery_contracts.cjs` 操作分类中心逐条保存并批准拆分、合并迁移；API 复核待处理归属和历史 |
-| 15 | 旧分类升级逐条迁移；保留原文、条目、前提、来源和历史引用；未批准不改变正式归属 | `classification/taxonomy.py`、迁移预览/批准 API | `tests/integration/test_topic_taxonomy.py` | **局部测试入口**。真实分类中心逐条迁移见 `check_delivery_contracts.cjs`；恢复后引用检查见 restic 集成测试，二者分别保存证据，不冒称浏览器执行了恢复 |
+| 14 | 新条目分类随审核；已有分类及领域结构的变更需批准，历史可追溯 | `classification/suggestions.py`、分类审核和 ETag | `tests/integration/test_conclusion_classification.py`、`test_topic_taxonomy.py`、`test_classification_node_errors.py` | **实现入口+测试入口**。分类中心只显示数量并链接到 `/review-center?type=classification`；`check_delivery_contracts.cjs` 在待处理详情中逐条保存并批准拆分、合并迁移；API 复核待处理归属和历史 |
+| 15 | 旧分类升级逐条迁移；保留原文、条目、前提、来源和历史引用；未批准不改变正式归属 | `classification/taxonomy.py`、迁移预览/批准 API | `tests/integration/test_topic_taxonomy.py` | **局部测试入口**。待处理中的逐条迁移见 `check_delivery_contracts.cjs`；恢复后引用检查见 restic 集成测试，二者分别保存证据，不冒称浏览器执行了恢复 |
 | 16 | 认证、并发版本、删除和恢复边界不退化；删除后派生结果不能复活 | 认证/CSRF/ETag、隐私擦除账本、对象和索引清理、恢复重放 | `tests/integration/test_privacy_physical_erase.py`、`test_answer_replay_authority.py`、`test_restic_restore_install.py`、`test_startup_recovery_barrier.py` | **实现入口+大量测试入口**，历史 `421fbae` 全量已通过；最终 SHA 仍须重跑隐私擦除、restic 恢复和旧快照不复活场景 |
 
 ## 首版新增门禁
@@ -61,7 +61,7 @@
 
 这些能力属于首版产品范围，必须完成实现并取得对应证据：
 
-- 单用户部署下的原始材料保存、结论提炼、前提/来源/分类保存和集中审核。
+- 单用户部署下的原始材料保存、结论提炼、前提/来源/分类保存，以及在待处理中统一审核。
 - 正式知识资格隔离、关系审核、适用性暂停、个人记忆控制、隐私擦除。
 - 确定性分类建议，人工审核后生效；个人档案与经历作为记录类型维度。
 - 真实 API/Worker/浏览器导入检索链路，以及隔离环境备份恢复。
@@ -92,7 +92,9 @@
 
 ## 本轮补齐场景的证据索引
 
-`tests/e2e/check_delivery_contracts.cjs` 通过真实浏览器操作分类审核、回答和上下文提示。
+`tests/e2e/check_delivery_contracts.cjs` 通过真实浏览器在待处理中操作分类审核，并操作回答和上下文提示
+（提示的延后和跳过走与待处理相同的 `/v1/review/items/{type}/{id}/{action}`）。
+个人上下文候选页、资料库未分类列表和分类中心只显示「N 待处理 → 去处理」，由 `tests/e2e/test_pending_entry_points.cjs` 覆盖。
 其逐项结果在 `browser/delivery-contracts/checks.json`；截图、请求错误及失败信息与结果共同保存。
 具体覆盖以该文件中的逐项断言为准，不把登录后的 fetch 结果冒充 UI 操作。
 导入故障中的网络/HTTP 故障注入与真实 Worker 不支持任务必须分别标记。

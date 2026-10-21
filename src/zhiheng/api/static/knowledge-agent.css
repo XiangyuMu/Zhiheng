@@ -60,6 +60,9 @@ pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 .nav-label-text { min-width: 0; }
 .nav-badge { min-width: 22px; padding: 1px var(--kb-space-2); border-radius: 999px; background: var(--kb-accent); color: var(--kb-surface); font-weight: 600; line-height: 18px; text-align: center; }
 .nav-badge[hidden] { display: none; }
+/* "N 待处理 → 去处理": the only entry a page keeps for a pending type (#85, ADR 0011). */
+.pending-link { display: inline-flex; align-items: center; min-height: var(--kb-control-height); padding: 0 var(--kb-space-3); border: 1px solid var(--kb-accent); border-radius: var(--kb-radius-md); color: var(--kb-accent); font-weight: 600; text-decoration: none; }
+.pending-link:hover { background: var(--kb-accent); color: var(--kb-surface); }
 .sidebar-footer { margin-top: auto; }
 .sidebar-note { font-size: 12px; line-height: 1.8; color: #77808e; padding: 16px 12px; }
 .workspace-body { min-width: 0; }
@@ -303,6 +306,3 @@ mark { background: #fbebbb; color: #463618; padding: 2px 0; }
 .classification-domain summary { cursor: pointer; display: flex; gap: 6px; align-items: baseline; }
 .classification-domain ul { list-style: none; margin: 4px 0 0; padding-left: 18px; }
 .classification-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 3px 0; }
-.unclassified-item { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line, #e3e7ee); }
-.unclassified-item strong { flex: 1 1 100%; }
-.unclassified-item select { max-width: 100%; }

@@ -10,20 +10,16 @@
 .kb-page h2 { margin-bottom: 0; font-size: 20px; }
 .kb-page .split { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr); gap: 28px; padding-top: 28px; }
 .kb-page .section-heading { margin-bottom: 12px; }
-.kb-page .domain-list, .kb-page .proposal-list { display: grid; gap: 10px; }
-.kb-page .domain, .kb-page .proposal { border: 1px solid var(--line); border-radius: var(--kb-radius-md); background: var(--surface); padding: 14px 16px; }
+.kb-page .domain-list { display: grid; gap: 10px; }
+.kb-page .domain { border: 1px solid var(--line); border-radius: var(--kb-radius-md); background: var(--surface); padding: 14px 16px; }
 .kb-page .domain { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .kb-page .domain strong { font-size: 15px; }
-.kb-page .domain small, .kb-page .proposal small, .kb-page .empty { color: var(--muted); }
-.kb-page .proposal p { margin-bottom: 7px; line-height: 1.45; }
-.kb-page .migration-list { display: grid; gap: 8px; margin: 12px 0; }
-.kb-page .migration-item { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; }
-.kb-page .migration-item select { min-width: 150px; min-height: var(--kb-control-height); padding: 6px; }
+.kb-page .domain small, .kb-page .empty { color: var(--muted); }
 .kb-page .empty { padding: 12px 0; }
 @media (max-width: 900px) {
   .kb-page .shell { padding: 28px 20px 40px; }
   .kb-page .split { grid-template-columns: 1fr; gap: 20px; }
 }
 @media (max-width: 760px) {
-  .kb-page button, .kb-page .migration-item select { min-height: 44px; }
+  .kb-page button, .kb-page .pending-link { min-height: 44px; }
 }

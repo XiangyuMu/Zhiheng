@@ -98,11 +98,39 @@ const MINIMAL_PDF = Buffer.from(
       return { status: response.status, body };
     }, { url, options });
   }
+  // Taxonomy adjustments are decided in 待处理, item by item (#85, ADR 0011).
+  async function openClassificationInInbox(proposalId) {
+    const entry = page.locator(`button.queue-item[data-entry-id="${proposalId}"]`);
+    if (!new URL(page.url()).pathname.endsWith("/review-center")) {
+      await page.goto(`${base}/review-center?type=classification`);
+    }
+    await entry.click();
+    await page.locator(`#detail[data-ready="classification:${proposalId}"]`).waitFor();
+  }
+  async function saveMigrationInInbox(proposalId, title, targetDomain) {
+    await page.goto(`${base}/review-center?type=classification`);
+    await openClassificationInInbox(proposalId);
+    const line = page.locator("#detail .migration-item").filter({ hasText: title });
+    await line.locator("select").selectOption(targetDomain);
+    await line.getByRole("button", { name: "保存" }).click();
+    await page.locator("#message").filter({ hasText: "迁移决定已保存" }).waitFor();
+  }
+  async function approveMigrationInInbox(proposalId) {
+    await openClassificationInInbox(proposalId);
+    // 待处理 sends the approval after its 5 second undo window.
+    await page.locator("#detail").getByRole("button", { name: "批准", exact: true }).click();
+    await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
+  }
   async function contextPrompts(query) {
     return apiJson(`/v1/personal-updates/context-prompts?query=${encodeURIComponent(query)}`);
   }
-  async function waitForPromptDecision(promptId, clickLocator) {
-    const expectedPath = `/v1/personal-updates/context-prompts/${encodeURIComponent(promptId)}/decision`;
+  // The research dialog decides through the same routes as 待处理 (#85): defer and skip
+  // are inbox actions, a supplement goes to the context-prompt route.
+  const missingPromptAction = (promptId, verb) =>
+    `/v1/review/items/missing_info_prompt/${encodeURIComponent(promptId)}/${verb}`;
+  const promptSupplement = (promptId) =>
+    `/v1/personal-updates/context-prompts/${encodeURIComponent(promptId)}/decision`;
+  async function waitForPromptDecision(expectedPath, clickLocator) {
     const [response] = await Promise.all([
       page.waitForResponse((item) => {
         const url = new URL(item.url());
@@ -204,22 +232,13 @@ const MINIMAL_PDF = Buffer.from(
       );
       assert(affectedIds.has(first));
       assert(affectedIds.has(second));
-      await page.goto(`${base}/taxonomy-center`);
-      await page.locator("main").waitFor();
-      const proposalRow = page.locator(".proposal").filter({ hasText: "Issue 17 browser item-by-item migration" }).first();
-      const firstItem = proposalRow.locator(".migration-item").filter({ hasText: taxonomyTitleA });
-      await firstItem.waitFor();
-      await firstItem.locator("select").selectOption(personalFinanceDomain);
-      await firstItem.getByRole("button", { name: "保存" }).click();
-      await page.locator("#proposal-message").filter({ hasText: "迁移决定已保存" }).waitFor();
+      await saveMigrationInInbox(proposalResult.id, taxonomyTitleA, personalFinanceDomain);
       const staleApproval = await apiRaw(`/v1/taxonomy/proposals/${proposalResult.id}/approve`, {
         method: "POST", headers: { "If-Match": proposalBeforeItemUpdate.etag },
       });
       assert.equal(staleApproval.status, 412);
       assert.match(String(staleApproval.body.detail), /stale/i);
-      const approved = proposalRow.getByRole("button", { name: "批准已确认迁移" }).first();
-      await approved.click();
-      await page.locator("#proposal-message").filter({ hasText: /迁移已批准|仍有条目待处理/ }).waitFor();
+      await approveMigrationInInbox(proposalResult.id);
       const finalProposal = await apiJson(`/v1/taxonomy/proposals/${proposalResult.id}`);
       const finalItems = finalProposal.preview.affected_knowledge || finalProposal.preview.items || [];
       assert.equal(
@@ -299,16 +318,8 @@ const MINIMAL_PDF = Buffer.from(
           reason: "Issue 17 browser merge item-by-item migration",
         },
       });
-      await page.goto(`${base}/taxonomy-center`);
-      await page.locator("main").waitFor();
-      const mergeProposalRow = page.locator(".proposal").filter({ hasText: "Issue 17 browser merge item-by-item migration" }).first();
-      const mergeItem = mergeProposalRow.locator(".migration-item").filter({ hasText: taxonomyTitleC });
-      await mergeItem.waitFor();
-      await mergeItem.locator("select").selectOption(mergedFinanceDomain);
-      await mergeItem.getByRole("button", { name: "保存" }).click();
-      await page.locator("#proposal-message").filter({ hasText: "迁移决定已保存" }).waitFor();
-      await mergeProposalRow.getByRole("button", { name: "批准已确认迁移" }).first().click();
-      await page.locator("#proposal-message").filter({ hasText: /迁移已批准|仍有条目待处理/ }).waitFor();
+      await saveMigrationInInbox(mergeProposal.result.id, taxonomyTitleC, mergedFinanceDomain);
+      await approveMigrationInInbox(mergeProposal.result.id);
       let mergeState = await apiJson(`/v1/taxonomy/proposals/${mergeProposal.result.id}`);
       for (const item of mergeState.preview.affected_knowledge || []) {
         if (item.migration_status === "applied") continue;
@@ -366,7 +377,7 @@ const MINIMAL_PDF = Buffer.from(
       checks.push("new domain conclusion is reviewed and approved through the browser");
       checks.push("inactive domain rejects conclusion creation after migration");
       checks.push("expired taxonomy ETag rejects approval");
-      await shot("taxonomy-center");
+      await shot("taxonomy-pending");
     });
 
     await check("suspended conclusions stay out of context while assumptions remain conditional", async () => {
@@ -435,7 +446,7 @@ const MINIMAL_PDF = Buffer.from(
       const deferredPrompt = (await contextPrompts(deferredQuery)).items.find((item) => item.kind === "missing" && item.status === "pending");
       assert(deferredPrompt);
       assert.equal(deferredPrompt.status, "pending");
-      await waitForPromptDecision(deferredPrompt.id, page.locator("#context-prompt-defer"));
+      await waitForPromptDecision(missingPromptAction(deferredPrompt.id, "defer"), page.locator("#context-prompt-defer"));
       await page.locator("#toast").filter({ hasText: "待办" }).waitFor();
       const deferredState = (await contextPrompts(deferredQuery)).items
         .find((item) => item.id === deferredPrompt.id);
@@ -453,7 +464,7 @@ const MINIMAL_PDF = Buffer.from(
       const supplementPrompt = (await contextPrompts(supplementQuery)).items.find((item) => item.kind === "missing" && item.status === "pending");
       assert(supplementPrompt);
       await page.locator("#context-prompt-input").fill("偏好短反馈");
-      await waitForPromptDecision(supplementPrompt.id, page.locator("#context-prompt-supplement"));
+      await waitForPromptDecision(promptSupplement(supplementPrompt.id), page.locator("#context-prompt-supplement"));
       await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
       assert(!(await contextPrompts(supplementQuery)).items.some((item) => item.id === supplementPrompt.id));
       const supplementedMemory = await apiJson(`/v1/lookups/memory/${encodeURIComponent(supplementPrompt.state_key)}`);
@@ -465,7 +476,7 @@ const MINIMAL_PDF = Buffer.from(
       await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
       const skipPrompt = (await contextPrompts(skipQuery)).items.find((item) => item.kind === "missing" && item.status === "pending");
       assert(skipPrompt);
-      await waitForPromptDecision(skipPrompt.id, page.locator("#context-prompt-skip"));
+      await waitForPromptDecision(missingPromptAction(skipPrompt.id, "reject"), page.locator("#context-prompt-skip"));
       await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
       assert(!(await contextPrompts(skipQuery)).items.some((item) => item.id === skipPrompt.id));
       evidence.missing_information = {

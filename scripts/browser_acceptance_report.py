@@ -720,6 +720,7 @@ def main() -> int:
             "node --test tests/e2e/test_pdf_capability_gate.cjs",
             "node --test tests/e2e/test_app_shell.cjs",
             "node --test tests/e2e/test_pending_page.cjs",
+            "node --test tests/e2e/test_pending_entry_points.cjs",
             "ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs",
             "node tests/e2e/check_review_relations.cjs",
             "node tests/e2e/check_qualification.cjs",

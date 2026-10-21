@@ -128,7 +128,8 @@ fs.mkdirSync(output, { recursive: true });
     const restoredAnswer = await submitQuestion("我现在 issue14 居住在哪个城市？");
     assert.equal(restoredAnswer.context_prompts.find((item) => item.id === promptId)?.id, promptId);
     await page.locator("#context-prompt-dialog").waitFor({ state: "visible", timeout: 20000 });
-    await page.getByRole("button", { name: "跳过" }).click();
+    // A conflict offers the same choices as 待处理: keep the existing record.
+    await page.getByRole("button", { name: "保留已有记录" }).click();
     await page.locator("#toast").filter({ hasText: "提示已处理" }).waitFor();
     const skippedPrompts = await api(`/v1/personal-updates/context-prompts?query=${encodeURIComponent("我现在 issue14 居住在哪个城市？")}`, { method: "GET" });
     assert(!skippedPrompts.items.some((item) => item.id === promptId));
