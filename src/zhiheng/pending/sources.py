@@ -253,6 +253,7 @@ class ExtractionSupplementSource:
                   ON s.id = r.source_id AND s.owner_user_id = r.owner_user_id
                 WHERE r.owner_user_id = :owner
                   AND (r.unrecognized_count > 0 OR r.status = 'failed')
+                  AND r.supplement_resolved_at IS NULL
                 """
             ),
             {"owner": owner},

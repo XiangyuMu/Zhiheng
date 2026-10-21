@@ -14,6 +14,7 @@ from zhiheng.conclusions import (
     get_extraction_review_result,
     list_extraction_review_results,
 )
+from zhiheng.conclusions.extraction import resolve_extraction_supplement
 from zhiheng.core.config import Settings
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
@@ -232,7 +233,7 @@ def supplement_draft(
     if run is None:
         raise HTTPException(404, "extraction run not found")
     try:
-        return repo.create_draft(
+        draft = repo.create_draft(
             session,
             user,
             str(run["source"]["id"]),
@@ -241,6 +242,8 @@ def supplement_draft(
         )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+    resolve_extraction_supplement(session, user, str(run["id"]))
+    return draft
 
 
 @router.post("/{entry_id}/defer")

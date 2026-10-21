@@ -34,11 +34,15 @@ class DeferralStore:
         return {"status": "deferred"}
 
     def restore(self, session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
+        self.clear(session, owner, item.type, item.id)
+        return {"status": "pending"}
+
+    def clear(self, session: Session, owner: str, item_type: str, item_id: str) -> None:
+        """The system needs the item again: it returns to 待处理 (ADR 0011)."""
         session.execute(
             text(
                 "DELETE FROM pending_deferrals "
                 "WHERE owner_user_id = :owner AND item_type = :type AND item_id = :id"
             ),
-            {"owner": owner, "type": item.type, "id": item.id},
+            {"owner": owner, "type": item_type, "id": item_id},
         )
-        return {"status": "pending"}

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from zhiheng.conclusions.repository import ConclusionRepository
 from zhiheng.core.ids import sha256_text
+from zhiheng.pending.deferrals import DeferralStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -387,7 +388,24 @@ class ConversationConclusionDraftService:
             review_items=[],
         )
 
-    def _record_run(
+    def _record_run(self, session: Session, *, history_id: str, **fields: Any) -> None:
+        run_id = f"conversation-extraction:{history_id}"
+        before = _run_result(session, run_id)
+        self._write_run(session, history_id=history_id, **fields)
+        if before is not None and before != _run_result(session, run_id):
+            # A changed result needs a fresh look: it waits in 待处理 again.
+            session.execute(
+                text(
+                    "UPDATE conversation_extraction_runs SET supplement_resolved_at = NULL "
+                    "WHERE id = :id"
+                ),
+                {"id": run_id},
+            )
+            DeferralStore().clear(
+                session, str(fields["owner_user_id"]), "extraction_supplement", run_id
+            )
+
+    def _write_run(
         self,
         session: Session,
         *,
@@ -488,6 +506,38 @@ class ConversationConclusionDraftService:
                     "reason": str(item["reason"])[:1000],
                 },
             )
+
+
+def _run_result(session: Session, run_id: str) -> tuple[Any, ...] | None:
+    """What a run found, without timestamps: a re-run that finds the same is no change."""
+    row = session.execute(
+        text(
+            "SELECT status, extracted_count, unrecognized_count, failure_code, failure_reason "
+            "FROM conversation_extraction_runs WHERE id = :id"
+        ),
+        {"id": run_id},
+    ).one_or_none()
+    if row is None:
+        return None
+    items = session.execute(
+        text(
+            "SELECT kind, excerpt, start_offset, end_offset, reason_code, reason "
+            "FROM conversation_extraction_review_items WHERE run_id = :id ORDER BY id"
+        ),
+        {"id": run_id},
+    ).all()
+    return (tuple(row), tuple(tuple(item) for item in items))
+
+
+def resolve_extraction_supplement(session: Session, owner_user_id: str, run_id: str) -> None:
+    """The user supplemented this run; it no longer waits in 待处理."""
+    session.execute(
+        text(
+            "UPDATE conversation_extraction_runs SET supplement_resolved_at = CURRENT_TIMESTAMP "
+            "WHERE id = :id AND owner_user_id = :owner"
+        ),
+        {"id": run_id, "owner": owner_user_id},
+    )
 
 
 def list_extraction_review_results(
