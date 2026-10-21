@@ -406,9 +406,11 @@ class ClassificationSource:
             {"owner": owner},
         ).mappings()
         rejected = ClassificationRepository.rejected_suggestions(session, user_id=owner)
+        node_suggestions = _suggested_nodes(session, owner)
         items = []
         for row in rows:
             deferred = bool(row["deferred"])
+            nodes = node_suggestions.get(str(row["id"]), [])
             suggestion = suggested_primary_domain(
                 str(row["primary_domain_id"]),
                 str(row["title"]),
@@ -419,6 +421,9 @@ class ClassificationSource:
             # Rejecting rejects the suggested domain; the item stays unclassified.
             actions: tuple[str, ...] = ("approve", "reject") if suggestion else ()
             actions += ("defer",)
+            detail_actions: tuple[str, ...] = () if suggestion else ("choose_domain",)
+            if nodes:
+                detail_actions += ("choose_node",)
             items.append(
                 PendingItem(
                     type=self.type,
@@ -430,12 +435,13 @@ class ClassificationSource:
                             "updated_at": str(row["updated_at"]),
                             "primary_domain_id": row["primary_domain_id"],
                             "suggested_primary_domain_id": suggestion,
+                            "suggested_node_ids": [node["suggestion_id"] for node in nodes],
                             "deferred": deferred,
                         }
                     ),
                     pending_since=to_utc(row["created_at"]),
                     actions=actions,
-                    detail_actions=() if suggestion else ("choose_domain",),
+                    detail_actions=detail_actions,
                     requires_individual_approval=False,
                     deferred=deferred,
                     title=str(row["title"]),
@@ -443,6 +449,7 @@ class ClassificationSource:
                     detail={
                         "primary_domain_id": row["primary_domain_id"],
                         "suggested_primary_domain_id": suggestion,
+                        "suggested_nodes": nodes,
                     },
                 )
             )
@@ -479,6 +486,33 @@ class ClassificationSource:
                 )
             )
         return items
+
+
+def _suggested_nodes(session: Session, owner: str) -> dict[str, list[dict[str, Any]]]:
+    """Pending 分类节点建议 per knowledge object, for nodes that are still active.
+
+    ``expires_at`` is ignored: nothing in 待处理 leaves on a timer (ADR 0011).
+    """
+    rows = session.execute(
+        text(
+            """
+            SELECT s.id AS suggestion_id, s.knowledge_object_id, s.confidence, s.explanation,
+                   n.id AS node_id, n.name, n.path, n.domain_id
+            FROM classification_suggestions s
+            JOIN classification_nodes n
+              ON n.id = json_extract(s.candidate_json, '$.node_id')
+             AND n.owner_user_id = s.owner_user_id AND n.status = 'active'
+            WHERE s.owner_user_id = :owner AND s.status = 'pending'
+            ORDER BY s.confidence DESC, n.path, s.id
+            """
+        ),
+        {"owner": owner},
+    ).mappings()
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        node = dict(row)
+        grouped.setdefault(str(node.pop("knowledge_object_id")), []).append(node)
+    return grouped
 
 
 def _classification_action(action: str) -> ActionHandler:

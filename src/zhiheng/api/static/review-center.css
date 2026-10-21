@@ -54,6 +54,8 @@
 .kb-page .detail section, .kb-page .detail-form { margin-top: var(--kb-space-4); padding-top: var(--kb-space-3); border-top: 1px solid var(--line); }
 .kb-page .detail-form { display: grid; gap: var(--kb-space-3); }
 .kb-page .detail-form button { justify-self: start; }
+.kb-page .suggested-nodes { display: grid; gap: var(--kb-space-2); margin: 0; padding: 0; border: 0; }
+.kb-page .suggested-nodes small { color: var(--kb-text-muted); }
 .kb-page .detail blockquote { margin: var(--kb-space-3) 0; padding-left: var(--kb-space-3); border-left: 3px solid var(--line); }
 .kb-page .back-to-list { display: none; margin-bottom: var(--kb-space-2); padding-left: 0; }
 .kb-page .relation-comparison { display: grid; grid-template-columns: 1fr 1fr; gap: var(--kb-space-4); }

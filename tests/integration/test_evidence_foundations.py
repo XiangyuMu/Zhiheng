@@ -75,7 +75,11 @@ def test_ingest_text_creates_authoritative_rows_fts_and_outbox(tmp_path: Path) -
         mark_formal_knowledge_indexed(session, ingested.knowledge_object_id)
         hits = repository.search_formal_fts(session, "中文 检索")
         outbox_count = session.execute(
-            text("SELECT count(*) FROM outbox_events WHERE status = 'pending'")
+            # Indexing also queues a 分类节点建议 request (#88); count the ingest event.
+            text(
+                "SELECT count(*) FROM outbox_events"
+                " WHERE status = 'pending' AND event_type = 'evidence.ingested'"
+            )
         ).scalar_one()
         current_count = session.execute(
             text("SELECT count(*) FROM current_formal_knowledge")
