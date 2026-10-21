@@ -81,7 +81,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
   }
   try {
     await login();
-    const beforeReview = await api("/v1/review/summary?limit=500");
+    const beforeReview = await api("/v1/review/counts");
     const drafts = await Promise.all([0, 1, 2].map(createDraft));
     evidence.drafts = drafts.map((draft) => draft.id);
     const afterCreate = await api("/v1/review/summary?limit=500");
@@ -114,7 +114,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     await page.locator("#total").waitFor({ state: "visible" });
     await page.locator("#queue").filter({ hasText: `Issue 9 草稿 ${tag}-0` }).waitFor();
     assert(Number(await page.locator('[data-count="conclusion_draft"]').innerText())
-      >= Number(beforeReview.counts?.conclusions || 0) + 3);
+      >= Number(beforeReview.by_type?.conclusion_draft || 0) + 3);
     await openDetail(drafts[0].id);
     const firstDetail = await page.locator("#detail").innerText();
     assert(firstDetail.includes(`Issue 9 草稿 ${tag}-0`));
