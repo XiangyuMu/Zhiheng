@@ -86,13 +86,22 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     // redirecting the user into the review center or opening a detail automatically.
     await page.goto(`${base}/knowledge-agent#research`);
     await page.locator("#screen-research").waitFor({ state: "visible" });
-    await page.locator("#review-nav-count").waitFor({ state: "visible" });
-    assert(Number(await page.locator("#review-nav-count").innerText()) >= 3);
+    await page.locator("#pending-nav-count").waitFor({ state: "visible" });
+    // The drafts were written from this same page (only the hash changes), so the shared
+    // badge recounts after those writes without a reload. The worker may still add
+    // pending items, so the badge is only a lower bound here.
+    await page.waitForFunction(() => {
+      const text = document.querySelector("#pending-nav-count")?.textContent || "";
+      return text === "99+" || Number(text) >= 3;
+    });
+    const pendingBadge = await page.locator("#pending-nav-count").innerText();
+    const pendingCounts = await api("/v1/review/counts");
     assert(!page.url().includes("/review-center"));
     assert.equal(await page.locator("#detail").count(), 0);
     evidence.navigation = {
       research_url: page.url(),
-      review_badge: Number(await page.locator("#review-nav-count").innerText()),
+      review_badge: pendingBadge,
+      pending_counts_total: pendingCounts.total,
       review_summary_total: afterCreate.counts.total,
       review_not_opened_automatically: true,
     };

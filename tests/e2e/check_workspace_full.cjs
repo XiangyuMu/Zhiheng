@@ -420,7 +420,7 @@ fs.mkdirSync(output, { recursive: true });
     });
     await check('every screen fits narrow viewports', async () => {
       await page.setViewportSize({ width: 390, height: 844 });
-      for (const [name, route] of [['research','/knowledge-agent#research'],['library','/knowledge-agent#library'],['comparison','/knowledge-agent#decisions'],['settings','/knowledge-agent#settings'],['context','/memory-center'],['review','/review-center'],['system','/evolution-center'],['login','/login']]) {
+      for (const [name, route] of [['research','/knowledge-agent#research'],['library','/knowledge-agent#library'],['comparison','/knowledge-agent#decisions'],['settings','/knowledge-agent#settings'],['context','/memory-center'],['taxonomy','/taxonomy-center'],['review','/review-center'],['system','/evolution-center'],['login','/login']]) {
         await page.goto(base + route);
         await page.locator('main').waitFor();
         if (name === 'review') {
