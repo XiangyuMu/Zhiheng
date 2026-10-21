@@ -57,7 +57,9 @@ def test_review_center_page_and_scripts_are_available(tmp_path: Path) -> None:
     page = client.get("/review-center")
     assert page.status_code == 200
     assert "<h1>待处理</h1>" in page.text
-    assert "/v1/review/summary" in client.get("/review-center.js").text
+    script = client.get("/review-center.js").text
+    assert "/v1/review/items" in script
+    assert "/v1/review/counts" in script
 
 
 def test_review_and_context_scripts_send_write_preconditions(tmp_path: Path) -> None:

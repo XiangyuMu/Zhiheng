@@ -1,0 +1,387 @@
+// 待处理 page in a real browser (#82, ADR 0011, ADR 0008).
+// Serves the static page without the API server: the inbox API and each type's own
+// endpoints are stubbed so list/detail sync, filters, keyboard triage, undo and the
+// loading/empty/error states are deterministic. Timers are driven with page.clock.
+const { test, before, after, beforeEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { chromium } = require('playwright');
+
+const STATIC_DIR = path.join(__dirname, '..', '..', 'src', 'zhiheng', 'api', 'static');
+const BASE = 'http://pending.test';
+const TYPES = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript' };
+const PENDING_TYPES = [
+  'conclusion_draft', 'relation_suggestion', 'personal_conflict', 'missing_info_prompt',
+  'extraction_supplement', 'memory_candidate', 'classification',
+];
+
+let browser;
+let items;
+let writes;
+let failNext;
+let itemsGate;
+let itemsError;
+
+function item(type, id, title, since, extra = {}) {
+  return {
+    type, id, kind: null, etag: `etag-${id}`, pending_since: since, title, summary: null,
+    actions: ['approve', 'reject', 'defer'], detail_actions: [],
+    requires_individual_approval: false, deferred: false, detail: {}, ...extra,
+  };
+}
+
+function seed() {
+  return [
+    item('conclusion_draft', 'c1', '复习结论', '2026-10-01T00:00:00+00:00',
+      { requires_individual_approval: true }),
+    item('relation_suggestion', 'r1', '左侧结论', '2026-10-02T00:00:00+00:00', {
+      requires_individual_approval: true, summary: '右侧结论',
+      detail: { kind: 'supports', left_id: 'c1', right_id: 'c9', stale: false },
+    }),
+    item('personal_conflict', 'pc1', 'profile.city', '2026-10-03T00:00:00+00:00', {
+      actions: ['defer'], detail_actions: ['confirm', 'reject', 'supplement'],
+      detail: {
+        state_key: 'profile.city', candidate_etag: 'cand-etag',
+        candidate_value: { text: '上海' }, existing_value: { text: '北京' },
+      },
+    }),
+    item('missing_info_prompt', 'mp1', '你的职业是？', '2026-10-04T00:00:00+00:00', {
+      actions: ['reject', 'defer'], detail_actions: ['supplement'], summary: '回答需要职业',
+      detail: { state_key: 'profile.job', payload: { query: '你的职业是？' } },
+    }),
+    item('memory_candidate', 'm1', 'preference.tea', '2026-10-05T00:00:00+00:00', {
+      kind: 'explicit_extracted', summary: '喜欢绿茶', detail: { value: { text: '喜欢绿茶' } },
+    }),
+    item('classification', 'k1', '未分类资料', '2026-10-06T00:00:00+00:00', {
+      kind: 'unclassified', actions: ['defer'], detail_actions: ['choose_domain'],
+      detail: { primary_domain_id: 'unclassified', suggested_primary_domain_id: null },
+    }),
+    item('memory_candidate', 'm2', 'preference.coffee', '2026-09-01T00:00:00+00:00', {
+      kind: 'explicit_extracted', deferred: true, actions: ['restore'],
+    }),
+  ];
+}
+
+const CONCLUSIONS = {
+  c1: {
+    id: 'c1', title: '复习结论', claim: '固定条件下复习有效', status: 'draft', etag: 'etag-c1',
+    premises: [{ text: '固定条件', confirmed: false }], source: { text: '研究原文' },
+    evidence: [{ text: '证据片段' }], classification: { primary_domain_id: 'education_learning' },
+    relations: [],
+  },
+  c9: {
+    id: 'c9', title: '已有结论', claim: '右侧结论', status: 'formal', etag: 'etag-c9',
+    premises: [], source: { text: '另一原文' }, relations: [],
+  },
+};
+
+before(async () => { browser = await chromium.launch(); });
+after(async () => { await browser?.close(); });
+beforeEach(() => {
+  items = seed();
+  writes = [];
+  failNext = null;
+  itemsGate = null;
+  itemsError = null;
+});
+
+function listing(url) {
+  const types = (url.searchParams.get('type') || '').split(',').filter(Boolean);
+  const deferred = url.searchParams.get('deferred') || 'exclude';
+  const selected = items.filter((entry) => (!types.length || types.includes(entry.type))
+    && (deferred === 'include' || entry.deferred === (deferred === 'only')));
+  selected.sort((a, b) => a.pending_since.localeCompare(b.pending_since));
+  if (url.searchParams.get('order') === 'newest') selected.reverse();
+  return { items: selected, total: selected.length, limit: 500, offset: 0, next_offset: null };
+}
+
+function counts() {
+  const byType = Object.fromEntries(PENDING_TYPES.map((type) => [type, 0]));
+  items.filter((entry) => !entry.deferred).forEach((entry) => { byType[entry.type] += 1; });
+  return { total: Object.values(byType).reduce((a, b) => a + b, 0), by_type: byType };
+}
+
+async function open(viewport = { width: 1440, height: 900 }, { clock = true } = {}) {
+  const context = await browser.newContext({ viewport });
+  await context.route(`${BASE}/**`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname.startsWith('/v1/')) {
+      if (request.method() !== 'GET') {
+        writes.push({
+          method: request.method(), path: url.pathname, ifMatch: request.headers()['if-match'],
+          body: request.postData() ? JSON.parse(request.postData()) : null,
+        });
+        if (failNext) {
+          const failure = failNext;
+          failNext = null;
+          return route.fulfill({ status: failure.status, json: { detail: failure.detail } });
+        }
+        const match = url.pathname.match(/^\/v1\/review\/items\/([^/]+)\/([^/]+)\/([^/]+)$/)
+          || url.pathname.match(/^\/v1\/(?:conclusions|memory\/candidates|taxonomy\/proposals)\/([^/]+)\/([^/]+)$/);
+        const id = match && (match.length === 4 ? match[2] : match[1]);
+        items = items.filter((entry) => entry.id !== id);
+        return route.fulfill({ json: { status: 'completed', result: {} } });
+      }
+      if (url.pathname === '/v1/review/items') {
+        if (itemsGate) await itemsGate;
+        if (itemsError) return route.fulfill({ status: 500, json: { detail: itemsError } });
+        return route.fulfill({ json: listing(url) });
+      }
+      if (url.pathname === '/v1/review/counts') return route.fulfill({ json: counts() });
+      if (url.pathname === '/v1/taxonomy') {
+        return route.fulfill({ json: { domains: [
+          { id: 'education_learning', name: '教育学习', status: 'active' },
+          { id: 'health', name: '健康', status: 'active' },
+        ], record_types: [] } });
+      }
+      const conclusion = url.pathname.match(/^\/v1\/conclusions\/([^/]+)$/);
+      if (conclusion && CONCLUSIONS[conclusion[1]]) return route.fulfill({ json: CONCLUSIONS[conclusion[1]] });
+      return route.fulfill({ status: 404, json: { detail: 'not stubbed' } });
+    }
+    const file = url.pathname === '/review-center' ? 'review-center.html' : url.pathname.slice(1);
+    const full = path.join(STATIC_DIR, file);
+    if (!full.startsWith(STATIC_DIR) || !fs.existsSync(full)) return route.fulfill({ status: 404, body: '' });
+    return route.fulfill({ body: fs.readFileSync(full), contentType: TYPES[path.extname(file)] });
+  });
+  const page = await context.newPage();
+  page.errors = [];
+  page.on('pageerror', (error) => page.errors.push(error.message));
+
+  // The fake clock keeps flowing (so Playwright's own polling still runs); runFor jumps
+  // across the undo window without waiting five real seconds.
+  if (clock) await page.clock.install();
+  await page.goto(`${BASE}/review-center`);
+  if (clock) await page.clock.resume();
+  return page;
+}
+
+const selectedId = (page) => page.locator('#queue .queue-item[aria-current="true"]').getAttribute('data-entry-id');
+const ids = (page) => page.locator('#queue .queue-item').evaluateAll((nodes) => nodes.map((node) => node.dataset.entryId));
+
+async function ready(page) {
+  await page.locator('#queue .queue-item').first().waitFor();
+}
+
+test('j/k move through the oldest-first list and the detail follows', async () => {
+  const page = await open();
+  await ready(page);
+  assert.deepEqual(await ids(page), ['c1', 'r1', 'pc1', 'mp1', 'm1', 'k1']);
+  assert.equal(await selectedId(page), 'c1');
+  await page.locator('#detail').filter({ hasText: '固定条件下复习有效' }).waitFor();
+  const detail = await page.locator('#detail').innerText();
+  for (const part of ['假设：固定条件', '研究原文', '证据片段', 'education_learning', '关系']) {
+    assert(detail.includes(part), `conclusion detail shows ${part}`);
+  }
+  await page.keyboard.press('j');
+  assert.equal(await selectedId(page), 'r1');
+  await page.locator('#detail').filter({ hasText: '右侧结论' }).waitFor();
+  await page.keyboard.press('j');
+  await page.locator('#detail').filter({ hasText: '上海' }).waitFor();
+  assert((await page.locator('#detail').innerText()).includes('北京'));
+  await page.keyboard.press('k');
+  assert.equal(await selectedId(page), 'r1');
+  await page.keyboard.press('k');
+  await page.keyboard.press('k');
+  assert.equal(await selectedId(page), 'c1', 'k stops at the first item');
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+test('type keys, deferred view and newest-first order change the list', async () => {
+  const page = await open();
+  await ready(page);
+  assert.equal(await page.locator('#total').innerText(), '6');
+  assert.equal(await page.locator('[data-count="memory_candidate"]').innerText(), '1');
+  await page.keyboard.press('6');
+  await page.waitForFunction(() => document.querySelectorAll('#queue .queue-item').length === 1);
+  assert.deepEqual(await ids(page), ['m1']);
+  assert.equal(await page.locator('.type-filter[data-type="memory_candidate"]').getAttribute('aria-pressed'), 'true');
+  await page.locator('#show-deferred').check();
+  await page.locator('#queue .queue-item[data-entry-id="m2"]').waitFor();
+  assert.deepEqual(await ids(page), ['m2']);
+  await page.locator('#detail [data-action="restore"]').waitFor();
+  await page.locator('#show-deferred').uncheck();
+  await page.keyboard.press('0');
+  await page.waitForFunction(() => document.querySelectorAll('#queue .queue-item').length === 6);
+  await page.locator('#sort-order').selectOption('newest');
+  await page.waitForFunction(() => document.querySelector('#queue .queue-item')?.dataset.entryId === 'k1');
+  assert.deepEqual(await ids(page), ['k1', 'm1', 'mp1', 'pc1', 'r1', 'c1']);
+  await page.context().close();
+});
+
+test('shortcuts are ignored while typing and ? shows the key map', async () => {
+  const page = await open();
+  await ready(page);
+  await page.keyboard.press('j');
+  await page.keyboard.press('j');
+  await page.keyboard.press('j');
+  assert.equal(await selectedId(page), 'mp1');
+  const input = page.locator('#detail textarea');
+  await input.click();
+  await page.keyboard.type('jkard?1');
+  assert.equal(await input.inputValue(), 'jkard?1');
+  assert.equal(await selectedId(page), 'mp1');
+  assert.equal(await page.locator('#undo-toast').isHidden(), true);
+  assert.equal(await page.locator('#shortcut-help').isVisible(), false);
+  assert.deepEqual(writes, []);
+  await page.locator('#detail h2').click();
+  await page.keyboard.press('?');
+  await page.locator('#shortcut-help').waitFor({ state: 'visible' });
+  const help = await page.locator('#shortcut-help').innerText();
+  for (const key of ['j', 'k', 'Enter', 'a', 'r', 'd', 'u', '0', '?']) assert(help.includes(key), `help lists ${key}`);
+  await page.keyboard.press('j');
+  assert.equal(await selectedId(page), 'mp1', 'keys do not act behind the open help');
+  await page.keyboard.press('Escape');
+  await page.locator('#shortcut-help').waitFor({ state: 'hidden' });
+  await page.context().close();
+});
+
+test('unavailable action keys do nothing but show why', async () => {
+  const page = await open();
+  await ready(page);
+  await page.keyboard.press('j');
+  await page.keyboard.press('j');
+  assert.equal(await selectedId(page), 'pc1');
+  await page.locator('#detail').filter({ hasText: '上海' }).waitFor();
+  await page.keyboard.press('a');
+  await page.locator('#message').filter({ hasText: '详情中选择或补充' }).waitFor();
+  await page.keyboard.press('r');
+  assert.equal(await page.locator('#undo-toast').isHidden(), true);
+  assert.equal(await selectedId(page), 'pc1');
+  await page.keyboard.press('7');
+  await page.waitForFunction(() => document.querySelector('#queue .queue-item')?.dataset.entryId === 'k1');
+  await page.locator('#detail select[data-domain-picker]').waitFor();
+  await page.keyboard.press('a');
+  await page.locator('#message').filter({ hasText: 'Enter 选择领域' }).waitFor();
+  await page.keyboard.press('Enter');
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.domainPicker), 'true');
+  assert.deepEqual(writes, []);
+  await page.context().close();
+});
+
+test('a on a conclusion is sent only after the undo window', async () => {
+  const page = await open();
+  await ready(page);
+  await page.locator('#detail').filter({ hasText: '固定条件下复习有效' }).waitFor();
+  await page.keyboard.press('a');
+  await page.locator('#undo-toast').filter({ hasText: '已批准' }).waitFor();
+  assert.deepEqual(await ids(page), ['r1', 'pc1', 'mp1', 'm1', 'k1']);
+  assert.equal(await selectedId(page), 'r1');
+  await page.clock.runFor(4900);
+  assert.deepEqual(writes, [], 'nothing is sent inside the undo window');
+  await page.clock.runFor(200);
+  await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
+  assert.deepEqual(writes.map((write) => [write.method, write.path, write.ifMatch]),
+    [['POST', '/v1/conclusions/c1/approve', 'etag-c1']]);
+  await page.context().close();
+});
+
+test('a on an individually approved item is refused until its detail is shown', async () => {
+  const page = await open();
+  await ready(page);
+  // The relation's detail never finishes loading, so it is never fully shown.
+  await page.route('**/v1/conclusions/c9', () => new Promise(() => {}));
+  await page.keyboard.press('j');
+  await page.keyboard.press('a');
+  await page.locator('#message').filter({ hasText: '先在详情中看完' }).waitFor();
+  assert.equal(await page.locator('#undo-toast').isHidden(), true);
+  assert.equal(await selectedId(page), 'r1');
+  await page.context().close();
+});
+
+test('u undoes within five seconds and nothing is ever sent', async () => {
+  const page = await open();
+  await ready(page);
+  await page.keyboard.press('j');
+  await page.keyboard.press('j');
+  await page.keyboard.press('d');
+  await page.locator('#undo-toast').filter({ hasText: '已延后' }).waitFor();
+  assert.equal((await ids(page)).includes('pc1'), false);
+  await page.clock.runFor(3000);
+  await page.keyboard.press('u');
+  await page.locator('#undo-toast').waitFor({ state: 'hidden' });
+  assert.equal(await selectedId(page), 'pc1');
+  await page.clock.runFor(10000);
+  assert.deepEqual(writes, []);
+  await page.context().close();
+});
+
+test('a failed action returns the item to the list with the reason', async () => {
+  const page = await open();
+  await ready(page);
+  await page.locator('#queue .queue-item[data-entry-id="m1"]').click();
+  failNext = { status: 412, detail: 'version changed' };
+  await page.keyboard.press('r');
+  await page.clock.runFor(5100);
+  await page.locator('#queue .queue-item[data-entry-id="m1"] .queue-error').filter({ hasText: 'version changed' }).waitFor();
+  assert.match(await page.locator('#message').innerText(), /拒绝失败：version changed/);
+  assert.deepEqual(writes.map((write) => [write.path, write.ifMatch, write.body]),
+    [['/v1/memory/candidates/m1/reject', 'etag-m1', { decision: 'rejected' }]]);
+  await page.context().close();
+});
+
+test('defer of a draft goes through the inbox action route', async () => {
+  const page = await open();
+  await ready(page);
+  await page.keyboard.press('d');
+  await page.clock.runFor(5100);
+  await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
+  assert.deepEqual(writes.map((write) => [write.path, write.ifMatch]),
+    [['/v1/review/items/conclusion_draft/c1/defer', 'etag-c1']]);
+  await page.context().close();
+});
+
+test('loading, empty and error states are visible', async () => {
+  let release;
+  itemsGate = new Promise((resolve) => { release = resolve; });
+  let page = await open();
+  await page.locator('#queue .kb-loading').waitFor();
+  assert.equal(await page.locator('#queue').getAttribute('aria-busy'), 'true');
+  release();
+  await ready(page);
+  assert.equal(await page.locator('#queue').getAttribute('aria-busy'), 'false');
+  await page.context().close();
+
+  itemsGate = null;
+  items = [];
+  page = await open();
+  await page.locator('#queue .kb-empty').filter({ hasText: '没有待处理事项' }).waitFor();
+  await page.context().close();
+
+  itemsError = 'database unavailable';
+  page = await open();
+  await page.locator('#queue .kb-error').filter({ hasText: 'database unavailable' }).waitFor();
+  itemsError = null;
+  items = seed();
+  await page.locator('#queue .kb-error button', { hasText: '重试' }).click();
+  await ready(page);
+  await page.context().close();
+});
+
+test('at 390px the list and the detail are separate screens and a works only in the detail', async () => {
+  const page = await open({ width: 390, height: 844 });
+  await ready(page);
+  assert.equal(await page.locator('#detail').isVisible(), false);
+  for (let step = 0; step < 4; step += 1) await page.keyboard.press('j');
+  assert.equal(await selectedId(page), 'm1');
+  await page.keyboard.press('a');
+  await page.locator('#message').filter({ hasText: '打开详情' }).waitFor();
+  assert.equal(await page.locator('#undo-toast').isHidden(), true);
+  await page.keyboard.press('Enter');
+  await page.locator('#detail').filter({ hasText: '喜欢绿茶' }).waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#queue').isVisible(), false);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+  assert(overflow <= 1, `page overflows by ${overflow}px`);
+  await page.keyboard.press('a');
+  await page.locator('#undo-toast').filter({ hasText: '已批准' }).waitFor();
+  await page.keyboard.press('Escape');
+  await page.locator('#queue').waitFor({ state: 'visible' });
+  await page.locator('#queue .queue-item').first().click();
+  await page.locator('#detail').waitFor({ state: 'visible' });
+  await page.locator('#detail .back-to-list').click();
+  await page.locator('#queue').waitFor({ state: 'visible' });
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
