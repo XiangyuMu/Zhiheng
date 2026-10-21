@@ -201,10 +201,11 @@ class ClassificationSuggestionService:
                 text(
                     """
                 SELECT ko.id, ko.title, ko.owner_user_id, eo.media_type,
-                       coalesce(ko.summary, '') AS summary,
+                       coalesce(kv.summary, '') AS summary,
                        coalesce((SELECT group_concat(sc.raw_text, char(10))
                                  FROM serving_chunks sc
-                                 WHERE sc.source_id = ko.id), '') AS body
+                                 WHERE sc.source_type = 'knowledge_object'
+                                   AND sc.source_id = ko.id), '') AS body
                 FROM knowledge_objects ko
                 LEFT JOIN knowledge_versions kv ON kv.id = ko.current_version_id
                 LEFT JOIN content_versions cv ON cv.id = kv.content_version_id
