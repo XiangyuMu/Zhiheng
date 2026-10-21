@@ -8,6 +8,7 @@ registers its handler here and adds the verb to the source's ``actions``.
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -39,6 +40,17 @@ class StalePendingItemError(ValueError):
 
 class ActionUnavailableError(ValueError):
     pass
+
+
+class IndividualApprovalRequiredError(ValueError):
+    """A batch approve named an item that must be approved on its own (ADR 0011)."""
+
+
+@dataclass(frozen=True)
+class BatchTarget:
+    type: str
+    id: str
+    etag: str
 
 
 @dataclass(frozen=True)
@@ -174,3 +186,70 @@ class PendingInbox:
             raise ActionUnavailableError(f"{action} is not available for this item")
         result = dict(handler(session, owner, item))
         return {"type": item_type, "id": item_id, "action": action, **result}
+
+    def perform_batch(
+        self, session: Session, owner: str, action: str, targets: Sequence[BatchTarget]
+    ) -> builtins.list[dict[str, Any]]:
+        """Run one action item by item; a failed item rolls back only itself."""
+        if action == "approve":
+            self._refuse_individual_approvals(session, owner, targets)
+        results = []
+        for target in targets:
+            savepoint = session.begin_nested()
+            try:
+                outcome = self.perform(
+                    session, owner, target.type, target.id, action, target.etag
+                )
+            except (LookupError, ValueError) as exc:
+                savepoint.rollback()
+                results.append(_batch_result(target, "failed", _reason(exc), str(exc), None))
+            else:
+                savepoint.commit()
+                results.append(_batch_result(target, "succeeded", None, None, outcome))
+        return results
+
+    def _refuse_individual_approvals(
+        self, session: Session, owner: str, targets: Sequence[BatchTarget]
+    ) -> None:
+        types = sorted({target.type for target in targets})
+        unknown = [item_type for item_type in types if item_type not in self._sources]
+        if unknown:
+            raise ValueError(f"unknown pending type {unknown[0]}")
+        individual = {
+            (item.type, item.id)
+            for item in self.collect(session, owner, types)
+            if item.requires_individual_approval
+        }
+        for target in targets:
+            if (target.type, target.id) in individual:
+                raise IndividualApprovalRequiredError(
+                    f"{target.type} {target.id} must be approved on its own"
+                )
+
+
+def _reason(exc: Exception) -> str:
+    """One reason code per failure, whatever status each type's own API would use."""
+    if isinstance(exc, PendingItemNotFoundError):
+        return "not_found"
+    if isinstance(exc, StalePendingItemError):
+        return "stale"
+    if isinstance(exc, ActionUnavailableError):
+        return "action_unavailable"
+    return "conflict"
+
+
+def _batch_result(
+    target: BatchTarget,
+    status: str,
+    reason: str | None,
+    message: str | None,
+    result: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "type": target.type,
+        "id": target.id,
+        "status": status,
+        "reason": reason,
+        "message": message,
+        "result": dict(result) if result is not None else None,
+    }

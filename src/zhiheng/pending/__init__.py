@@ -3,6 +3,8 @@
 from .inbox import (
     PENDING_TYPES,
     ActionUnavailableError,
+    BatchTarget,
+    IndividualApprovalRequiredError,
     PendingInbox,
     PendingItem,
     PendingItemNotFoundError,
@@ -12,6 +14,8 @@ from .inbox import (
 __all__ = [
     "PENDING_TYPES",
     "ActionUnavailableError",
+    "BatchTarget",
+    "IndividualApprovalRequiredError",
     "PendingInbox",
     "PendingItem",
     "PendingItemNotFoundError",
