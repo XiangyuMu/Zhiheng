@@ -200,8 +200,10 @@ class ClassificationSuggestionService:
         knowledge = (
             session.execute(
                 text(
-                    """
+                    f"""
                 SELECT ko.id, ko.title, ko.owner_user_id, eo.media_type,
+                       (ko.lifecycle_status <> 'soft_deleted' AND {UNCLASSIFIED_SQL})
+                         AS still_unclassified,
                        coalesce(kv.summary, '') AS summary,
                        coalesce((SELECT group_concat(sc.raw_text, char(10))
                                  FROM serving_chunks sc
@@ -223,6 +225,11 @@ class ClassificationSuggestionService:
             raise ValueError("knowledge object not found")
         if knowledge["owner_user_id"] not in {None, owner_user_id}:
             raise PermissionError("knowledge object is owned by another user")
+        # Checked again here, in the transaction that writes: the item may have been
+        # classified or deleted after the request was queued, and a suggestion written
+        # after classification would never be superseded (#88).
+        if not knowledge["still_unclassified"]:
+            return []
         nodes = [
             ClassificationNode(
                 id=str(row["id"]),

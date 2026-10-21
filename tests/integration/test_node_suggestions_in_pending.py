@@ -53,8 +53,8 @@ def _app(tmp_path: Path) -> tuple[TestClient, Settings]:
     return TestClient(app), settings
 
 
-def _run_worker(client: TestClient, settings: Settings) -> None:
-    """One pass of the worker steps an import goes through, in order."""
+def _index(client: TestClient, settings: Settings) -> None:
+    """The worker steps up to a queued suggestion job."""
     factory = client.app.state.session_factory  # type: ignore[attr-defined]
     process_outbox_once(settings)
     process_knowledge_jobs_once(
@@ -63,9 +63,19 @@ def _run_worker(client: TestClient, settings: Settings) -> None:
         worker_id="test",
     )
     process_outbox_once(settings)
+
+
+def _suggest(client: TestClient) -> None:
+    factory = client.app.state.session_factory  # type: ignore[attr-defined]
     process_classification_jobs_once(
         factory, ClassificationSuggestionJobExecutor(), worker_id="test"
     )
+
+
+def _run_worker(client: TestClient, settings: Settings) -> None:
+    """One pass of the worker steps an import goes through, in order."""
+    _index(client, settings)
+    _suggest(client)
 
 
 def _node(client: TestClient, csrf: str, name: str, key: str = "node") -> dict[str, Any]:
@@ -206,3 +216,37 @@ def test_deferring_the_item_sets_its_node_suggestions_aside_until_restored(
     restored = _item(client, knowledge_id)
     assert [n["node_id"] for n in restored["detail"]["suggested_nodes"]] == [node["id"]]
     assert _suggestion_statuses(client, knowledge_id) == {node["id"]: "pending"}
+
+
+def test_a_queued_request_suggests_nothing_once_the_item_is_classified(tmp_path: Path) -> None:
+    client, settings = _app(tmp_path)
+    csrf = _login(client)
+    node = _node(client, csrf, "哈希表")
+    knowledge_id = _import(client, csrf, "import")
+    _index(client, settings)
+    classified = client.put(
+        f"/v1/knowledge/{knowledge_id}/classifications",
+        json={"primary_domain_id": "computing_engineering", "node_ids": [node["id"]]},
+        headers=_headers(csrf, "classify-first"),
+    )
+    assert classified.status_code == 200, classified.text
+
+    _suggest(client)
+
+    assert _suggestion_statuses(client, knowledge_id) == {}
+
+
+def test_a_queued_request_suggests_nothing_once_the_item_is_deleted(tmp_path: Path) -> None:
+    client, settings = _app(tmp_path)
+    csrf = _login(client)
+    _node(client, csrf, "哈希表")
+    knowledge_id = _import(client, csrf, "import")
+    _index(client, settings)
+    deleted = client.post(
+        f"/v1/knowledge/{knowledge_id}/delete", json={}, headers=_headers(csrf, "delete-first")
+    )
+    assert deleted.status_code == 200, deleted.text
+
+    _suggest(client)
+
+    assert _suggestion_statuses(client, knowledge_id) == {}
