@@ -1,8 +1,9 @@
 """Support the single pending inbox (ADR 0011).
 
 - ``pending_deferrals`` holds 延后 for pending types whose own tables have no
-  deferred state (extraction results needing a supplement, unclassified
-  knowledge). Deleting the row restores the item.
+  deferred state (today: extraction results needing a supplement; unclassified
+  knowledge uses ``unclassified_deferrals`` from 0051). Deleting the row
+  restores the item.
 - ``conclusion_relations.created_at`` records when a relation suggestion became
   pending; existing rows are backfilled from their first history event.
 """
@@ -14,8 +15,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0051_pending_inbox"
-down_revision: str | Sequence[str] | None = "0050_unify_domain_catalog"
+revision = "0052_pending_inbox"
+down_revision: str | Sequence[str] | None = "0051_unclassified_deferrals"
 branch_labels = None
 depends_on = None
 

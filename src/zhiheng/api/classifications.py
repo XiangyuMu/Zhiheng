@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
@@ -12,11 +13,13 @@ from zhiheng.api.knowledge import (
     _begin_api_mutation,
     _complete_operation_receipt,
 )
+from zhiheng.classification.suggestions import ClassificationSuggestionService
 from zhiheng.db.session import session_scope
 from zhiheng.knowledge.classification import ClassificationRepository
 
 router = APIRouter(tags=["classifications"])
 repository = ClassificationRepository()
+suggestions = ClassificationSuggestionService()
 
 
 class ClassificationCreateRequest(BaseModel):
@@ -240,8 +243,138 @@ def list_unclassified(
     user_id: AuthDep,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    include_deferred: bool = Query(default=False),
 ) -> dict[str, Any]:
     with session_scope(session_factory) as session:
         return {
-            "items": repository.unclassified(session, user_id=user_id, limit=limit, offset=offset)
+            "items": repository.unclassified(
+                session,
+                user_id=user_id,
+                limit=limit,
+                offset=offset,
+                include_deferred=include_deferred,
+            )
         }
+
+
+def _unclassified_decision(
+    knowledge_object_id: str,
+    decision: str,
+    session_factory: Any,
+    user_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    with session_scope(session_factory) as session:
+        receipt_id, replay = _begin_api_mutation(
+            session,
+            operation_key=(
+                f"unclassified.{decision}:{user_id}:{knowledge_object_id}:{idempotency_key}"
+            ),
+            operation_type=f"unclassified.{decision}",
+            payload={"knowledge_object_id": knowledge_object_id},
+        )
+        if replay is not None:
+            return replay.result
+        action = (
+            repository.defer_unclassified
+            if decision == "defer"
+            else repository.restore_unclassified
+        )
+        try:
+            result = action(session, user_id=user_id, knowledge_id=knowledge_object_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _complete_operation_receipt(session, receipt_id, status_value="ok", result=result)
+        return result
+
+
+@router.post("/v1/knowledge/{knowledge_object_id}/unclassified/defer")
+def defer_unclassified(
+    knowledge_object_id: str,
+    session_factory: SessionFactoryDep,
+    user_id: AuthDep,
+    idempotency_key: WriteDep,
+) -> dict[str, Any]:
+    return _unclassified_decision(
+        knowledge_object_id, "defer", session_factory, user_id, idempotency_key
+    )
+
+
+@router.post("/v1/knowledge/{knowledge_object_id}/unclassified/restore")
+def restore_unclassified(
+    knowledge_object_id: str,
+    session_factory: SessionFactoryDep,
+    user_id: AuthDep,
+    idempotency_key: WriteDep,
+) -> dict[str, Any]:
+    return _unclassified_decision(
+        knowledge_object_id, "restore", session_factory, user_id, idempotency_key
+    )
+
+
+@router.get("/v1/classification-suggestions")
+def list_classification_suggestions(
+    session_factory: SessionFactoryDep,
+    user_id: AuthDep,
+    status_filter: str = Query(
+        default="pending", alias="status", pattern="^(pending|deferred|accepted|rejected)$"
+    ),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    with session_scope(session_factory) as session:
+        items = suggestions.list(session, owner_user_id=user_id, status=status_filter, limit=limit)
+    return {"items": [asdict(item) for item in items]}
+
+
+@router.post("/v1/classification-suggestions/{suggestion_id}/{decision}")
+def decide_classification_suggestion(
+    suggestion_id: str,
+    decision: str,
+    request_context: Request,
+    session_factory: SessionFactoryDep,
+    user_id: AuthDep,
+    idempotency_key: WriteDep,
+) -> dict[str, Any]:
+    if decision not in {"accept", "reject", "defer", "restore"}:
+        raise HTTPException(status_code=404, detail="unknown decision")
+    with session_scope(session_factory) as session:
+        receipt_id, replay = _begin_api_mutation(
+            session,
+            operation_key=(
+                f"classification-suggestion.{decision}:{user_id}:{suggestion_id}:{idempotency_key}"
+            ),
+            operation_type=f"classification-suggestion.{decision}",
+            payload={"suggestion_id": suggestion_id},
+        )
+        if replay is not None:
+            return replay.result
+        request_id = request_context.headers.get("X-Request-ID")
+        try:
+            if decision == "accept":
+                item = suggestions.accept(
+                    session,
+                    suggestion_id=suggestion_id,
+                    owner_user_id=user_id,
+                    request_id=request_id,
+                )
+            elif decision == "reject":
+                item = suggestions.reject(
+                    session,
+                    suggestion_id=suggestion_id,
+                    owner_user_id=user_id,
+                    request_id=request_id,
+                )
+            elif decision == "defer":
+                item = suggestions.defer(
+                    session, suggestion_id=suggestion_id, owner_user_id=user_id
+                )
+            else:
+                item = suggestions.restore(
+                    session, suggestion_id=suggestion_id, owner_user_id=user_id
+                )
+        except ValueError as exc:
+            code = 404 if "not found" in str(exc) else 409
+            raise HTTPException(status_code=code, detail=str(exc)) from exc
+        result = asdict(item)
+        _complete_operation_receipt(session, receipt_id, status_value="ok", result=result)
+        return result

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from zhiheng.classification.taxonomy import TaxonomyRepository
 from zhiheng.conclusions.repository import ConclusionRepository, relation_etag
 from zhiheng.core.ids import sha256_json
-from zhiheng.knowledge.classification import suggested_primary_domain
+from zhiheng.knowledge.classification import ClassificationRepository, suggested_primary_domain
 from zhiheng.memory.personal_updates import PersonalUpdateService
 from zhiheng.memory.repository import MemoryRepository
 from zhiheng.pending.deferrals import DeferralStore
@@ -330,14 +330,10 @@ class ClassificationSource:
 
     type = "classification"
 
-    def __init__(self, deferrals: DeferralStore) -> None:
-        self._deferrals = deferrals
-
     def items(self, session: Session, owner: str) -> list[PendingItem]:
         return self._unclassified(session, owner) + self._proposals(session, owner)
 
     def _unclassified(self, session: Session, owner: str) -> list[PendingItem]:
-        deferred_ids = self._deferrals.deferred_ids(session, owner, self.type)
         active = {
             str(domain_id)
             for domain_id in session.execute(
@@ -349,7 +345,12 @@ class ClassificationSource:
                 """
                 SELECT ko.id, ko.title, ko.primary_domain_id, ko.created_at, ko.updated_at,
                        (SELECT substr(c.text, 1, 500) FROM chunks c
-                        WHERE c.source_id = ko.id ORDER BY c.chunk_no LIMIT 1) AS excerpt
+                        WHERE c.source_id = ko.id ORDER BY c.chunk_no LIMIT 1) AS excerpt,
+                       EXISTS (
+                         SELECT 1 FROM unclassified_deferrals ud
+                         WHERE ud.owner_user_id = ko.owner_user_id
+                           AND ud.knowledge_object_id = ko.id
+                       ) AS deferred
                 FROM knowledge_objects ko
                 WHERE ko.owner_user_id = :owner
                   AND ko.lifecycle_status NOT IN ('privacy_erased', 'soft_deleted')
@@ -364,7 +365,7 @@ class ClassificationSource:
         ).mappings()
         items = []
         for row in rows:
-            deferred = str(row["id"]) in deferred_ids
+            deferred = bool(row["deferred"])
             suggestion = suggested_primary_domain(
                 str(row["primary_domain_id"]), str(row["title"]), str(row["excerpt"] or ""), active
             )
@@ -400,28 +401,61 @@ class ClassificationSource:
         return items
 
     def _proposals(self, session: Session, owner: str) -> list[PendingItem]:
-        proposals = TaxonomyRepository().list_proposals(
-            session, user_id=owner, status="pending", limit=-1
-        )
-        return [
-            PendingItem(
-                type=self.type,
-                kind="taxonomy_proposal",
-                id=str(proposal["id"]),
-                etag=str(proposal["etag"]),
-                pending_since=instant(proposal["created_at"]),
-                actions=("approve",),
-                requires_individual_approval=False,
-                deferred=False,
-                title=str(proposal["proposal_type"]),
-                summary=str(proposal["payload"].get("reason") or "") or None,
-                detail={
-                    "proposal_type": proposal["proposal_type"],
-                    "target_id": proposal["target_id"],
-                },
+        repository = TaxonomyRepository()
+        proposals = [
+            proposal
+            for status in ("pending", "deferred")
+            for proposal in repository.list_proposals(
+                session, user_id=owner, status=status, limit=-1
             )
-            for proposal in proposals
         ]
+        items = []
+        for proposal in proposals:
+            deferred = proposal["status"] == "deferred"
+            items.append(
+                PendingItem(
+                    type=self.type,
+                    kind="taxonomy_proposal",
+                    id=str(proposal["id"]),
+                    etag=str(proposal["etag"]),
+                    pending_since=instant(proposal["created_at"]),
+                    actions=("approve", "reject", "restore" if deferred else "defer"),
+                    requires_individual_approval=False,
+                    deferred=deferred,
+                    title=str(proposal["proposal_type"]),
+                    summary=str(proposal["payload"].get("reason") or "") or None,
+                    detail={
+                        "proposal_type": proposal["proposal_type"],
+                        "target_id": proposal["target_id"],
+                    },
+                )
+            )
+        return items
+
+
+def _classification_action(action: str) -> ActionHandler:
+    def handler(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
+        if item.kind == "unclassified":
+            knowledge = ClassificationRepository()
+            move = knowledge.defer_unclassified
+            if action == "restore":
+                move = knowledge.restore_unclassified
+            return {"status": move(session, user_id=owner, knowledge_id=item.id)["status"]}
+        taxonomy = TaxonomyRepository()
+        if action == "reject":
+            result = taxonomy.reject_proposal(
+                session, user_id=owner, proposal_id=item.id, expected_etag=item.etag, reason=""
+            )
+        else:
+            transition = (
+                taxonomy.defer_proposal if action == "defer" else taxonomy.restore_proposal
+            )
+            result = transition(
+                session, user_id=owner, proposal_id=item.id, expected_etag=item.etag
+            )
+        return {"status": result["status"]}
+
+    return handler
 
 
 def _decide_prompt(decision: str) -> ActionHandler:
@@ -484,11 +518,12 @@ def build_inbox() -> PendingInbox:
             MissingInfoPromptSource(),
             ExtractionSupplementSource(deferrals),
             MemoryCandidateSource(),
-            ClassificationSource(deferrals),
+            ClassificationSource(),
         ]
     )
-    # Only defer/restore (and the prompt's reject) run through the inbox so far;
-    # approve/reject still use each type's own endpoint. New verbs (memory
+    # Only defer/restore (and reject for prompts and taxonomy proposals) run
+    # through the inbox so far; approve and other rejects use each type's own
+    # endpoint. New verbs (memory
     # candidate defer, taxonomy reject/defer, bulk) register their handlers here
     # and add the verb to the source's ``actions``.
     inbox.register_action("conclusion_draft", "defer", _defer_conclusion)
@@ -502,6 +537,6 @@ def build_inbox() -> PendingInbox:
     inbox.register_action("missing_info_prompt", "restore", _restore_prompt)
     inbox.register_action("extraction_supplement", "defer", deferrals.defer)
     inbox.register_action("extraction_supplement", "restore", deferrals.restore)
-    inbox.register_action("classification", "defer", deferrals.defer)
-    inbox.register_action("classification", "restore", deferrals.restore)
+    for action in ("reject", "defer", "restore"):
+        inbox.register_action("classification", action, _classification_action(action))
     return inbox

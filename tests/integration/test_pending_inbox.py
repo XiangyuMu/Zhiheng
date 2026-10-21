@@ -378,6 +378,13 @@ def test_unclassified_knowledge_carries_its_suggested_domain(tmp_path: Path) -> 
     assert _act(client, csrf, item, "defer", "inbox-unclassified-defer").status_code == 200
     deferred = _items(client, type="classification", deferred="only")
     assert [(i["id"], i["actions"]) for i in deferred] == [(knowledge_id, ["approve", "restore"])]
+    # The classification page's own restore shares the same 延后 state.
+    restored = client.post(
+        f"/v1/knowledge/{knowledge_id}/unclassified/restore",
+        headers=_headers(csrf, "inbox-unclassified-restore"),
+    )
+    assert restored.status_code == 200, restored.text
+    assert any(i["id"] == knowledge_id for i in _items(client, type="classification"))
 
 
 def test_pending_taxonomy_proposal_is_a_classification_item(tmp_path: Path) -> None:
@@ -400,8 +407,21 @@ def test_pending_taxonomy_proposal_is_a_classification_item(tmp_path: Path) -> N
 
     assert item["kind"] == "taxonomy_proposal"
     assert item["etag"] == proposal["etag"]
-    assert item["actions"] == ["approve"]
+    assert item["actions"] == ["approve", "reject", "defer"]
     assert item["requires_individual_approval"] is False
+
+    assert _act(client, csrf, item, "defer", "inbox-legacy-defer").status_code == 200
+    deferred = next(
+        i for i in _items(client, type="classification", deferred="only") if i["id"] == item["id"]
+    )
+    assert deferred["actions"] == ["approve", "reject", "restore"]
+    assert deferred["pending_since"] == item["pending_since"]
+    rejected = _act(client, csrf, deferred, "reject", "inbox-legacy-reject")
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["result"]["status"] == "rejected"
+    assert all(
+        i["id"] != item["id"] for i in _items(client, type="classification", deferred="include")
+    )
 
 
 def _set_created(factory: sessionmaker[Session], table: str, item_id: str, when: str) -> None:
