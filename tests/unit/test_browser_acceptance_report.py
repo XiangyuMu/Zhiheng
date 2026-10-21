@@ -413,7 +413,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "delivery-contracts/checks.json",
         "import-failures/checks.json",
         "context-prompts-issue8/checks.json",
-        "review-center-issue9/checks.json",
+        "pending-issue9/checks.json",
         "issue10-matrix/checks.json",
         "issue14-writes/checks.json",
         "issue11-upgrade/checks.json",
@@ -432,7 +432,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             else complete_issue8_checks()
             if relative == "context-prompts-issue8/checks.json"
             else complete_issue9_checks()
-            if relative == "review-center-issue9/checks.json"
+            if relative == "pending-issue9/checks.json"
             else complete_issue10_checks()
             if relative == "issue10-matrix/checks.json"
             else complete_issue14_checks()
@@ -552,7 +552,7 @@ def test_browser_acceptance_report_rejects_bad_child_reports(
         "delivery-contracts/checks.json": complete_delivery_checks(),
         "import-failures/checks.json": complete_import_failure_checks(),
         "context-prompts-issue8/checks.json": complete_issue8_checks(),
-        "review-center-issue9/checks.json": complete_issue9_checks(),
+        "pending-issue9/checks.json": complete_issue9_checks(),
         "issue10-matrix/checks.json": complete_issue10_checks(),
         "issue14-writes/checks.json": complete_issue14_checks(),
         "issue11-upgrade/checks.json": complete_issue11_checks(),
@@ -596,7 +596,7 @@ def test_browser_acceptance_report_requires_clean_same_sha(
         "delivery-contracts/checks.json",
         "import-failures/checks.json",
         "context-prompts-issue8/checks.json",
-        "review-center-issue9/checks.json",
+        "pending-issue9/checks.json",
         "issue10-matrix/checks.json",
         "issue14-writes/checks.json",
         "issue11-upgrade/checks.json",
@@ -611,7 +611,7 @@ def test_browser_acceptance_report_requires_clean_same_sha(
             else complete_issue8_checks()
             if relative == "context-prompts-issue8/checks.json"
             else complete_issue9_checks()
-            if relative == "review-center-issue9/checks.json"
+            if relative == "pending-issue9/checks.json"
             else complete_issue10_checks()
             if relative == "issue10-matrix/checks.json"
             else complete_issue14_checks()

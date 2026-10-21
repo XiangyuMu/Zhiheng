@@ -319,6 +319,7 @@
   async function immediate(button, item, success, fn) {
     if (button.disabled) return;
     button.disabled = true;
+    say("正在保存…", "info");
     try {
       await fn();
       state.failures.delete(keyOf(item));
@@ -610,34 +611,11 @@
 
   // ---- actions with undo -----------------------------------------------------------------
 
-  // Approve/reject for these types still go through each type's own endpoint; every
-  // other verb runs through the inbox action route.
-  function endpoint(item, verb) {
-    const id = encodeURIComponent(item.id);
-    switch (`${item.type}:${verb}`) {
-      case "conclusion_draft:approve":
-      case "conclusion_draft:reject":
-        return ["POST", `/v1/conclusions/${id}/${verb}`, {}];
-      case "relation_suggestion:approve":
-      case "relation_suggestion:reject":
-        return ["POST", `/v1/conclusions/relations/${id}/${verb}`, {}];
-      case "memory_candidate:approve":
-        return ["POST", `/v1/memory/candidates/${id}/confirm`, { decision: "confirmed" }];
-      case "memory_candidate:reject":
-        return ["POST", `/v1/memory/candidates/${id}/reject`, { decision: "rejected" }];
-      case "classification:approve":
-        return item.kind === "unclassified"
-          ? ["PUT", `/v1/knowledge/${id}/classifications`,
-            { primary_domain_id: item.detail.suggested_primary_domain_id, node_ids: [] }]
-          : ["POST", `/v1/taxonomy/proposals/${id}/approve`, {}];
-      default:
-        return ["POST", `/v1/review/items/${encodeURIComponent(item.type)}/${id}/${verb}`, {}];
-    }
-  }
-
+  // Every list verb (approve, reject, defer, restore) runs through the inbox action route,
+  // guarded by the etag the list was read with.
   function perform(item, verb, extra) {
-    const [method, url, body] = endpoint(item, verb);
-    return mutation(url, method, body, item.etag, extra);
+    const url = `/v1/review/items/${encodeURIComponent(item.type)}/${encodeURIComponent(item.id)}/${verb}`;
+    return mutation(url, "POST", {}, item.etag, extra);
   }
 
   function unavailable(item, verb) {
@@ -677,6 +655,7 @@
     renderList();
     renderDetail();
     if (NARROW.matches && !state.items.length) setView("list");
+    say("", "info");
     showUndo();
   }
 
@@ -704,14 +683,17 @@
     if (position < 0) return;
     state.undo.splice(position, 1);
     showUndo();
+    let keep;
     try {
       await perform(op.item, op.verb, keepalive ? { keepalive: true } : {});
       say("操作已保存。", "success");
     } catch (error) {
-      state.failures.set(keyOf(op.item), `${VERBS[op.verb]}失败：${error.message}`);
+      // The item comes back to the list, selected, with the reason on it.
+      keep = keyOf(op.item);
+      state.failures.set(keep, `${VERBS[op.verb]}失败：${error.message}`);
       say(`「${op.item.title || "（无标题）"}」${VERBS[op.verb]}失败：${error.message}`, "error");
     }
-    if (!keepalive) await load();
+    if (!keepalive) await load({ keep });
   }
 
   // Leaving the page within the undo window still sends what the user decided.

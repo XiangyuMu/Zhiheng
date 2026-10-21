@@ -118,9 +118,7 @@ async function open(viewport = { width: 1440, height: 900 }, { clock = true } = 
           failNext = null;
           return route.fulfill({ status: failure.status, json: { detail: failure.detail } });
         }
-        const match = url.pathname.match(/^\/v1\/review\/items\/([^/]+)\/([^/]+)\/([^/]+)$/)
-          || url.pathname.match(/^\/v1\/(?:conclusions|memory\/candidates|taxonomy\/proposals)\/([^/]+)\/([^/]+)$/);
-        const id = match && (match.length === 4 ? match[2] : match[1]);
+        const id = url.pathname.match(/^\/v1\/review\/items\/[^/]+\/([^/]+)\/[^/]+$/)?.[1];
         items = items.filter((entry) => entry.id !== id);
         return route.fulfill({ json: { status: 'completed', result: {} } });
       }
@@ -274,7 +272,7 @@ test('a on a conclusion is sent only after the undo window', async () => {
   await page.clock.runFor(200);
   await page.locator('#message').filter({ hasText: '操作已保存' }).waitFor();
   assert.deepEqual(writes.map((write) => [write.method, write.path, write.ifMatch]),
-    [['POST', '/v1/conclusions/c1/approve', 'etag-c1']]);
+    [['POST', '/v1/review/items/conclusion_draft/c1/approve', 'etag-c1']]);
   await page.context().close();
 });
 
@@ -317,8 +315,9 @@ test('a failed action returns the item to the list with the reason', async () =>
   await page.clock.runFor(5100);
   await page.locator('#queue .queue-item[data-entry-id="m1"] .queue-error').filter({ hasText: 'version changed' }).waitFor();
   assert.match(await page.locator('#message').innerText(), /拒绝失败：version changed/);
+  assert.equal(await selectedId(page), 'm1', 'the failed item is selected again');
   assert.deepEqual(writes.map((write) => [write.path, write.ifMatch, write.body]),
-    [['/v1/memory/candidates/m1/reject', 'etag-m1', { decision: 'rejected' }]]);
+    [['/v1/review/items/memory_candidate/m1/reject', 'etag-m1', {}]]);
   await page.context().close();
 });
 

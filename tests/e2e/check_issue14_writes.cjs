@@ -53,7 +53,10 @@ fs.mkdirSync(output, { recursive: true });
   }
   async function open(id) {
     await page.locator(`button.queue-item[data-entry-id="${id}"]`).click();
+    await page.locator(`#detail[data-ready="conclusion_draft:${id}"]`).waitFor();
   }
+  // 待处理 sends a/r/d only after its 5 second undo window.
+  const decide = (name) => page.locator("#detail").getByRole("button", { name, exact: true }).click();
   async function submitQuestion(query) {
     await page.locator("#question").fill(query);
     const responsePromise = page.waitForResponse((response) =>
@@ -74,25 +77,26 @@ fs.mkdirSync(output, { recursive: true });
     await page.goto(`${base}/review-center`);
     await page.locator("#queue").waitFor();
 
-    await open(approve.id); await page.getByRole("button", { name: "批准", exact: true }).click();
+    await open(approve.id); await decide("批准");
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     assert.equal((await api(`/v1/conclusions/${approve.id}`)).status, "formal");
-    await open(reject.id); await page.getByRole("button", { name: "拒绝", exact: true }).click();
+    await open(reject.id); await decide("拒绝");
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     assert.equal((await api(`/v1/conclusions/${reject.id}`)).status, "rejected");
-    await open(defer.id); await page.getByRole("button", { name: "稍后处理", exact: true }).click();
+    await open(defer.id); await decide("延后");
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     await context.clearCookies();
     await page.evaluate(() => localStorage.clear());
     await login();
     await page.goto(`${base}/review-center`);
-    await page.locator("#queue").waitFor(); await open(defer.id);
+    await page.locator("#show-deferred").check(); await open(defer.id);
+    await page.locator("#show-deferred").uncheck();
     evidence.statuses.defer_after_refresh = (await api(`/v1/conclusions/${defer.id}`)).status;
     assert.equal(evidence.statuses.defer_after_refresh, "deferred");
 
     page.once("dialog", (dialog) => dialog.accept("Issue 14 revised claim"));
-    await open(revise.id); await page.getByRole("button", { name: "修订", exact: true }).click();
-    await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
+    await open(revise.id); await decide("修订");
+    await page.locator("#message").filter({ hasText: "修订已保存" }).waitFor();
     const revised = await api(`/v1/conclusions/${revise.id}`);
     assert.equal(revised.claim, "Issue 14 revised claim");
     evidence.statuses.revised = revised.status;
@@ -102,8 +106,9 @@ fs.mkdirSync(output, { recursive: true });
     await page.reload(); await open(conflict.id);
     const stale = await api(`/v1/conclusions/${conflict.id}`);
     await api(`/v1/conclusions/${conflict.id}`, { method: "PATCH", body: { claim: "Issue 14 external update" }, headers: { "If-Match": stale.etag } });
-    await page.getByRole("button", { name: "批准", exact: true }).click();
+    await decide("批准");
     await page.locator("#message").filter({ hasText: /变化|版本|changed/ }).waitFor();
+    await page.locator(`button.queue-item[data-entry-id="${conflict.id}"] .queue-error`).waitFor();
     assert.equal((await api(`/v1/conclusions/${conflict.id}`)).status, "draft");
     evidence.statuses.conflict_preserved = true;
 
@@ -132,18 +137,21 @@ fs.mkdirSync(output, { recursive: true });
     let failed = true;
     await page.goto(`${base}/review-center`);
     await page.locator("#queue").waitFor();
-    await page.route(`**/v1/conclusions/${retry.id}/approve`, async (route) => {
+    await page.route(`**/v1/review/items/conclusion_draft/${retry.id}/approve`, async (route) => {
       if (failed) { failed = false; await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "synthetic review failure" }) }); }
       else await route.continue();
     });
-    await open(retry.id); await page.getByRole("button", { name: "批准", exact: true }).click();
+    await open(retry.id); await decide("批准");
     await page.locator("#message").filter({ hasText: /失败|不可用|重试|synthetic/ }).waitFor();
     evidence.retry.first_failure_visible = true;
-    await page.getByRole("button", { name: "批准", exact: true }).click();
+    // The failed item returns to the list, selected, with the reason on it.
+    await page.locator(`button.queue-item[data-entry-id="${retry.id}"] .queue-error`).waitFor();
+    await page.locator(`#detail[data-ready="conclusion_draft:${retry.id}"]`).waitFor();
+    await decide("批准");
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     assert.equal((await api(`/v1/conclusions/${retry.id}`)).status, "formal");
     evidence.retry.second_attempt_status = "formal";
-    await page.unroute(`**/v1/conclusions/${retry.id}/approve`);
+    await page.unroute(`**/v1/review/items/conclusion_draft/${retry.id}/approve`);
 
     assert.deepEqual(browserErrors, []);
     const checks = [

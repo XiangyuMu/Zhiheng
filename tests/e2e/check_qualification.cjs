@@ -139,13 +139,18 @@ fs.mkdirSync(output, { recursive: true });
 
     await pageA.goto(`${base}/review-center`);
     await pageA.locator(`[data-entry-id="${draft.id}"]`).click();
-    await pageA.locator("#detail button", { hasText: "批准" }).click();
+    await pageA.locator(`#detail[data-ready="conclusion_draft:${draft.id}"]`).waitFor();
+    // 待处理 sends the decision after its 5 second undo window.
+    await pageA.locator("#detail").getByRole("button", { name: "批准", exact: true }).click();
+    await pageA.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     await pageA.waitForFunction((id) => !document.querySelector(`[data-entry-id="${id}"]`), draft.id);
     const approved = await call(pageA, `/v1/conclusions/${draft.id}`, undefined, "GET");
     assert.equal(approved.status, "formal");
     await pageA.goto(`${base}/review-center`);
     await pageA.locator(`[data-entry-id="${rejectedDraft.id}"]`).click();
-    await pageA.locator("#detail button", { hasText: "拒绝" }).click();
+    await pageA.locator(`#detail[data-ready="conclusion_draft:${rejectedDraft.id}"]`).waitFor();
+    await pageA.locator("#detail").getByRole("button", { name: "拒绝", exact: true }).click();
+    await pageA.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     await pageA.waitForFunction((id) => !document.querySelector(`[data-entry-id="${id}"]`), rejectedDraft.id);
     const finalContext = await contextItems(pageB, claimA);
     assert.equal(finalContext.length, 1);

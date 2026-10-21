@@ -276,7 +276,9 @@ const MINIMAL_PDF = Buffer.from(
       );
       await page.goto(`${base}/review-center`);
       await page.locator(`button.queue-item[data-entry-id="${reviewedInNewDomain.id}"]`).click();
-      await page.getByRole("button", { name: "批准", exact: true }).click();
+      await page.locator(`#detail[data-ready="conclusion_draft:${reviewedInNewDomain.id}"]`).waitFor();
+      // 待处理 sends the approval after its 5 second undo window.
+      await page.locator("#detail").getByRole("button", { name: "批准", exact: true }).click();
       await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
       const reviewedDetail = await apiJson(`/v1/conclusions/${reviewedInNewDomain.id}`);
       assert.equal(reviewedDetail.status, "formal");

@@ -173,7 +173,7 @@ EXPECTED_CHECKS = {
     "delivery_contracts": Path("delivery-contracts/checks.json"),
     "import_failures": Path("import-failures/checks.json"),
     "context_prompts_issue8": Path("context-prompts-issue8/checks.json"),
-    "review_center_issue9": Path("review-center-issue9/checks.json"),
+    "pending_issue9": Path("pending-issue9/checks.json"),
     "issue10_matrix": Path("issue10-matrix/checks.json"),
     "issue14_writes": Path("issue14-writes/checks.json"),
     "issue11_upgrade": Path("issue11-upgrade/checks.json"),
@@ -324,7 +324,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     "relations",
                     "qualification",
                     "context_prompts_issue8",
-                    "review_center_issue9",
+                    "pending_issue9",
                     "issue10_matrix",
                     "issue14_writes",
                     "issue11_upgrade",
@@ -526,7 +526,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         result["error"] = f"required checks missing: {missing_issue8}"
                         results[name] = result
                         continue
-                if name == "review_center_issue9":
+                if name == "pending_issue9":
                     missing_issue9 = [
                         label
                         for label in ISSUE9_CHECKS.values()
@@ -724,7 +724,7 @@ def main() -> int:
             "node tests/e2e/check_review_relations.cjs",
             "node tests/e2e/check_qualification.cjs",
             "node tests/e2e/check_context_prompts_issue8.cjs",
-            "node tests/e2e/check_review_center_issue9.cjs",
+            "node tests/e2e/check_pending_issue9.cjs",
             "node tests/e2e/check_issue10_matrix.cjs",
             "node tests/e2e/check_issue14_writes.cjs",
             "node tests/e2e/check_issue11_upgrade.cjs",
@@ -734,7 +734,7 @@ def main() -> int:
             "node tests/e2e/check_provider_models_issue47.cjs",
             "node tests/e2e/check_provider_models_restart_issue47.cjs",
             "node tests/e2e/check_answer_failures_issue55.cjs",
-            "node tests/e2e/check_review_center_issue9.cjs",
+            "node tests/e2e/check_pending_issue9.cjs",
         ],
         "versions": {
             "node": command_output(["node", "--version"]),

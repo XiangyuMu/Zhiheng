@@ -75,6 +75,10 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
       evidence: [{ text: source.text }],
     } });
   }
+  async function openDetail(id) {
+    await page.locator(`button.queue-item[data-entry-id="${id}"]`).click();
+    await page.locator(`#detail[data-ready="conclusion_draft:${id}"]`).waitFor();
+  }
   try {
     await login();
     const beforeReview = await api("/v1/review/summary?limit=500");
@@ -109,9 +113,9 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     await page.goto(`${base}/review-center`);
     await page.locator("#total").waitFor({ state: "visible" });
     await page.locator("#queue").filter({ hasText: `Issue 9 草稿 ${tag}-0` }).waitFor();
-    assert(Number(await page.locator("#conclusion-count").innerText())
+    assert(Number(await page.locator('[data-count="conclusion_draft"]').innerText())
       >= Number(beforeReview.counts?.conclusions || 0) + 3);
-    await page.locator(`button.queue-item[data-entry-id="${drafts[0].id}"]`).click();
+    await openDetail(drafts[0].id);
     const firstDetail = await page.locator("#detail").innerText();
     assert(firstDetail.includes(`Issue 9 草稿 ${tag}-0`));
     assert(firstDetail.includes(`固定条件下复习有效 ${tag}-0`));
@@ -137,15 +141,17 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
     evidence.recovery.push("draft_restored_after_relogin");
 
     // Keep a stale detail open, mutate through the real API, then verify UI conflict and retry.
-    await page.locator(`button.queue-item[data-entry-id="${drafts[1].id}"]`).click();
+    await openDetail(drafts[1].id);
     const stale = await api(`/v1/conclusions/${drafts[1].id}`);
     await api(`/v1/conclusions/${drafts[1].id}`, { method: "PATCH", body: { claim: `外部更新 ${tag}` },
       headers: { "If-Match": stale.etag } });
+    // 待处理 sends the approval only after its 5 second undo window.
     await page.locator("#detail").getByRole("button", { name: "批准", exact: true }).click();
     await page.locator("#message").filter({ hasText: /变化|changed|版本/ }).waitFor();
+    await page.locator(`button.queue-item[data-entry-id="${drafts[1].id}"] .queue-error`).waitFor();
     evidence.decisions.push("version_conflict_shown");
     await page.locator("#refresh").click();
-    await page.locator(`button.queue-item[data-entry-id="${drafts[1].id}"]`).click();
+    await openDetail(drafts[1].id);
     await page.locator("#detail").getByRole("button", { name: "批准", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     assert.equal((await api(`/v1/conclusions/${drafts[1].id}`)).status, "formal");
@@ -154,7 +160,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
 
     // Open the third draft in the real review UI, cancel revision, wait for a bounded
     // idle period, and then leave the page without selecting an approval action.
-    await page.locator(`button.queue-item[data-entry-id="${drafts[2].id}"]`).click();
+    await openDetail(drafts[2].id);
     const thirdDetail = await page.locator("#detail").innerText();
     assert(thirdDetail.includes(`Issue 9 草稿 ${tag}-2`));
     assert(thirdDetail.includes(`固定条件下复习有效 ${tag}-2`));
@@ -206,7 +212,7 @@ const tag = randomUUID().replaceAll("-", "").slice(0, 10);
       "closing review without an action does not approve the draft",
       "cancelled revision and bounded idle preserve the pending draft",
     ], evidence, browserErrors }, null, 2));
-    await page.screenshot({ path: path.join(output, "issue9-review-center.png"), fullPage: true });
+    await page.screenshot({ path: path.join(output, "issue9-pending.png"), fullPage: true });
   } catch (error) {
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "failed", evidence,
       browserErrors, error: error.stack || String(error) }, null, 2));

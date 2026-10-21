@@ -108,6 +108,7 @@ fs.mkdirSync(output, { recursive: true });
           && relation.right_claim?.includes("每天复习有效"));
       assert(target?.id, "expected a relation between the new and formal conclusions");
       await page.locator(`button.queue-item[data-entry-id="${target.id}"]`).click();
+      await page.locator(`#detail[data-ready="relation_suggestion:${target.id}"]`).waitFor();
       const detail = await page.locator("#detail").innerText();
       assert(detail.includes("每天复习无效"));
       assert(detail.includes("每天复习有效"));
@@ -120,29 +121,36 @@ fs.mkdirSync(output, { recursive: true });
     const deferredRelation = (await apiJson(`/v1/conclusions/${deferred.id}/relations`)).items[0];
     evidence.relation_ids.push(deferredRelation.id);
     await page.locator(`button.queue-item[data-entry-id="${deferredRelation.id}"]`).click();
-    await page.getByRole("button", { name: "稍后处理", exact: true }).click();
+    await page.locator(`#detail[data-ready="relation_suggestion:${deferredRelation.id}"]`).waitFor();
+    await page.locator("#detail").getByRole("button", { name: "延后", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     await check("deferred relation remains reviewable", async () => {
       assert.equal(await apiJson(`/v1/conclusions/${deferred.id}/relations`).then((body) => body.items[0].status), "deferred");
+      // A deferred relation leaves the default view and is reviewable in the deferred view.
       await page.reload();
-      await page.locator(".queue-item").filter({ hasText: "关系建议" }).nth(2).waitFor();
+      await page.locator("#show-deferred").check();
+      await page.locator(`button.queue-item[data-entry-id="${deferredRelation.id}"]`).waitFor();
+      await page.locator("#show-deferred").uncheck();
+      await page.locator(".queue-item").filter({ hasText: "关系建议" }).nth(1).waitFor();
     });
 
     const rejectedRelation = (await apiJson(`/v1/conclusions/${rejected.id}/relations`)).items[0];
     evidence.relation_ids.push(rejectedRelation.id);
     await page.locator(`button.queue-item[data-entry-id="${rejectedRelation.id}"]`).click();
-    await page.getByRole("button", { name: "拒绝关系", exact: true }).click();
+    await page.locator(`#detail[data-ready="relation_suggestion:${rejectedRelation.id}"]`).waitFor();
+    await page.locator("#detail").getByRole("button", { name: "拒绝", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     await check("reject relation records the real API decision", async () => {
       assert.equal(await apiJson(`/v1/conclusions/${rejected.id}/relations`).then((body) => body.items[0].status), "rejected");
-      assert(Number(await page.locator("#relation-count").innerText()) >= 2);
+      assert(Number(await page.locator('[data-count="relation_suggestion"]').innerText()) >= 2);
     });
 
     const approvedRelations = (await apiJson(`/v1/conclusions/${approved.id}/relations`)).items;
     const approvedRelation = approvedRelations.find((item) => item.status === "proposed") || approvedRelations[0];
     evidence.relation_ids.push(approvedRelation.id);
     await page.locator(`button.queue-item[data-entry-id="${approvedRelation.id}"]`).click();
-    await page.getByRole("button", { name: "批准关系", exact: true }).click();
+    await page.locator(`#detail[data-ready="relation_suggestion:${approvedRelation.id}"]`).waitFor();
+    await page.locator("#detail").getByRole("button", { name: "批准", exact: true }).click();
     await page.locator("#message").filter({ hasText: "操作已保存" }).waitFor();
     await check("approved relation enters formal searchable knowledge", async () => {
       const relation = (await apiJson(`/v1/conclusions/${approved.id}/relations`)).items[0];
