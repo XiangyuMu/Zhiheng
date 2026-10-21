@@ -357,6 +357,28 @@ def test_memory_candidates_need_individual_approval_only_when_inferred(
         assert item["requires_individual_approval"] is individual
 
 
+def test_inferred_candidate_detail_carries_its_evidence_and_impact(tmp_path: Path) -> None:
+    # An inferred candidate is approved one at a time from its detail
+    # (ADR 0011), so the detail must show the evidence it was inferred from.
+    client, _ = _client(tmp_path)
+    csrf = _login(client)
+    response = client.post(
+        "/v1/memory/candidates",
+        json={
+            **_candidate_payload(),
+            "evidence_refs": [{"conversation_id": "conv-1", "excerpt": "请简短回答"}],
+        },
+        headers=_headers(csrf, "inbox-candidate-evidence"),
+    )
+    assert response.status_code == 200, response.text
+    candidate_id = response.json()["result"]["candidate_id"]
+
+    item = next(i for i in _items(client, type="memory_candidate") if i["id"] == candidate_id)
+
+    assert [ref["excerpt"] for ref in item["detail"]["evidence"]] == ["请简短回答"]
+    assert "goal.answer" in item["detail"]["impact"]
+
+
 def test_memory_candidate_defer_and_restore_go_through_the_inbox(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
     csrf = _login(client)

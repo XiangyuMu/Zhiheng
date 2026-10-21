@@ -52,7 +52,12 @@ function seed() {
       detail: { state_key: 'profile.job', payload: { query: '你的职业是？' } },
     }),
     item('memory_candidate', 'm1', 'preference.tea', '2026-10-05T00:00:00+00:00', {
-      kind: 'explicit_extracted', summary: '喜欢绿茶', detail: { value: { text: '喜欢绿茶' } },
+      kind: 'explicit_extracted', summary: '喜欢绿茶',
+      detail: {
+        value: { text: '喜欢绿茶' },
+        evidence: [{ conversation_id: 'conv-1', excerpt: '我平时只喝绿茶' }],
+        impact: '确认后可能影响与 preference.tea 相关的回答、检索规划和推荐。',
+      },
     }),
     item('classification', 'k1', '未分类资料', '2026-10-06T00:00:00+00:00', {
       kind: 'unclassified', actions: ['defer'], detail_actions: ['choose_domain'],
@@ -195,6 +200,20 @@ test('j/k move through the oldest-first list and the detail follows', async () =
   await page.keyboard.press('k');
   await page.keyboard.press('k');
   assert.equal(await selectedId(page), 'c1', 'k stops at the first item');
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+test('a memory candidate detail shows its version-bound evidence and impact', async () => {
+  const page = await open();
+  await ready(page);
+  for (let n = 0; n < 4; n += 1) await page.keyboard.press('j');
+  assert.equal(await selectedId(page), 'm1');
+  await page.locator('#detail').filter({ hasText: '我平时只喝绿茶' }).waitFor();
+  const detail = await page.locator('#detail').innerText();
+  for (const part of ['版本绑定证据', '我平时只喝绿茶', '潜在影响', 'preference.tea']) {
+    assert(detail.includes(part), `candidate detail shows ${part}`);
+  }
   assert.deepEqual(page.errors, []);
   await page.context().close();
 });

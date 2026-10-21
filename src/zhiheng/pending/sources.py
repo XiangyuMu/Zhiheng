@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from zhiheng.classification.taxonomy import TaxonomyRepository
@@ -25,6 +25,30 @@ from zhiheng.pending.inbox import ActionHandler, PendingInbox, PendingItem, to_u
 def _payload(value: object) -> dict[str, Any]:
     decoded = json.loads(str(value)) if value is not None else {}
     return decoded if isinstance(decoded, dict) else {}
+
+
+def _candidate_evidence(
+    session: Session, version_ids: list[str]
+) -> dict[str, list[dict[str, Any]]]:
+    """Evidence bound to each candidate version, keyed by version id."""
+    if not version_ids:
+        return {}
+    rows = session.execute(
+        text(
+            """
+            SELECT candidate_version_id, conversation_id, message_id, excerpt, support_type
+            FROM memory_candidate_evidence
+            WHERE candidate_version_id IN :version_ids
+            ORDER BY extracted_at, id
+            """
+        ).bindparams(bindparam("version_ids", expanding=True)),
+        {"version_ids": version_ids},
+    ).mappings()
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        ref = dict(row)
+        grouped.setdefault(str(ref.pop("candidate_version_id")), []).append(ref)
+    return grouped
 
 
 class ConclusionDraftSource:
@@ -310,7 +334,8 @@ class MemoryCandidateSource:
                   )
                 """
             )
-        ).mappings()
+        ).mappings().all()
+        evidence = _candidate_evidence(session, [str(row["current_version_id"]) for row in rows])
         items = []
         for row in rows:
             value = _payload(row["value_json"])
@@ -333,7 +358,14 @@ class MemoryCandidateSource:
                     deferred=deferred,
                     title=str(row["state_key"]),
                     summary=str(value.get("text") or "") or None,
-                    detail={"value": value, "rationale": row["rationale"]},
+                    detail={
+                        "value": value,
+                        "rationale": row["rationale"],
+                        "evidence": evidence.get(str(row["current_version_id"]), []),
+                        "impact": (
+                            f"确认后可能影响与 {row['state_key']} 相关的回答、检索规划和推荐。"
+                        ),
+                    },
                 )
             )
         return items

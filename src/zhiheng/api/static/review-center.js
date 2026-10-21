@@ -593,6 +593,10 @@
         ["内容", valueText(item.detail.value) || item.summary],
         ["来源", KIND_LABELS[item.kind] || item.kind],
         ["理由", item.detail.rationale],
+        ["版本绑定证据", (item.detail.evidence || [])
+          .map((ref) => ref.excerpt || ref.message_id || ref.conversation_id)
+          .filter(Boolean).join("\n")],
+        ["潜在影响", item.detail.impact],
       ])];
     },
 
