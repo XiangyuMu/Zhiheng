@@ -258,6 +258,7 @@ def create_app(
                 "/memory-center",
                 "/evolution-center",
                 "/review-center",
+                "/taxonomy-center",
             }
             and "text/html" in request.headers.get("accept", "")
         ):

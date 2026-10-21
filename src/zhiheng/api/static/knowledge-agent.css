@@ -57,6 +57,9 @@ pre { font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 .nav-link[aria-current="page"] { background: #e3eaf8; color: #2b54a1; font-weight: 600; }
 .nav-icon { width: 19px; font-size: 19px; line-height: 1; text-align: center; }
 .nav-count { margin-left: auto; font-size: 11px; color: var(--muted); }
+.nav-label-text { min-width: 0; }
+.nav-badge { min-width: 22px; padding: 1px var(--kb-space-2); border-radius: 999px; background: var(--kb-accent); color: var(--kb-surface); font-weight: 600; line-height: 18px; text-align: center; }
+.nav-badge[hidden] { display: none; }
 .sidebar-footer { margin-top: auto; }
 .sidebar-note { font-size: 12px; line-height: 1.8; color: #77808e; padding: 16px 12px; }
 .workspace-body { min-width: 0; }

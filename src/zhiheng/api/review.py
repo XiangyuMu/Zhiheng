@@ -132,15 +132,15 @@ def install_review_routes(app: FastAPI) -> None:
     app.include_router(router)
 
     @app.get("/review-center", include_in_schema=False)
-    def review_center() -> FileResponse:
+    def review_center(_user: AuthDep) -> FileResponse:
         return FileResponse(
             STATIC_DIR / "review-center.html", media_type="text/html; charset=utf-8"
         )
 
     @app.get("/review-center.css", include_in_schema=False)
-    def review_center_css() -> FileResponse:
+    def review_center_css(_user: AuthDep) -> FileResponse:
         return FileResponse(STATIC_DIR / "review-center.css", media_type="text/css; charset=utf-8")
 
     @app.get("/review-center.js", include_in_schema=False)
-    def review_center_js() -> FileResponse:
+    def review_center_js(_user: AuthDep) -> FileResponse:
         return FileResponse(STATIC_DIR / "review-center.js", media_type="text/javascript")

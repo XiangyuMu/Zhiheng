@@ -113,17 +113,6 @@ function mutate(url, payload, ifMatch = "*") {
 function readCookie(name) {
   return document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`))?.slice(name.length + 1) || "";
 }
-async function loadReviewCount() {
-  try {
-    const summary = await fetchJson("/v1/review/summary?limit=500");
-    const count = Number(summary.counts?.total || 0);
-    const badge = $("review-nav-count");
-    badge.textContent = count ? String(count) : "";
-    badge.hidden = count === 0;
-  } catch (_) {
-    // The review link remains usable when its optional count request is unavailable.
-  }
-}
 function navigate(screen, focus = false) {
   const aliases = { "knowledge-library": "library", "model-config": "settings" };
   screen = aliases[screen] || screen;
@@ -1805,4 +1794,3 @@ $("add-classification").addEventListener("click", () => {
 loadKnowledge();
 loadPersistentImportTasks();
 loadClassifications().then(loadUnclassified);
-loadReviewCount();

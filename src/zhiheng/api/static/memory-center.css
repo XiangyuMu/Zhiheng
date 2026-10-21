@@ -1,6 +1,6 @@
 @import url('/design-tokens.css');
-body { overflow-x: hidden; }
 @import url('/knowledge-agent.css');
+body { overflow-x: hidden; }
 
 :root {
   --context-green: #2f6d58;

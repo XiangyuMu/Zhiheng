@@ -718,6 +718,7 @@ def main() -> int:
             "uv run zhiheng-worker --role worker --idle-seconds 1",
             "node --test tests/e2e/test_import_polling.cjs",
             "node --test tests/e2e/test_pdf_capability_gate.cjs",
+            "node --test tests/e2e/test_app_shell.cjs",
             "ZHIHENG_LEGACY_BROWSER=1 node tests/e2e/check_workspace_full.cjs",
             "node tests/e2e/check_review_relations.cjs",
             "node tests/e2e/check_qualification.cjs",

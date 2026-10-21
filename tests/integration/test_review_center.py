@@ -56,7 +56,7 @@ def test_review_center_page_and_scripts_are_available(tmp_path: Path) -> None:
     _login(client)
     page = client.get("/review-center")
     assert page.status_code == 200
-    assert "集中审核" in page.text
+    assert "<h1>待处理</h1>" in page.text
     assert "/v1/review/summary" in client.get("/review-center.js").text
 
 
