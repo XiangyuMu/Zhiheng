@@ -849,6 +849,12 @@ def _validate_batch_items(
     for item_id in item_ids:
         if action in {"confirm", "reject"}:
             _candidate_cas(session, item_id, etags[item_id])
+            if action == "confirm" and _candidate_type(session, item_id) == "inferred":
+                # ADR 0011: inferred profile candidates are approved one at a time.
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="inferred candidates must be confirmed individually",
+                )
             if _latest_pending_request_id(session, item_id) is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -859,6 +865,13 @@ def _validate_batch_items(
             _formal_cas(session, item_id, etags[item_id])
             continue
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="unsupported action")
+
+
+def _candidate_type(session: Session, candidate_id: str) -> str | None:
+    value = session.execute(
+        text("SELECT candidate_type FROM memory_candidates WHERE id = :id"), {"id": candidate_id}
+    ).scalar_one_or_none()
+    return None if value is None else str(value)
 
 
 def _validate_batch_action(payload: BatchPayload) -> None:

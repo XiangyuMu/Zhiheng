@@ -11,7 +11,11 @@ from sqlalchemy.orm import Session
 from zhiheng.classification.taxonomy import TaxonomyRepository
 from zhiheng.conclusions.repository import ConclusionRepository, relation_etag
 from zhiheng.core.ids import sha256_json
-from zhiheng.knowledge.classification import ClassificationRepository, suggested_primary_domain
+from zhiheng.knowledge.classification import (
+    UNCLASSIFIED_SQL,
+    ClassificationRepository,
+    suggested_primary_domain,
+)
 from zhiheng.memory.personal_updates import PersonalUpdateService
 from zhiheng.memory.repository import MemoryRepository
 from zhiheng.pending.deferrals import DeferralStore
@@ -249,6 +253,7 @@ class ExtractionSupplementSource:
                   ON s.id = r.source_id AND s.owner_user_id = r.owner_user_id
                 WHERE r.owner_user_id = :owner
                   AND (r.unrecognized_count > 0 OR r.status = 'failed')
+                  AND r.supplement_resolved_at IS NULL
                 """
             ),
             {"owner": owner},
@@ -349,7 +354,7 @@ class ClassificationSource:
         }
         rows = session.execute(
             text(
-                """
+                f"""
                 SELECT ko.id, ko.title, ko.primary_domain_id, ko.created_at, ko.updated_at,
                        (SELECT substr(c.text, 1, 500) FROM chunks c
                         WHERE c.source_id = ko.id ORDER BY c.chunk_no LIMIT 1) AS excerpt,
@@ -361,11 +366,7 @@ class ClassificationSource:
                 FROM knowledge_objects ko
                 WHERE ko.owner_user_id = :owner
                   AND ko.lifecycle_status NOT IN ('privacy_erased', 'soft_deleted')
-                  AND NOT EXISTS (
-                    SELECT 1 FROM knowledge_classifications kc
-                    WHERE kc.knowledge_object_id = ko.id
-                      AND kc.confirmation_status = 'confirmed'
-                  )
+                  AND {UNCLASSIFIED_SQL}
                 """
             ),
             {"owner": owner},
@@ -442,6 +443,8 @@ class ClassificationSource:
 
 def _classification_action(action: str) -> ActionHandler:
     def handler(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
+        if action == "approve":
+            return _approve_classification(session, owner, item)
         if item.kind == "unclassified":
             knowledge = ClassificationRepository()
             move = knowledge.defer_unclassified
@@ -463,6 +466,24 @@ def _classification_action(action: str) -> ActionHandler:
         return {"status": result["status"]}
 
     return handler
+
+
+def _approve_classification(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
+    if item.kind == "unclassified":
+        domain_id = str(item.detail["suggested_primary_domain_id"])
+        ClassificationRepository().assign(
+            session,
+            knowledge_id=item.id,
+            user_id=owner,
+            primary_domain_id=domain_id,
+            node_ids=[],
+            request_id=None,
+        )
+        return {"status": "classified", "primary_domain_id": domain_id}
+    result = TaxonomyRepository().approve_proposal(
+        session, user_id=owner, proposal_id=item.id, expected_etag=item.etag, request_id=None
+    )
+    return {"status": result["status"]}
 
 
 def _decide_prompt(decision: str) -> ActionHandler:
@@ -515,27 +536,51 @@ def _defer_candidate(session: Session, owner: str, item: PendingItem) -> dict[st
     return {"status": result.status}
 
 
+def _decide_candidate(decision: str) -> ActionHandler:
+    def handler(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
+        repository = MemoryRepository()
+        request_id = repository.pending_request_id(
+            session, item.id
+        ) or repository.request_confirmation(session, candidate_id=item.id)
+        decide = repository.confirm_request if decision == "approve" else repository.reject_request
+        result = decide(
+            session,
+            request_id=request_id,
+            operation_key=f"domain:candidate:{decision}:pending:{item.id}:{item.etag}",
+        )
+        return {"status": result.status, "formal_memory_id": result.formal_memory_id}
+
+    return handler
+
+
 def _restore_candidate(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
     _restore_candidate_by_id(session, item.id, f"{item.id}:{item.etag}")
     return {"status": "pending"}
 
 
-def _defer_relation(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
-    result = ConclusionRepository().decide_relation(
-        session, owner, item.id, "deferred", f"pending:defer:{item.id}:{item.etag}"
-    )
-    return {"status": result["status"]}
+def _decide_relation(decision: str) -> ActionHandler:
+    def handler(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
+        result = ConclusionRepository().decide_relation(
+            session, owner, item.id, decision, f"pending:{decision}:{item.id}:{item.etag}"
+        )
+        return {"status": result["status"]}
+
+    return handler
 
 
 def _restore_relation(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
     return {"status": ConclusionRepository().restore_relation(session, owner, item.id)["status"]}
 
 
-def _defer_conclusion(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
-    result = ConclusionRepository().decide_draft(
-        session, owner, item.id, item.etag, "deferred", f"pending:defer:{item.id}:{item.etag}"
-    )
-    return {"status": result["status"]}
+def _decide_conclusion(decision: str) -> ActionHandler:
+    def handler(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
+        key = f"pending:{decision}:{item.id}:{item.etag}"
+        result = ConclusionRepository().decide_draft(
+            session, owner, item.id, item.etag, decision, key
+        )
+        return {"status": result["status"]}
+
+    return handler
 
 
 def _restore_conclusion(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
@@ -555,13 +600,14 @@ def build_inbox() -> PendingInbox:
             ClassificationSource(),
         ]
     )
-    # Only defer/restore (and reject for prompts and taxonomy proposals) run
-    # through the inbox so far; approve and the other rejects still use each
-    # type's own endpoint. A new verb (e.g. the bulk API's approve) registers
-    # its handler here and adds the verb to the source's ``actions``.
-    inbox.register_action("conclusion_draft", "defer", _defer_conclusion)
+    # Approving a draft or relation writes formal knowledge, which needs the
+    # app's object store: the API registers those two handlers on its inbox.
+    # Conflicts and extraction supplements are decided in their detail view.
+    inbox.register_action("conclusion_draft", "reject", _decide_conclusion("rejected"))
+    inbox.register_action("conclusion_draft", "defer", _decide_conclusion("deferred"))
     inbox.register_action("conclusion_draft", "restore", _restore_conclusion)
-    inbox.register_action("relation_suggestion", "defer", _defer_relation)
+    inbox.register_action("relation_suggestion", "reject", _decide_relation("rejected"))
+    inbox.register_action("relation_suggestion", "defer", _decide_relation("deferred"))
     inbox.register_action("relation_suggestion", "restore", _restore_relation)
     inbox.register_action("personal_conflict", "defer", _defer_conflict)
     inbox.register_action("personal_conflict", "restore", _restore_conflict)
@@ -570,8 +616,10 @@ def build_inbox() -> PendingInbox:
     inbox.register_action("missing_info_prompt", "restore", _restore_prompt)
     inbox.register_action("extraction_supplement", "defer", deferrals.defer)
     inbox.register_action("extraction_supplement", "restore", deferrals.restore)
+    inbox.register_action("memory_candidate", "approve", _decide_candidate("approve"))
+    inbox.register_action("memory_candidate", "reject", _decide_candidate("reject"))
     inbox.register_action("memory_candidate", "defer", _defer_candidate)
     inbox.register_action("memory_candidate", "restore", _restore_candidate)
-    for action in ("reject", "defer", "restore"):
+    for action in ("approve", "reject", "defer", "restore"):
         inbox.register_action("classification", action, _classification_action(action))
     return inbox

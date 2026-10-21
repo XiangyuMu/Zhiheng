@@ -51,6 +51,11 @@ def _candidate_payload(value: str = "keep answers concise") -> dict[str, Any]:
     }
 
 
+def _explicit_candidate(value: str) -> dict[str, Any]:
+    """A candidate from an explicit statement: the only kind confirmable in bulk."""
+    return {**_candidate_payload(value), "candidate_type": "explicit_extracted"}
+
+
 def _formal_payload(value: str = "finish thesis") -> dict[str, Any]:
     return {
         "memory_type": "profile",
@@ -317,7 +322,7 @@ def test_batch_is_all_or_nothing_on_stale_item(tmp_path: Path) -> None:
     for idx in range(2):
         client.post(
             "/v1/memory/candidates",
-            json=_candidate_payload(f"value {idx}"),
+            json=_explicit_candidate(f"value {idx}"),
             headers=_headers(csrf, f"batch-candidate-{idx}"),
         )
     candidates = client.get("/v1/memory/candidates").json()["items"]
@@ -339,6 +344,33 @@ def test_batch_is_all_or_nothing_on_stale_item(tmp_path: Path) -> None:
 
     assert response.status_code == 412
     assert client.get("/v1/memory/context/l0").json() == {}
+
+
+def test_batch_confirm_refuses_inferred_candidates(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+    csrf = _login(client)
+    for candidate_type in ("explicit_extracted", "inferred"):
+        client.post(
+            "/v1/memory/candidates",
+            json={**_candidate_payload(candidate_type), "candidate_type": candidate_type},
+            headers=_headers(csrf, f"bulk-inferred-{candidate_type}"),
+        )
+    candidates = client.get("/v1/memory/candidates").json()["items"]
+
+    response = client.post(
+        "/v1/memory/bulk",
+        json={
+            "action": "confirm",
+            "view": "candidates",
+            "ids": [item["id"] for item in candidates],
+            "items": [{"id": item["id"], "etag": item["etag"]} for item in candidates],
+        },
+        headers=_headers(csrf, "bulk-inferred-confirm", "bulk-selection"),
+    )
+
+    assert response.status_code == 400
+    assert client.get("/v1/memory/formal").json()["items"] == []
+    assert len(client.get("/v1/memory/candidates").json()["items"]) == 2
 
 
 def test_batch_rejects_invalid_view_action_pairs(tmp_path: Path) -> None:
@@ -564,7 +596,7 @@ def test_bulk_parent_receipt_replays_and_rejects_payload_rebinding(tmp_path: Pat
     for idx in range(3):
         client.post(
             "/v1/memory/candidates",
-            json=_candidate_payload(f"bulk replay {idx}"),
+            json=_explicit_candidate(f"bulk replay {idx}"),
             headers=_headers(csrf, f"bulk-replay-create-{idx}"),
         )
     candidates = client.get("/v1/memory/candidates").json()["items"]

@@ -23,6 +23,20 @@ class ClassificationNode:
     status: str
 
 
+# Knowledge `ko` is unclassified until it has a confirmed classification or the
+# user has confirmed its primary domain (approving the suggested domain counts).
+UNCLASSIFIED_SQL = """
+    NOT EXISTS (
+      SELECT 1 FROM knowledge_classifications kc
+      WHERE kc.knowledge_object_id = ko.id AND kc.confirmation_status = 'confirmed'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM classification_change_events ce
+      WHERE ce.knowledge_object_id = ko.id AND ce.source = 'user'
+    )
+"""
+
+
 # What blocks deleting a classification: child classifications, or confirmed
 # knowledge classified directly into it. There is no lifecycle filter: knowledge in
 # the recycle bin counts because it can be restored and deleting its classification
@@ -438,7 +452,7 @@ class ClassificationRepository:
     ) -> list[dict[str, Any]]:
         rows = session.execute(
             text(
-                """
+                f"""
                 SELECT ko.id AS knowledge_object_id, ko.title, ko.primary_domain_id,
                        ko.lifecycle_status, ko.object_kind, ko.updated_at,
                        (SELECT substr(c.text, 1, 500) FROM chunks c
@@ -451,11 +465,7 @@ class ClassificationRepository:
                 FROM knowledge_objects ko
                 WHERE ko.owner_user_id = :user_id
                   AND ko.lifecycle_status NOT IN ('privacy_erased', 'soft_deleted')
-                  AND NOT EXISTS (
-                    SELECT 1 FROM knowledge_classifications kc
-                    WHERE kc.knowledge_object_id = ko.id
-                      AND kc.confirmation_status = 'confirmed'
-                  )
+                  AND {UNCLASSIFIED_SQL}
                   AND (:include_deferred = 1 OR NOT EXISTS (
                     SELECT 1 FROM unclassified_deferrals ud
                     WHERE ud.owner_user_id = ko.owner_user_id
@@ -552,4 +562,4 @@ def _deletable(child_count: int, direct_knowledge_count: int) -> bool:
     return child_count == 0 and direct_knowledge_count == 0
 
 
-__all__ = ["ClassificationNode", "ClassificationRepository"]
+__all__ = ["UNCLASSIFIED_SQL", "ClassificationNode", "ClassificationRepository"]
