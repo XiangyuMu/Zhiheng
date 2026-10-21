@@ -15,8 +15,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0052_pending_inbox"
-down_revision: str | Sequence[str] | None = "0051_unclassified_deferrals"
+revision = "0053_pending_inbox"
+down_revision: str | Sequence[str] | None = "0052_memory_candidate_defer"
 branch_labels = None
 depends_on = None
 

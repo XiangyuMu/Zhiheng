@@ -145,8 +145,10 @@ class PersonalConflictSource:
             text(
                 """
                 SELECT c.id, c.state_key, c.resolution, c.candidate_id, c.created_at,
-                       c.candidate_value_json, c.formal_value_json
+                       c.candidate_value_json, c.formal_value_json,
+                       mc.status AS candidate_status
                 FROM memory_conflicts c
+                LEFT JOIN memory_candidates mc ON mc.id = c.candidate_id
                 WHERE c.status = 'pending'
                 """
             )
@@ -154,7 +156,8 @@ class PersonalConflictSource:
         repository = MemoryRepository()
         items = []
         for row in rows:
-            deferred = row["resolution"] == "deferred"
+            # Deferring the conflict or its candidate (memory API) both set it aside.
+            deferred = row["resolution"] == "deferred" or row["candidate_status"] == "deferred"
             candidate_etag = (
                 repository.candidate_etag(session, str(row["candidate_id"]))
                 if row["candidate_id"]
@@ -179,7 +182,9 @@ class PersonalConflictSource:
                     title=str(row["state_key"]),
                     detail={
                         "state_key": row["state_key"],
+                        "resolution": row["resolution"],
                         "candidate_id": row["candidate_id"],
+                        "candidate_status": row["candidate_status"],
                         "candidate_etag": candidate_etag,
                         "candidate_value": _payload(row["candidate_value_json"]),
                         "existing_value": _payload(row["formal_value_json"]),
@@ -291,7 +296,7 @@ class MemoryCandidateSource:
                        mc.current_version_id, mc.rationale, mc.created_at, mcv.value_json
                 FROM memory_candidates mc
                 JOIN memory_candidate_versions mcv ON mcv.id = mc.current_version_id
-                WHERE mc.status IN ('pending_confirmation', 'edited')
+                WHERE mc.status IN ('pending_confirmation', 'edited', 'deferred')
                   AND NOT EXISTS (
                     SELECT 1 FROM memory_conflicts c WHERE c.candidate_id = mc.id
                   )
@@ -301,6 +306,7 @@ class MemoryCandidateSource:
         items = []
         for row in rows:
             value = _payload(row["value_json"])
+            deferred = str(row["status"]) == "deferred"
             items.append(
                 PendingItem(
                     type=self.type,
@@ -314,9 +320,10 @@ class MemoryCandidateSource:
                         }
                     ),
                     pending_since=instant(row["created_at"]),
-                    actions=("approve", "reject"),
+                    # A deferred candidate must be restored before it is decided.
+                    actions=("restore",) if deferred else ("approve", "reject", "defer"),
                     requires_individual_approval=str(row["candidate_type"]) == "inferred",
-                    deferred=False,
+                    deferred=deferred,
                     title=str(row["state_key"]),
                     summary=str(value.get("text") or "") or None,
                     detail={"value": value, "rationale": row["rationale"]},
@@ -479,11 +486,38 @@ def _defer_conflict(session: Session, owner: str, item: PendingItem) -> dict[str
 
 
 def _restore_conflict(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
-    return {
-        "status": PersonalUpdateService().restore_conflict(
-            session, item.id, owner_user_id=owner
-        )["status"]
-    }
+    candidate_id = item.detail.get("candidate_id")
+    if item.detail.get("candidate_status") == "deferred" and candidate_id:
+        _restore_candidate_by_id(session, str(candidate_id), f"conflict:{item.id}:{item.etag}")
+    if item.detail.get("resolution") == "deferred":
+        PersonalUpdateService().restore_conflict(session, item.id, owner_user_id=owner)
+    return {"status": "pending"}
+
+
+def _restore_candidate_by_id(session: Session, candidate_id: str, key: str) -> None:
+    repository = MemoryRepository()
+    repository.restore_candidate(
+        session,
+        candidate_id=candidate_id,
+        reason="restored from 待处理",
+        operation_key=f"domain:candidate:restore:pending:{key}",
+    )
+    repository.request_confirmation(session, candidate_id=candidate_id)
+
+
+def _defer_candidate(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
+    result = MemoryRepository().defer_candidate(
+        session,
+        candidate_id=item.id,
+        reason="deferred from 待处理",
+        operation_key=f"domain:candidate:defer:pending:{item.id}:{item.etag}",
+    )
+    return {"status": result.status}
+
+
+def _restore_candidate(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
+    _restore_candidate_by_id(session, item.id, f"{item.id}:{item.etag}")
+    return {"status": "pending"}
 
 
 def _defer_relation(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
@@ -522,10 +556,9 @@ def build_inbox() -> PendingInbox:
         ]
     )
     # Only defer/restore (and reject for prompts and taxonomy proposals) run
-    # through the inbox so far; approve and other rejects use each type's own
-    # endpoint. New verbs (memory
-    # candidate defer, taxonomy reject/defer, bulk) register their handlers here
-    # and add the verb to the source's ``actions``.
+    # through the inbox so far; approve and the other rejects still use each
+    # type's own endpoint. A new verb (e.g. the bulk API's approve) registers
+    # its handler here and adds the verb to the source's ``actions``.
     inbox.register_action("conclusion_draft", "defer", _defer_conclusion)
     inbox.register_action("conclusion_draft", "restore", _restore_conclusion)
     inbox.register_action("relation_suggestion", "defer", _defer_relation)
@@ -537,6 +570,8 @@ def build_inbox() -> PendingInbox:
     inbox.register_action("missing_info_prompt", "restore", _restore_prompt)
     inbox.register_action("extraction_supplement", "defer", deferrals.defer)
     inbox.register_action("extraction_supplement", "restore", deferrals.restore)
+    inbox.register_action("memory_candidate", "defer", _defer_candidate)
+    inbox.register_action("memory_candidate", "restore", _restore_candidate)
     for action in ("reject", "defer", "restore"):
         inbox.register_action("classification", action, _classification_action(action))
     return inbox

@@ -79,9 +79,7 @@ def test_deferred_conclusion_leaves_default_view_and_appears_in_deferred_only(
     assert only[0]["actions"] == ["approve", "reject", "restore"]
 
 
-def _act(
-    client: TestClient, csrf: str, item: dict[str, Any], action: str, key: str
-) -> Any:
+def _act(client: TestClient, csrf: str, item: dict[str, Any], action: str, key: str) -> Any:
     return client.post(
         f"/v1/review/items/{item['type']}/{item['id']}/{action}",
         json={},
@@ -221,9 +219,7 @@ def test_skipped_conflict_no_longer_waits_anywhere(tmp_path: Path) -> None:
     )
 
     assert skipped.status_code == 200, skipped.text
-    assert all(
-        i["id"] != conflict["conflict_id"] for i in _items(client, deferred="include")
-    )
+    assert all(i["id"] != conflict["conflict_id"] for i in _items(client, deferred="include"))
     pending = client.get("/v1/personal-updates/conflicts").json()["items"]
     assert all(i["id"] != conflict["conflict_id"] for i in pending)
 
@@ -341,9 +337,77 @@ def test_memory_candidates_need_individual_approval_only_when_inferred(
 
     for candidate_type, individual in (("inferred", True), ("explicit_extracted", False)):
         item = items[created[candidate_type]["candidate_id"]]
-        assert item["actions"] == ["approve", "reject"]
+        assert item["actions"] == ["approve", "reject", "defer"]
         assert item["etag"] == listed[item["id"]]["etag"]
         assert item["requires_individual_approval"] is individual
+
+
+def test_memory_candidate_defer_and_restore_go_through_the_inbox(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+    csrf = _login(client)
+    created = client.post(
+        "/v1/memory/candidates",
+        json=_candidate_payload("defer me"),
+        headers=_headers(csrf, "inbox-candidate-defer-create"),
+    ).json()["result"]
+    item = next(i for i in _items(client) if i["id"] == created["candidate_id"])
+
+    assert _act(client, csrf, item, "defer", "inbox-candidate-defer").status_code == 200
+
+    deferred_api = client.get("/v1/memory/candidates", params={"state": "deferred"}).json()
+    assert [c["id"] for c in deferred_api["items"]] == [item["id"]]
+    deferred = next(i for i in _items(client, deferred="only") if i["id"] == item["id"])
+    assert deferred["actions"] == ["restore"]
+    assert deferred["etag"] == deferred_api["items"][0]["etag"]
+    assert _act(client, csrf, deferred, "restore", "inbox-candidate-restore").status_code == 200
+    back = next(i for i in _items(client) if i["id"] == item["id"])
+    assert back["pending_since"] == item["pending_since"]
+    confirmed = client.post(
+        f"/v1/memory/candidates/{item['id']}/confirm",
+        json={},
+        headers=_headers(csrf, "inbox-candidate-confirm", back["etag"]),
+    )
+    assert confirmed.status_code == 200, confirmed.text
+
+
+def test_conflict_whose_candidate_was_deferred_is_deferred_once(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+    csrf = _login(client)
+    conflict = _conflict(client, csrf, "inbox-conflict-candidate")
+    candidate_etag = next(i for i in _items(client) if i["id"] == conflict["conflict_id"])[
+        "detail"
+    ]["candidate_etag"]
+    deferred_candidate = client.post(
+        f"/v1/memory/candidates/{conflict['candidate_id']}/defer",
+        json={},
+        headers=_headers(csrf, "inbox-conflict-candidate-defer", candidate_etag),
+    )
+    assert deferred_candidate.status_code == 200, deferred_candidate.text
+
+    assert _items(client) == []
+    assert client.get("/v1/review/counts").json()["total"] == 0
+    deferred = _items(client, deferred="only")
+    assert [(i["type"], i["id"]) for i in deferred] == [
+        ("personal_conflict", conflict["conflict_id"])
+    ]
+    assert deferred[0]["actions"] == ["restore"]
+
+    assert (
+        _act(client, csrf, deferred[0], "restore", "inbox-conflict-candidate-restore").status_code
+        == 200
+    )
+    restored = _items(client)
+    assert [(i["type"], i["id"]) for i in restored] == [
+        ("personal_conflict", conflict["conflict_id"])
+    ]
+    confirmed = client.post(
+        f"/v1/personal-updates/conflicts/{conflict['conflict_id']}/decision",
+        json={"decision": "confirm"},
+        headers=_headers(
+            csrf, "inbox-conflict-candidate-confirm", restored[0]["detail"]["candidate_etag"]
+        ),
+    )
+    assert confirmed.status_code == 200, confirmed.text
 
 
 def test_candidate_behind_a_conflict_is_counted_once_as_the_conflict(tmp_path: Path) -> None:
@@ -426,10 +490,13 @@ def test_pending_taxonomy_proposal_is_a_classification_item(tmp_path: Path) -> N
 
 def _set_created(factory: sessionmaker[Session], table: str, item_id: str, when: str) -> None:
     with session_scope(factory) as session:
-        session.execute(text(f"UPDATE {table} SET created_at = :when WHERE id = :id"), {
-            "when": when,
-            "id": item_id,
-        })
+        session.execute(
+            text(f"UPDATE {table} SET created_at = :when WHERE id = :id"),
+            {
+                "when": when,
+                "id": item_id,
+            },
+        )
 
 
 def test_items_are_ordered_by_when_they_became_pending_and_paginated(tmp_path: Path) -> None:
