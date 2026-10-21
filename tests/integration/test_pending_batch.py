@@ -168,3 +168,16 @@ def test_drafts_and_relations_are_approved_one_at_a_time_and_rejected_in_bulk(
     conclusions = "conclusion_draft,relation_suggestion"
     assert _items(client, deferred="include", type=conclusions) == []
     assert client.get(f"/v1/conclusions/{rejected_draft['id']}").json()["status"] == "rejected"
+
+
+def test_an_item_named_twice_or_an_unknown_type_is_refused(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+    csrf = _login(client)
+    draft = _pending(client, _draft(client, csrf, "batch-twice")["id"])
+
+    twice = _batch(client, csrf, "defer", [draft, {**draft, "etag": "x"}], "batch-twice")
+    unknown = _batch(client, csrf, "defer", [{**draft, "type": "gap"}], "batch-unknown")
+
+    assert twice.status_code == 400
+    assert unknown.status_code == 422
+    assert _pending(client, draft["id"])["deferred"] is False
