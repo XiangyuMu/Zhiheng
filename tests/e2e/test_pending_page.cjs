@@ -22,6 +22,7 @@ let writes;
 let failNext;
 let itemsGate;
 let itemsError;
+let batchFailures;
 
 function item(type, id, title, since, extra = {}) {
   return {
@@ -84,6 +85,7 @@ beforeEach(() => {
   failNext = null;
   itemsGate = null;
   itemsError = null;
+  batchFailures = {};
 });
 
 function listing(url) {
@@ -117,6 +119,16 @@ async function open(viewport = { width: 1440, height: 900 }, { clock = true } = 
           const failure = failNext;
           failNext = null;
           return route.fulfill({ status: failure.status, json: { detail: failure.detail } });
+        }
+        if (url.pathname === '/v1/review/batch') {
+          const { action, items: targets } = JSON.parse(request.postData());
+          const results = targets.map((target) => {
+            const failure = batchFailures[target.id];
+            if (failure) return { ...target, status: 'failed', reason: failure.reason, message: failure.message, result: null };
+            items = items.filter((entry) => entry.id !== target.id);
+            return { type: target.type, id: target.id, status: 'succeeded', reason: null, message: null, result: {} };
+          });
+          return route.fulfill({ json: { status: 'completed', result: { action, items: results } } });
         }
         const id = url.pathname.match(/^\/v1\/review\/items\/[^/]+\/([^/]+)\/[^/]+$/)?.[1];
         items = items.filter((entry) => entry.id !== id);
@@ -218,8 +230,8 @@ test('shortcuts are ignored while typing and ? shows the key map', async () => {
   assert.equal(await selectedId(page), 'mp1');
   const input = page.locator('#detail textarea');
   await input.click();
-  await page.keyboard.type('jkard?1');
-  assert.equal(await input.inputValue(), 'jkard?1');
+  await page.keyboard.type('jkardxRAD?1');
+  assert.equal(await input.inputValue(), 'jkardxRAD?1');
   assert.equal(await selectedId(page), 'mp1');
   assert.equal(await page.locator('#undo-toast').isHidden(), true);
   assert.equal(await page.locator('#shortcut-help').isVisible(), false);
@@ -228,7 +240,7 @@ test('shortcuts are ignored while typing and ? shows the key map', async () => {
   await page.keyboard.press('?');
   await page.locator('#shortcut-help').waitFor({ state: 'visible' });
   const help = await page.locator('#shortcut-help').innerText();
-  for (const key of ['j', 'k', 'Enter', 'a', 'r', 'd', 'u', '0', '?']) assert(help.includes(key), `help lists ${key}`);
+  for (const key of ['j', 'k', 'Enter', 'a', 'r', 'd', 'u', '0', '?', 'x', 'Shift+A', 'Shift+R', 'Shift+D']) assert(help.includes(key), `help lists ${key}`);
   await page.keyboard.press('j');
   assert.equal(await selectedId(page), 'mp1', 'keys do not act behind the open help');
   await page.keyboard.press('Escape');
@@ -382,5 +394,223 @@ test('at 390px the list and the detail are separate screens and a works only in 
   await page.locator('#detail .back-to-list').click();
   await page.locator('#queue').waitFor({ state: 'visible' });
   assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+const selectedIds = (page) => page.locator('#queue .queue-row[data-selected="true"] .queue-item')
+  .evaluateAll((nodes) => nodes.map((node) => node.dataset.entryId));
+
+async function selectByX(page, entryIds) {
+  for (const entryId of entryIds) {
+    await page.locator(`#queue .queue-item[data-entry-id="${entryId}"]`).click();
+    await page.locator('#detail h2').click();
+    await page.keyboard.press('x');
+  }
+}
+
+test('x toggles the current item into the selection and the bar counts it', async () => {
+  const page = await open();
+  await ready(page);
+  assert.equal(await page.locator('#batch-bar').isHidden(), true);
+  await page.keyboard.press('x');
+  await page.keyboard.press('j');
+  await page.keyboard.press('x');
+  assert.deepEqual(await selectedIds(page), ['c1', 'r1']);
+  await page.locator('#batch-bar').filter({ hasText: '已选 2 项' }).waitFor();
+  assert.equal(await page.locator('#queue .queue-check').first().isChecked(), true);
+  await page.keyboard.press('x');
+  assert.deepEqual(await selectedIds(page), ['c1']);
+  await page.locator('#queue .queue-row').nth(4).locator('.queue-check').check();
+  assert.deepEqual(await selectedIds(page), ['c1', 'm1']);
+  await page.locator('#batch-clear').click();
+  assert.equal(await page.locator('#batch-bar').isHidden(), true);
+  assert.deepEqual(await selectedIds(page), []);
+  assert.deepEqual(writes, []);
+  await page.context().close();
+});
+
+test('Shift+R rejects the selection as one batch after the undo window and the badge follows', async () => {
+  const page = await open();
+  await ready(page);
+  await page.locator('#pending-nav-count').filter({ hasText: '6' }).waitFor();
+  await selectByX(page, ['c1', 'mp1', 'm1']);
+  await page.keyboard.press('Shift+R');
+  await page.locator('#undo-toast').filter({ hasText: '已拒绝 3 项' }).waitFor();
+  assert.deepEqual(await ids(page), ['r1', 'pc1', 'k1']);
+  assert.equal(await page.locator('#batch-bar').isHidden(), true);
+  await page.clock.runFor(4900);
+  assert.deepEqual(writes, [], 'nothing is sent inside the undo window');
+  await page.clock.runFor(200);
+  await page.locator('#message').filter({ hasText: '已拒绝 3 项' }).waitFor();
+  assert.deepEqual(writes.map((write) => [write.method, write.path, write.body]), [['POST', '/v1/review/batch', {
+    action: 'reject',
+    items: [
+      { type: 'conclusion_draft', id: 'c1', etag: 'etag-c1' },
+      { type: 'missing_info_prompt', id: 'mp1', etag: 'etag-mp1' },
+      { type: 'memory_candidate', id: 'm1', etag: 'etag-m1' },
+    ],
+  }]]);
+  await page.clock.runFor(500);
+  await page.locator('#pending-nav-count').filter({ hasText: '3' }).waitFor();
+  assert.deepEqual(await ids(page), ['r1', 'pc1', 'k1']);
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+test('u undoes a batch: the items come back in place, still selected, and nothing is sent', async () => {
+  const page = await open();
+  await ready(page);
+  await selectByX(page, ['r1', 'm1']);
+  await page.keyboard.press('Shift+D');
+  await page.locator('#undo-toast').filter({ hasText: '已延后 2 项' }).waitFor();
+  assert.deepEqual(await ids(page), ['c1', 'pc1', 'mp1', 'k1']);
+  await page.clock.runFor(3000);
+  await page.keyboard.press('u');
+  await page.locator('#undo-toast').waitFor({ state: 'hidden' });
+  assert.deepEqual(await ids(page), ['c1', 'r1', 'pc1', 'mp1', 'm1', 'k1']);
+  assert.deepEqual(await selectedIds(page), ['r1', 'm1']);
+  await page.locator('#batch-bar').filter({ hasText: '已选 2 项' }).waitFor();
+  await page.clock.runFor(10000);
+  assert.deepEqual(writes, []);
+  await page.context().close();
+});
+
+// Wherever the detail pane rests (stuck to the top of the viewport while the page scrolls,
+// or at the end of the page), with the detail scrolled to its end, which of its action
+// buttons are hidden behind the undo toast?
+async function coveredDetailButtons(page) {
+  return page.evaluate(() => {
+    const detail = document.getElementById('detail');
+    const toast = document.getElementById('undo-toast').getBoundingClientRect();
+    const max = document.documentElement.scrollHeight - innerHeight;
+    const covered = [];
+    for (let y = 0; y <= max + 10; y += 10) {
+      window.scrollTo(0, Math.min(y, max));
+      const stuck = Math.abs(detail.getBoundingClientRect().top - 16) < 1;
+      if (!stuck && y < max) continue;
+      detail.scrollTop = detail.scrollHeight;
+      detail.querySelectorAll('.actions button').forEach((button) => {
+        const box = button.getBoundingClientRect();
+        if (box.bottom > innerHeight || (box.bottom > toast.top && box.top < toast.bottom
+          && box.right > toast.left && box.left < toast.right)) {
+          covered.push({ y: Math.min(y, max), stuck, top: box.top, bottom: box.bottom, toastTop: toast.top });
+        }
+      });
+    }
+    return covered;
+  });
+}
+
+test('on desktop the undo toast never covers the detail action buttons', async () => {
+  // A long source makes the detail scroll inside its sticky pane, so its actions sit at
+  // the bottom of the viewport where the toast is.
+  const original = CONCLUSIONS.c9.source;
+  CONCLUSIONS.c9.source = { text: '很长的原文。'.repeat(400) };
+  try {
+    for (const extra of [0, 30]) {
+      items = seed();
+      for (let n = 0; n < extra; n += 1) {
+        items.push(item('memory_candidate', `filler${n}`, `filler ${n}`, `2026-10-${String(10 + (n % 18)).padStart(2, '0')}T00:00:00+00:00`));
+      }
+      const page = await open({ width: 1280, height: 720 });
+      await ready(page);
+      await page.keyboard.press('r');
+      await page.locator('#undo-toast').filter({ hasText: '已拒绝' }).waitFor();
+      await page.locator('#detail').filter({ hasText: '右侧结论' }).waitFor();
+      await page.locator('#detail .actions').waitFor();
+      assert.deepEqual(await coveredDetailButtons(page), [], `toast covers detail buttons with ${6 + extra} items`);
+      await page.context().close();
+    }
+  } finally {
+    CONCLUSIONS.c9.source = original;
+  }
+});
+
+test('at 390px x and Shift+D work from the list and the batch bar fits', async () => {
+  const page = await open({ width: 390, height: 844 });
+  await ready(page);
+  await page.keyboard.press('x');
+  await page.keyboard.press('j');
+  await page.keyboard.press('j');
+  await page.keyboard.press('x');
+  assert.deepEqual(await selectedIds(page), ['c1', 'pc1']);
+  await page.locator('#batch-bar').filter({ hasText: '已选 2 项' }).waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#detail').isVisible(), false, 'x does not open the detail');
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+  assert(overflow <= 1, `page overflows by ${overflow}px`);
+  for (const action of ['approve', 'reject', 'defer']) {
+    const box = await page.locator(`#batch-bar [data-batch-action="${action}"]`).boundingBox();
+    assert(box.x >= 0 && box.x + box.width <= 390, `${action} button fits on screen`);
+  }
+  await page.keyboard.press('Shift+D');
+  await page.locator('#undo-toast').filter({ hasText: '已延后 2 项' }).waitFor();
+  await page.clock.runFor(5100);
+  await page.locator('#message').filter({ hasText: '已延后 2 项' }).waitFor();
+  assert.deepEqual(writes.map((write) => [write.path, write.body.items.map((i) => i.id)]),
+    [['/v1/review/batch', ['c1', 'pc1']]]);
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+test('a partly failed batch removes what succeeded and keeps the failures selected with reasons', async () => {
+  const page = await open();
+  await ready(page);
+  batchFailures = {
+    mp1: { reason: 'stale', message: 'version changed' },
+    m1: { reason: 'not_found', message: 'pending item not found' },
+  };
+  await selectByX(page, ['c1', 'mp1', 'm1']);
+  await page.keyboard.press('Shift+R');
+  await page.clock.runFor(5100);
+  await page.locator('#message').filter({ hasText: '已拒绝 1 项，2 项拒绝失败' }).waitFor();
+  assert.deepEqual(await ids(page), ['r1', 'pc1', 'mp1', 'm1', 'k1']);
+  assert.deepEqual(await selectedIds(page), ['mp1', 'm1']);
+  await page.locator('#batch-bar').filter({ hasText: '已选 2 项' }).waitFor();
+  assert.match(await page.locator('#queue .queue-item[data-entry-id="mp1"] .queue-error').innerText(), /拒绝失败：内容已变化/);
+  assert.match(await page.locator('#queue .queue-item[data-entry-id="m1"] .queue-error').innerText(), /拒绝失败：事项已不存在/);
+  assert.equal(await selectedId(page), 'mp1', 'the first failure is the current item');
+  await page.clock.runFor(500);
+  await page.locator('#pending-nav-count').filter({ hasText: '5' }).waitFor();
+  await page.context().close();
+});
+
+test('a refused batch request brings every item back selected with the reason', async () => {
+  const page = await open();
+  await ready(page);
+  await selectByX(page, ['mp1', 'm1']);
+  failNext = { status: 400, detail: 'duplicate items in batch' };
+  await page.keyboard.press('Shift+D');
+  await page.clock.runFor(5100);
+  await page.locator('#message').filter({ hasText: '2 项延后失败' }).waitFor();
+  assert.deepEqual(await selectedIds(page), ['mp1', 'm1']);
+  assert.match(await page.locator('#queue .queue-item[data-entry-id="m1"] .queue-error').innerText(), /duplicate items in batch/);
+  await page.context().close();
+});
+
+test('Shift+A is greyed out with the reason while the selection needs individual approval', async () => {
+  items.push(item('memory_candidate', 'm3', 'profile.style', '2026-10-07T00:00:00+00:00', {
+    kind: 'inferred', requires_individual_approval: true,
+  }));
+  const page = await open();
+  await ready(page);
+  await selectByX(page, ['m1', 'm3']);
+  const approve = page.locator('#batch-bar [data-batch-action="approve"]');
+  assert.equal(await approve.isDisabled(), true);
+  await page.locator('#batch-reason').filter({ hasText: '推断画像' }).waitFor();
+  assert.equal(await page.locator('#batch-bar [data-batch-action="reject"]').isEnabled(), true);
+  await page.keyboard.press('Shift+A');
+  await page.locator('#message').filter({ hasText: '逐条批准' }).waitFor();
+  assert.equal(await page.locator('#undo-toast').isHidden(), true);
+  assert.deepEqual(await selectedIds(page), ['m1', 'm3']);
+  // Dropping the inferred candidate makes the low-stakes rest approvable together.
+  await selectByX(page, ['m3']);
+  assert.equal(await approve.isEnabled(), true);
+  assert.equal(await page.locator('#batch-reason').isHidden(), true);
+  await approve.click();
+  await page.locator('#undo-toast').filter({ hasText: '已批准 1 项' }).waitFor();
+  await page.clock.runFor(5100);
+  await page.locator('#message').filter({ hasText: '已批准 1 项' }).waitFor();
+  assert.deepEqual(writes.map((write) => [write.path, write.body.action, write.body.items.map((i) => i.id)]),
+    [['/v1/review/batch', 'approve', ['m1']]]);
   await page.context().close();
 });

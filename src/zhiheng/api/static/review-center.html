@@ -28,7 +28,18 @@
   </div>
   <p id="message" class="message" role="status" aria-live="polite"></p>
   <section id="layout" class="layout" data-view="list">
-    <div class="list-pane"><h2 id="queue-heading" class="sr-only">待处理列表</h2><div id="queue" class="queue" aria-labelledby="queue-heading" aria-busy="true"><p class="kb-loading">正在读取待处理事项…</p></div></div>
+    <div class="list-pane">
+      <div id="batch-bar" class="batch-bar" role="region" aria-label="批量操作" hidden>
+        <strong id="batch-count">已选 0 项</strong>
+        <div class="batch-actions">
+          <button type="button" class="small" data-batch-action="approve" aria-keyshortcuts="Shift+A" aria-describedby="batch-reason">批准 <kbd>⇧A</kbd></button>
+          <button type="button" class="small danger" data-batch-action="reject" aria-keyshortcuts="Shift+R">拒绝 <kbd>⇧R</kbd></button>
+          <button type="button" class="small secondary" data-batch-action="defer" aria-keyshortcuts="Shift+D">延后 <kbd>⇧D</kbd></button>
+          <button id="batch-clear" class="quiet small" type="button">清除选择</button>
+        </div>
+        <p id="batch-reason" class="batch-reason" hidden></p>
+      </div>
+      <h2 id="queue-heading" class="sr-only">待处理列表</h2><div id="queue" class="queue" aria-labelledby="queue-heading" aria-busy="true"><p class="kb-loading">正在读取待处理事项…</p></div></div>
     <aside id="detail" class="detail" aria-label="详情" tabindex="-1"><p class="muted">选择一项查看完整内容。</p></aside>
   </section>
   <div id="undo-toast" class="undo-toast" role="status" aria-live="polite" hidden><span id="undo-text"></span><button id="undo-button" class="secondary small" type="button" aria-keyshortcuts="u">撤销 <kbd>u</kbd></button></div>
@@ -41,7 +52,11 @@
       <dt><kbd>a</kbd></dt><dd>批准当前项（逐项批准的类型需先看到详情）</dd>
       <dt><kbd>r</kbd></dt><dd>拒绝当前项</dd>
       <dt><kbd>d</kbd></dt><dd>延后当前项</dd>
-      <dt><kbd>u</kbd></dt><dd>5 秒内撤销上一个动作</dd>
+      <dt><kbd>x</kbd></dt><dd>选中或取消选中当前项</dd>
+      <dt><kbd>Shift+A</kbd></dt><dd>批准所有选中项（仅分类和明确陈述的记忆候选；含需逐条批准的类型时不可用）</dd>
+      <dt><kbd>Shift+R</kbd></dt><dd>拒绝所有选中项</dd>
+      <dt><kbd>Shift+D</kbd></dt><dd>延后所有选中项</dd>
+      <dt><kbd>u</kbd></dt><dd>5 秒内撤销上一个动作（含批量动作）</dd>
       <dt><kbd>1</kbd>–<kbd>7</kbd></dt><dd>按类型筛选</dd>
       <dt><kbd>0</kbd></dt><dd>显示全部类型</dd>
       <dt><kbd>?</kbd></dt><dd>显示本帮助</dd>

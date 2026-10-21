@@ -25,8 +25,18 @@
 .kb-page .queue { overflow: hidden; }
 .kb-page .queue-state { margin: var(--kb-space-4); }
 .kb-page .queue .kb-loading { margin: 0; padding: var(--kb-space-5); }
-.kb-page .queue-item { display: block; width: 100%; min-height: 0; padding: var(--kb-space-3) var(--kb-space-4); overflow-wrap: anywhere; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-left: 3px solid transparent; border-radius: 0; background: var(--surface); color: var(--ink); font-weight: 400; }
-.kb-page .queue-item:last-child { border-bottom: 0; }
+.kb-page .batch-bar { position: sticky; top: var(--kb-space-4); z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: var(--kb-space-2) var(--kb-space-3); margin-bottom: var(--kb-space-3); padding: var(--kb-space-2) var(--kb-space-3); border: 1px solid var(--accent); border-radius: var(--kb-radius-lg); background: var(--accent-soft); box-shadow: var(--kb-shadow); }
+.kb-page .batch-bar[hidden] { display: none; }
+.kb-page .batch-actions { display: flex; flex-wrap: wrap; gap: var(--kb-space-2); }
+.kb-page .batch-actions .danger { color: var(--danger); border-color: var(--danger); background: var(--surface); }
+.kb-page .batch-actions button:disabled { opacity: .5; cursor: not-allowed; }
+.kb-page .batch-actions kbd { margin-left: 4px; }
+.kb-page .batch-reason { flex-basis: 100%; margin: 0; color: var(--kb-warning); font-size: .88rem; }
+.kb-page .queue-row { display: flex; align-items: flex-start; border-bottom: 1px solid var(--line); }
+.kb-page .queue-row:last-child { border-bottom: 0; }
+.kb-page .queue-row[data-selected="true"] { background: var(--kb-surface-muted); }
+.kb-page .queue-check { flex: none; width: 18px; height: 18px; margin: 14px 0 0 var(--kb-space-3); }
+.kb-page .queue-item { display: block; flex: 1; width: 100%; min-height: 0; padding: var(--kb-space-3) var(--kb-space-4); overflow-wrap: anywhere; text-align: left; border: 0; border-left: 3px solid transparent; border-radius: 0; background: transparent; color: var(--ink); font-weight: 400; }
 .kb-page .queue-item:hover { background: var(--kb-surface-muted); }
 .kb-page .queue-item[aria-current="true"] { border-left-color: var(--accent); background: var(--accent-soft); }
 .kb-page .queue-item strong, .kb-page .queue-item small, .kb-page .queue-item span { display: block; }
@@ -62,6 +72,8 @@
 
 .kb-page .undo-toast { position: fixed; left: 50%; bottom: var(--kb-space-5); z-index: 20; display: flex; align-items: center; gap: var(--kb-space-3); max-width: calc(100vw - 32px); padding: var(--kb-space-2) var(--kb-space-2) var(--kb-space-2) var(--kb-space-4); transform: translateX(-50%); border-radius: var(--kb-radius-lg); background: var(--kb-text); color: #fff; box-shadow: var(--kb-shadow); }
 .kb-page .undo-toast button { flex-shrink: 0; }
+/* While the toast shows, the sticky detail pane ends above it so its last buttons stay reachable. */
+.kb-page.undo-visible .detail { max-height: calc(100vh - 32px - 88px); }
 .kb-page .shortcut-help { width: min(94vw, 480px); padding: var(--kb-space-5); }
 .kb-page .shortcut-list { display: grid; grid-template-columns: max-content 1fr; gap: var(--kb-space-2) var(--kb-space-4); }
 .kb-page .shortcut-list dd { margin: 0; }

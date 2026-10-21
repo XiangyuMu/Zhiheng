@@ -48,6 +48,7 @@
     taxonomy: null,
     undo: [],
     failures: new Map(),
+    selected: new Set(),
   };
   const keyOf = (item) => `${item.type}:${item.id}`;
   const current = () => state.items[state.index] || null;
@@ -154,6 +155,9 @@
       if (seq !== state.loadSeq) return;
       const hidden = hiddenKeys();
       state.items = listing.items.filter((item) => !hidden.has(keyOf(item)));
+      // The selection only ever names items that are in the list being shown.
+      const shown = new Set(state.items.map(keyOf));
+      state.selected = new Set([...state.selected].filter((key) => shown.has(key)));
       state.error = null;
       state.loaded = true;
       if (counts) renderCounts(counts);
@@ -198,6 +202,7 @@
       retry.addEventListener("click", () => load());
       box.append(node("p", `待处理事项读取失败：${state.error}`), retry);
       queue.replaceChildren(box);
+      renderBatchBar();
       return;
     }
     if (!state.items.length) {
@@ -206,9 +211,17 @@
         ? `没有已延后的${label || "事项"}。`
         : label ? `没有待处理的${label}。` : "没有待处理事项。生效前需要你决定的内容会出现在这里。";
       queue.replaceChildren(node("p", text, "kb-empty queue-state"));
+      renderBatchBar();
       return;
     }
     queue.replaceChildren(...state.items.map((item, index) => {
+      const row = node("div", undefined, "queue-row");
+      row.dataset.selected = String(state.selected.has(keyOf(item)));
+      const check = node("input", undefined, "queue-check");
+      check.type = "checkbox";
+      check.checked = state.selected.has(keyOf(item));
+      check.setAttribute("aria-label", `选择「${item.title || "（无标题）"}」`);
+      check.addEventListener("change", () => toggleSelected(item, check.checked));
       const button = document.createElement("button");
       button.type = "button";
       button.className = "queue-item";
@@ -225,8 +238,47 @@
         select(index);
         if (NARROW.matches) openDetail();
       });
-      return button;
+      row.append(check, button);
+      return row;
     }));
+    renderBatchBar();
+  }
+
+  // ---- selection ------------------------------------------------------------------------
+
+  function toggleSelected(item, on = !state.selected.has(keyOf(item))) {
+    const key = keyOf(item);
+    if (on) state.selected.add(key);
+    else state.selected.delete(key);
+    const position = state.items.indexOf(item);
+    const row = document.querySelectorAll("#queue .queue-row")[position];
+    if (row) {
+      row.dataset.selected = String(on);
+      row.querySelector(".queue-check").checked = on;
+    }
+    renderBatchBar();
+  }
+
+  const selectedItems = () => state.items.filter((item) => state.selected.has(keyOf(item)));
+
+  function clearSelection() {
+    state.selected.clear();
+    renderList();
+  }
+
+  function renderBatchBar() {
+    const chosen = selectedItems();
+    $("batch-bar").hidden = !chosen.length;
+    $("batch-count").textContent = `已选 ${chosen.length} 项`;
+    const reasons = [];
+    document.querySelectorAll("#batch-bar [data-batch-action]").forEach((button) => {
+      const blocked = chosen.length ? batchBlocked(chosen, button.dataset.batchAction) : null;
+      button.disabled = Boolean(blocked);
+      button.title = blocked || "";
+      if (blocked && !reasons.includes(blocked)) reasons.push(blocked);
+    });
+    $("batch-reason").hidden = !reasons.length;
+    $("batch-reason").textContent = reasons.join(" ");
   }
 
   function select(index) {
@@ -651,12 +703,53 @@
         return;
       }
     }
-    const op = { item, verb, index: state.index };
+    schedule([item], verb, false);
+  }
+
+  // Shift+A/R/D act on every selected item at once, after the same undo window.
+  function batchTriage(verb) {
+    const chosen = selectedItems();
+    if (!chosen.length) { say("请先按 x 选择事项。", "hint"); return; }
+    const blocked = batchBlocked(chosen, verb);
+    if (blocked) { say(blocked, "hint"); return; }
+    state.selected.clear();
+    schedule(chosen, verb, true);
+  }
+
+  const kindLabel = (item) => (item.type === "memory_candidate" && KIND_LABELS[item.kind]
+    ? KIND_LABELS[item.kind] : TYPE_LABELS[item.type] || item.type);
+
+  // Why a batch verb cannot run on the selection (ADR 0011: batch approve only for
+  // low-stakes types), or null when it can.
+  function batchBlocked(chosen, verb) {
+    if (verb === "approve") {
+      const individual = [...new Set(chosen.filter((item) => item.requires_individual_approval).map(kindLabel))];
+      if (individual.length) {
+        return `所选包含需逐条批准的${individual.join("、")}，请在详情中逐条批准，或取消选择后再批量批准。`;
+      }
+    }
+    const refused = chosen.filter((item) => !item.actions.includes(verb));
+    if (refused.length) {
+      const more = refused.length > 1 ? `等 ${refused.length} 项` : "";
+      return `所选的「${titleOf(refused[0])}」${more}不能${VERBS[verb]}，请取消选择后再试。`;
+    }
+    return null;
+  }
+
+  // Take items out of the list now and send the decision when the undo window closes.
+  function schedule(chosen, verb, batch) {
+    const currentKey = current() ? keyOf(current()) : null;
+    const entries = chosen.map((item) => ({ item, index: state.items.indexOf(item) }))
+      .sort((a, b) => a.index - b.index);
+    const op = { entries, verb, batch };
     op.timer = setTimeout(() => commit(op), UNDO_MS);
     state.undo.push(op);
-    state.failures.delete(keyOf(item));
-    state.items.splice(state.index, 1);
-    state.index = Math.min(state.index, Math.max(0, state.items.length - 1));
+    const removed = new Set(chosen);
+    chosen.forEach((item) => state.failures.delete(keyOf(item)));
+    const before = state.items.slice(0, state.index).filter((item) => !removed.has(item)).length;
+    state.items = state.items.filter((item) => !removed.has(item));
+    const kept = currentKey ? state.items.findIndex((item) => keyOf(item) === currentKey) : -1;
+    state.index = kept >= 0 ? kept : Math.min(before, Math.max(0, state.items.length - 1));
     renderList();
     renderDetail();
     if (NARROW.matches && !state.items.length) setView("list");
@@ -664,41 +757,79 @@
     showUndo();
   }
 
+  function titleOf(item) {
+    return item.title || "（无标题）";
+  }
+
   function showUndo() {
     const op = state.undo[state.undo.length - 1];
     $("undo-toast").hidden = !op;
-    if (op) $("undo-text").textContent = `${DONE[op.verb]}「${op.item.title || "（无标题）"}」，5 秒内可撤销。`;
+    document.body.classList.toggle("undo-visible", Boolean(op));
+    if (!op) return;
+    const what = op.batch ? ` ${op.entries.length} 项` : `「${titleOf(op.entries[0].item)}」`;
+    $("undo-text").textContent = `${DONE[op.verb]}${what}，5 秒内可撤销。`;
   }
 
   function undo() {
     const op = state.undo.pop();
     if (!op) { say("没有可以撤销的动作。", "hint"); return; }
     clearTimeout(op.timer);
-    const at = Math.min(op.index, state.items.length);
-    state.items.splice(at, 0, op.item);
-    state.index = at;
+    op.entries.forEach(({ item, index }) => {
+      state.items.splice(Math.min(index, state.items.length), 0, item);
+      if (op.batch) state.selected.add(keyOf(item));
+    });
+    state.index = state.items.indexOf(op.entries[0].item);
     renderList();
     renderDetail();
     showUndo();
     say(`已撤销${VERBS[op.verb]}。`, "info");
   }
 
+  const REASONS = {
+    stale: "内容已变化，请刷新后重新决定",
+    not_found: "事项已不存在",
+    action_unavailable: "这一项不能执行该操作",
+  };
+
+  // Send one undo-window decision. Items that fail come back to the list with the reason
+  // on them; a failed batch item also stays selected so it can be retried or changed.
   async function commit(op, { keepalive = false } = {}) {
     const position = state.undo.indexOf(op);
     if (position < 0) return;
     state.undo.splice(position, 1);
     showUndo();
-    let keep;
+    const extra = keepalive ? { keepalive: true } : {};
+    const verb = VERBS[op.verb];
+    let failed = [];
     try {
-      await perform(op.item, op.verb, keepalive ? { keepalive: true } : {});
-      say("操作已保存。", "success");
+      if (op.batch) {
+        const response = await mutation("/v1/review/batch", "POST", {
+          action: op.verb,
+          items: op.entries.map(({ item }) => ({ type: item.type, id: item.id, etag: item.etag })),
+        }, "*", extra);
+        const byKey = new Map(op.entries.map(({ item }) => [keyOf(item), item]));
+        failed = (response.result?.items || []).filter((row) => row.status !== "succeeded")
+          .map((row) => [byKey.get(`${row.type}:${row.id}`), REASONS[row.reason] || row.message || "操作未完成"])
+          .filter(([item]) => item);
+      } else {
+        await perform(op.entries[0].item, op.verb, extra);
+      }
     } catch (error) {
-      // The item comes back to the list, selected, with the reason on it.
-      keep = keyOf(op.item);
-      state.failures.set(keep, `${VERBS[op.verb]}失败：${error.message}`);
-      say(`「${op.item.title || "（无标题）"}」${VERBS[op.verb]}失败：${error.message}`, "error");
+      failed = op.entries.map(({ item }) => [item, error.message]);
     }
-    if (!keepalive) await load({ keep });
+    failed.forEach(([item, reason]) => {
+      state.failures.set(keyOf(item), `${verb}失败：${reason}`);
+      if (op.batch) state.selected.add(keyOf(item));
+    });
+    const succeeded = op.entries.length - failed.length;
+    if (!failed.length) {
+      say(op.batch ? `${DONE[op.verb]} ${succeeded} 项。` : "操作已保存。", "success");
+    } else if (op.batch) {
+      say(`${DONE[op.verb]} ${succeeded} 项，${failed.length} 项${verb}失败，失败项保留选中并标出原因。`, "error");
+    } else {
+      say(`「${titleOf(failed[0][0])}」${verb}失败：${failed[0][1]}`, "error");
+    }
+    if (!keepalive) await load({ keep: failed.length ? keyOf(failed[0][0]) : undefined });
   }
 
   // Leaving the page within the undo window still sends what the user decided.
@@ -750,6 +881,10 @@
       r: () => triage("reject"),
       d: () => triage("defer"),
       u: undo,
+      x: () => { if (current()) toggleSelected(current()); },
+      A: () => batchTriage("approve"),
+      R: () => batchTriage("reject"),
+      D: () => batchTriage("defer"),
       "?": () => $("shortcut-help").showModal(),
       0: () => setType(""),
     };
@@ -776,6 +911,10 @@
   });
   $("refresh").addEventListener("click", () => load());
   $("undo-button").addEventListener("click", undo);
+  $("batch-clear").addEventListener("click", clearSelection);
+  document.querySelectorAll("#batch-bar [data-batch-action]").forEach((button) => {
+    button.addEventListener("click", () => batchTriage(button.dataset.batchAction));
+  });
   $("shortcut-button").addEventListener("click", () => $("shortcut-help").showModal());
   NARROW.addEventListener("change", () => setView(state.view));
 
