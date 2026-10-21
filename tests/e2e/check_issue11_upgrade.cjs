@@ -87,7 +87,7 @@ fs.mkdirSync(output, { recursive: true });
         new_draft_id: draft.id,
         review_action: "approve",
         approved_status: approved.status,
-        approved_knowledge_id: approvalBody.knowledge_id,
+        approved_knowledge_id: approvalBody.result.knowledge_id,
         legacy_detail_visible: true,
       },
       browserErrors: errors,
