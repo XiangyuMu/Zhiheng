@@ -19,7 +19,7 @@ from zhiheng.knowledge.classification import (
 from zhiheng.memory.personal_updates import PersonalUpdateService
 from zhiheng.memory.repository import MemoryRepository
 from zhiheng.pending.deferrals import DeferralStore
-from zhiheng.pending.inbox import ActionHandler, PendingInbox, PendingItem, instant
+from zhiheng.pending.inbox import ActionHandler, PendingInbox, PendingItem, to_utc
 
 
 def _payload(value: object) -> dict[str, Any]:
@@ -57,8 +57,8 @@ class ConclusionDraftSource:
                             "status": row["status"],
                         }
                     ),
-                    pending_since=instant(row["created_at"]),
-                    actions=("approve", "reject", "restore" if deferred else "defer"),
+                    pending_since=to_utc(row["created_at"]),
+                    actions=("approve", "reject", "defer"),
                     requires_individual_approval=True,
                     deferred=deferred,
                     title=str(payload.get("title") or payload.get("claim") or ""),
@@ -103,7 +103,8 @@ class RelationSuggestionSource:
         ).mappings()
         items = []
         for row in rows:
-            deferred = str(row["status"]) == "deferred"
+            # Deferring the draft sets its relation suggestions aside with it.
+            deferred = str(row["status"]) == "deferred" or row["left_status"] == "deferred"
             approvable = (
                 row["left_status"] == "draft"
                 and row["right_status"] == "formal"
@@ -113,7 +114,7 @@ class RelationSuggestionSource:
             left = _payload(row["left_payload"])
             right = _payload(row["right_payload"])
             actions: tuple[str, ...] = ("approve",) if approvable else ()
-            actions += ("reject", "restore" if deferred else "defer")
+            actions += ("reject", "defer")
             items.append(
                 PendingItem(
                     type=self.type,
@@ -124,7 +125,7 @@ class RelationSuggestionSource:
                         row["left_version"],
                         row["right_version"],
                     ),
-                    pending_since=instant(row["pending_since"]),
+                    pending_since=to_utc(row["pending_since"]),
                     actions=actions,
                     requires_individual_approval=True,
                     deferred=deferred,
@@ -134,6 +135,8 @@ class RelationSuggestionSource:
                         "kind": row["kind"],
                         "left_id": row["left_id"],
                         "right_id": row["right_id"],
+                        "status": row["status"],
+                        "left_status": row["left_status"],
                         "stale": not approvable,
                     },
                 )
@@ -178,8 +181,8 @@ class PersonalConflictSource:
                             "candidate_etag": candidate_etag,
                         }
                     ),
-                    pending_since=instant(row["created_at"]),
-                    actions=("restore",) if deferred else ("defer",),
+                    pending_since=to_utc(row["created_at"]),
+                    actions=("defer",),
                     detail_actions=("confirm", "reject", "supplement"),
                     requires_individual_approval=False,
                     deferred=deferred,
@@ -222,8 +225,8 @@ class MissingInfoPromptSource:
                     type=self.type,
                     id=str(row["id"]),
                     etag=sha256_json({"id": str(row["id"]), "status": row["status"]}),
-                    pending_since=instant(row["created_at"]),
-                    actions=("reject", "restore" if deferred else "defer"),
+                    pending_since=to_utc(row["created_at"]),
+                    actions=("reject", "defer"),
                     detail_actions=("supplement",),
                     requires_individual_approval=False,
                     deferred=deferred,
@@ -272,8 +275,8 @@ class ExtractionSupplementSource:
                             "deferred": deferred,
                         }
                     ),
-                    pending_since=instant(row["created_at"]),
-                    actions=("restore",) if deferred else ("defer",),
+                    pending_since=to_utc(row["created_at"]),
+                    actions=("defer",),
                     detail_actions=("supplement",),
                     requires_individual_approval=False,
                     deferred=deferred,
@@ -324,9 +327,8 @@ class MemoryCandidateSource:
                             "status": str(row["status"]),
                         }
                     ),
-                    pending_since=instant(row["created_at"]),
-                    # A deferred candidate must be restored before it is decided.
-                    actions=("restore",) if deferred else ("approve", "reject", "defer"),
+                    pending_since=to_utc(row["created_at"]),
+                    actions=("approve", "reject", "defer"),
                     requires_individual_approval=str(row["candidate_type"]) == "inferred",
                     deferred=deferred,
                     title=str(row["state_key"]),
@@ -371,14 +373,20 @@ class ClassificationSource:
             ),
             {"owner": owner},
         ).mappings()
+        rejected = ClassificationRepository.rejected_suggestions(session, user_id=owner)
         items = []
         for row in rows:
             deferred = bool(row["deferred"])
             suggestion = suggested_primary_domain(
-                str(row["primary_domain_id"]), str(row["title"]), str(row["excerpt"] or ""), active
+                str(row["primary_domain_id"]),
+                str(row["title"]),
+                str(row["excerpt"] or ""),
+                active,
+                rejected.get(str(row["id"]), frozenset()),
             )
-            actions: tuple[str, ...] = ("approve",) if suggestion else ()
-            actions += ("restore",) if deferred else ("defer",)
+            # Rejecting rejects the suggested domain; the item stays unclassified.
+            actions: tuple[str, ...] = ("approve", "reject") if suggestion else ()
+            actions += ("defer",)
             items.append(
                 PendingItem(
                     type=self.type,
@@ -393,7 +401,7 @@ class ClassificationSource:
                             "deferred": deferred,
                         }
                     ),
-                    pending_since=instant(row["created_at"]),
+                    pending_since=to_utc(row["created_at"]),
                     actions=actions,
                     detail_actions=() if suggestion else ("choose_domain",),
                     requires_individual_approval=False,
@@ -426,8 +434,8 @@ class ClassificationSource:
                     kind="taxonomy_proposal",
                     id=str(proposal["id"]),
                     etag=str(proposal["etag"]),
-                    pending_since=instant(proposal["created_at"]),
-                    actions=("approve", "reject", "restore" if deferred else "defer"),
+                    pending_since=to_utc(proposal["created_at"]),
+                    actions=("approve", "reject", "defer"),
                     requires_individual_approval=False,
                     deferred=deferred,
                     title=str(proposal["proposal_type"]),
@@ -447,6 +455,13 @@ def _classification_action(action: str) -> ActionHandler:
             return _approve_classification(session, owner, item)
         if item.kind == "unclassified":
             knowledge = ClassificationRepository()
+            if action == "reject":
+                return knowledge.reject_suggested_domain(
+                    session,
+                    user_id=owner,
+                    knowledge_id=item.id,
+                    domain_id=str(item.detail["suggested_primary_domain_id"]),
+                )
             move = knowledge.defer_unclassified
             if action == "restore":
                 move = knowledge.restore_unclassified
@@ -569,7 +584,13 @@ def _decide_relation(decision: str) -> ActionHandler:
 
 
 def _restore_relation(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
-    return {"status": ConclusionRepository().restore_relation(session, owner, item.id)["status"]}
+    """Restore the suggestion, and its draft when the draft set it aside."""
+    repository = ConclusionRepository()
+    if item.detail.get("left_status") == "deferred":
+        repository.restore_draft(session, owner, str(item.detail["left_id"]))
+    if item.detail.get("status") == "deferred":
+        repository.restore_relation(session, owner, item.id)
+    return {"status": "proposed"}
 
 
 def _decide_conclusion(decision: str) -> ActionHandler:

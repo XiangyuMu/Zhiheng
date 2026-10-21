@@ -488,13 +488,18 @@ class ClassificationRepository:
                 text("SELECT id FROM domain_catalog WHERE status = 'active'")
             ).scalars()
         }
+        rejected = self.rejected_suggestions(session, user_id=user_id)
         items = []
         for row in rows:
             item = dict(row)
             excerpt = str(item.pop("excerpt") or "")
             item["deferred"] = bool(item["deferred"])
             item["suggested_primary_domain_id"] = suggested_primary_domain(
-                str(item["primary_domain_id"]), str(item["title"]), excerpt, active
+                str(item["primary_domain_id"]),
+                str(item["title"]),
+                excerpt,
+                active,
+                rejected.get(str(item["knowledge_object_id"]), frozenset()),
             )
             items.append(item)
         return items
@@ -516,6 +521,57 @@ class ClassificationRepository:
             {"owner": user_id, "knowledge": knowledge_id},
         )
         return {"knowledge_object_id": knowledge_id, "status": "deferred"}
+
+    def reject_suggested_domain(
+        self, session: Session, *, user_id: str, knowledge_id: str, domain_id: str
+    ) -> dict[str, Any]:
+        """The user rejects the suggested domain: nothing is assigned and it is not suggested
+        again, so the item stays unclassified until the user chooses a domain."""
+        self._require_owned_knowledge(session, user_id=user_id, knowledge_id=knowledge_id)
+        session.execute(
+            text(
+                """
+                INSERT INTO classification_change_events
+                  (id, knowledge_object_id, actor_user_id, action, before_json, after_json,
+                   source, request_id)
+                VALUES (:id, :knowledge_id, :user_id, 'suggestion_rejected', :before, :after,
+                        'user_rejected', NULL)
+                """
+            ),
+            {
+                "id": new_id(),
+                "knowledge_id": knowledge_id,
+                "user_id": user_id,
+                "before": json_text({"suggested_primary_domain_id": domain_id}),
+                "after": json_text({"rejected_primary_domain_id": domain_id}),
+            },
+        )
+        return {
+            "knowledge_object_id": knowledge_id,
+            "status": "suggestion_rejected",
+            "rejected_primary_domain_id": domain_id,
+        }
+
+    @staticmethod
+    def rejected_suggestions(session: Session, *, user_id: str) -> dict[str, frozenset[str]]:
+        """Suggested domains the user rejected, per knowledge object."""
+        rows = session.execute(
+            text(
+                """
+                SELECT e.knowledge_object_id,
+                       json_extract(e.after_json, '$.rejected_primary_domain_id') AS domain_id
+                FROM classification_change_events e
+                JOIN knowledge_objects ko ON ko.id = e.knowledge_object_id
+                WHERE ko.owner_user_id = :user_id AND e.action = 'suggestion_rejected'
+                  AND json_extract(e.after_json, '$.rejected_primary_domain_id') IS NOT NULL
+                """
+            ),
+            {"user_id": user_id},
+        ).all()
+        rejected: dict[str, set[str]] = {}
+        for knowledge_id, domain_id in rows:
+            rejected.setdefault(str(knowledge_id), set()).add(str(domain_id))
+        return {knowledge_id: frozenset(domains) for knowledge_id, domains in rejected.items()}
 
     def restore_unclassified(
         self, session: Session, *, user_id: str, knowledge_id: str
@@ -544,17 +600,24 @@ class ClassificationRepository:
 
 
 def suggested_primary_domain(
-    current: str, title: str, excerpt: str, active: set[str]
+    current: str,
+    title: str,
+    excerpt: str,
+    active: set[str],
+    rejected: frozenset[str] = frozenset(),
 ) -> str | None:
-    """Keep an item's catalog domain; otherwise suggest one for the user to approve."""
+    """Keep an item's catalog domain; otherwise suggest one for the user to approve.
+
+    A domain the user rejected for this item is never suggested again.
+    """
     if current in active:
-        return current
+        return None if current in rejected else current
     # Imported here: zhiheng.conclusions imports zhiheng.knowledge at module load.
     from zhiheng.conclusions.classification import suggest_classification
 
     suggested = suggest_classification(title=title, claim=excerpt, domain_id="")
     domain_id = str(suggested["primary_domain_id"])
-    return domain_id if domain_id in active else None
+    return domain_id if domain_id in active and domain_id not in rejected else None
 
 
 def _deletable(child_count: int, direct_knowledge_count: int) -> bool:

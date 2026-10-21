@@ -10,21 +10,26 @@ from __future__ import annotations
 
 import builtins
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any, Literal, Protocol
 
 from sqlalchemy.orm import Session
 
-PENDING_TYPES: tuple[str, ...] = (
-    "conclusion_draft",
-    "relation_suggestion",
-    "personal_conflict",
-    "missing_info_prompt",
-    "extraction_supplement",
-    "memory_candidate",
-    "classification",
-)
+
+class PendingType(StrEnum):
+    CONCLUSION_DRAFT = "conclusion_draft"
+    RELATION_SUGGESTION = "relation_suggestion"
+    PERSONAL_CONFLICT = "personal_conflict"
+    MISSING_INFO_PROMPT = "missing_info_prompt"
+    EXTRACTION_SUPPLEMENT = "extraction_supplement"
+    MEMORY_CANDIDATE = "memory_candidate"
+    CLASSIFICATION = "classification"
+
+
+# In the order the inbox lists types (filters 1-7).
+PENDING_TYPES: tuple[str, ...] = tuple(PendingType)
 
 DeferredFilter = Literal["exclude", "only", "include"]
 SortOrder = Literal["oldest", "newest"]
@@ -32,6 +37,19 @@ SortOrder = Literal["oldest", "newest"]
 
 class PendingItemNotFoundError(LookupError):
     pass
+
+
+class UnknownPendingTypeError(ValueError):
+    pass
+
+
+def require_known_types(types: Iterable[str]) -> builtins.list[str]:
+    """The one check for a pending type name, shared by the API and the inbox."""
+    selected = builtins.list(types)
+    unknown = [item_type for item_type in selected if item_type not in PENDING_TYPES]
+    if unknown:
+        raise UnknownPendingTypeError(f"unknown pending type {unknown[0]}")
+    return selected
 
 
 class StalePendingItemError(ValueError):
@@ -96,7 +114,7 @@ class PendingSource(Protocol):
 ActionHandler = Callable[[Session, str, PendingItem], Mapping[str, Any]]
 
 
-def instant(value: object) -> datetime:
+def to_utc(value: object) -> datetime:
     """Normalise the mixed timestamp storage formats to aware UTC datetimes."""
     parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
     if parsed.tzinfo is None:
@@ -110,20 +128,17 @@ class PendingInbox:
         self._handlers: dict[tuple[str, str], ActionHandler] = {}
 
     def register_action(self, item_type: str, action: str, handler: ActionHandler) -> None:
-        if item_type not in self._sources:
-            raise ValueError(f"unknown pending type {item_type}")
+        require_known_types([item_type])
         self._handlers[(item_type, action)] = handler
 
     def collect(
         self, session: Session, owner: str, types: Sequence[str] | None = None
     ) -> list[PendingItem]:
-        selected = list(types) if types else [t for t in PENDING_TYPES if t in self._sources]
-        unknown = [item_type for item_type in selected if item_type not in self._sources]
-        if unknown:
-            raise ValueError(f"unknown pending type {unknown[0]}")
+        selected = require_known_types(types) if types else builtins.list(PENDING_TYPES)
         return [
-            item
+            _uniformly_deferred(item)
             for item_type in selected
+            if item_type in self._sources
             for item in self._sources[item_type].items(session, owner)
         ]
 
@@ -212,19 +227,24 @@ class PendingInbox:
         self, session: Session, owner: str, targets: Sequence[BatchTarget]
     ) -> None:
         types = sorted({target.type for target in targets})
-        unknown = [item_type for item_type in types if item_type not in self._sources]
-        if unknown:
-            raise ValueError(f"unknown pending type {unknown[0]}")
+        # A deferred item fails on its own as action_unavailable, like any other verb.
         individual = {
             (item.type, item.id)
             for item in self.collect(session, owner, types)
-            if item.requires_individual_approval
+            if item.requires_individual_approval and not item.deferred
         }
         for target in targets:
             if (target.type, target.id) in individual:
                 raise IndividualApprovalRequiredError(
                     f"{target.type} {target.id} must be approved on its own"
                 )
+
+
+def _uniformly_deferred(item: PendingItem) -> PendingItem:
+    """延后 means the same for every type: a deferred item can only be restored (ADR 0011)."""
+    if not item.deferred:
+        return item
+    return replace(item, actions=("restore",), detail_actions=())
 
 
 def _reason(exc: Exception) -> str:

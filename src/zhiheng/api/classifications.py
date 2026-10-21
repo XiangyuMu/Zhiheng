@@ -317,7 +317,7 @@ def list_classification_suggestions(
     session_factory: SessionFactoryDep,
     user_id: AuthDep,
     status_filter: str = Query(
-        default="pending", alias="status", pattern="^(pending|deferred|accepted|rejected)$"
+        default="pending", alias="status", pattern="^(pending|accepted|rejected)$"
     ),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict[str, Any]:
@@ -335,7 +335,9 @@ def decide_classification_suggestion(
     user_id: AuthDep,
     idempotency_key: WriteDep,
 ) -> dict[str, Any]:
-    if decision not in {"accept", "reject", "defer", "restore"}:
+    # 延后 belongs to the unclassified item (/v1/knowledge/{id}/unclassified/defer),
+    # not to one of its suggestions: migration 0055 explains the single store.
+    if decision not in {"accept", "reject"}:
         raise HTTPException(status_code=404, detail="unknown decision")
     with session_scope(session_factory) as session:
         receipt_id, replay = _begin_api_mutation(
@@ -350,28 +352,13 @@ def decide_classification_suggestion(
             return replay.result
         request_id = request_context.headers.get("X-Request-ID")
         try:
-            if decision == "accept":
-                item = suggestions.accept(
-                    session,
-                    suggestion_id=suggestion_id,
-                    owner_user_id=user_id,
-                    request_id=request_id,
-                )
-            elif decision == "reject":
-                item = suggestions.reject(
-                    session,
-                    suggestion_id=suggestion_id,
-                    owner_user_id=user_id,
-                    request_id=request_id,
-                )
-            elif decision == "defer":
-                item = suggestions.defer(
-                    session, suggestion_id=suggestion_id, owner_user_id=user_id
-                )
-            else:
-                item = suggestions.restore(
-                    session, suggestion_id=suggestion_id, owner_user_id=user_id
-                )
+            decide = suggestions.accept if decision == "accept" else suggestions.reject
+            item = decide(
+                session,
+                suggestion_id=suggestion_id,
+                owner_user_id=user_id,
+                request_id=request_id,
+            )
         except ValueError as exc:
             code = 404 if "not found" in str(exc) else 409
             raise HTTPException(status_code=code, detail=str(exc)) from exc

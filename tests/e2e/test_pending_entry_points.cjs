@@ -158,7 +158,9 @@ async function writeTo(page, pathname) {
 test('the research context prompt decides through the same actions as 待处理', async () => {
   inbox = [
     pendingItem('missing_info_prompt', 'mp1', { actions: ['reject', 'defer'], detail_actions: ['supplement'] }),
-    pendingItem('personal_conflict', 'pc1', { detail_actions: ['confirm', 'reject', 'supplement'] }),
+    pendingItem('personal_conflict', 'pc1', {
+      detail_actions: ['confirm', 'reject', 'supplement'], detail: { candidate_etag: 'cand-etag' },
+    }),
   ];
   const missing = {
     id: 'mp1', kind: 'missing', status: 'pending', state_key: 'profile.job', reason: '回答需要你的职业。',
@@ -207,5 +209,53 @@ test('the research context prompt decides through the same actions as 待处理'
   // No write goes to the retired research-only decision route except supplements.
   assert(!requests.some((entry) => entry.method === 'POST' && entry.path.endsWith('/decision')
     && entry.path.startsWith('/v1/personal-updates/context-prompts/')));
+  await page.context().close();
+});
+
+test('a research conflict decision sends the inbox candidate etag, never *', async () => {
+  inbox = [pendingItem('personal_conflict', 'pc2', {
+    detail_actions: ['confirm', 'reject', 'supplement'], detail: { candidate_etag: 'inbox-cand-etag' },
+  })];
+  // The answer's prompt carries no candidate etag of its own.
+  answerPrompts = [{
+    id: 'pc2', kind: 'conflict', status: 'pending', state_key: 'profile.city', reason: '居住城市冲突。',
+    candidate: { text: '上海' }, existing: { text: '北京' },
+  }];
+  const page = await open('/knowledge-agent#research');
+
+  await ask(page);
+  await page.locator('#context-prompt-confirm').click();
+  const writes = await writeTo(page, '/v1/personal-updates/conflicts/pc2/decision');
+
+  assert.equal(writes.length, 1);
+  assert.deepEqual(JSON.parse(writes[0].body), { decision: 'confirm' });
+  assert.equal(writes[0].ifMatch, 'inbox-cand-etag');
+  await page.context().close();
+});
+
+test('deciding a deferred prompt from research restores it first', async () => {
+  inbox = [pendingItem('missing_info_prompt', 'mp2', {
+    deferred: true, actions: ['restore'], etag: 'deferred-etag',
+  })];
+  answerPrompts = [{
+    id: 'mp2', kind: 'missing', status: 'deferred', state_key: 'profile.job', reason: '回答需要你的职业。',
+  }];
+  const page = await open('/knowledge-agent#research');
+  await page.route(`${BASE}/v1/review/items/missing_info_prompt/mp2/restore`, (route) => {
+    requests.push({
+      method: 'POST', path: new URL(route.request().url()).pathname,
+      ifMatch: route.request().headers()['if-match'],
+    });
+    inbox = [pendingItem('missing_info_prompt', 'mp2', { actions: ['reject', 'defer'], etag: 'restored-etag' })];
+    return route.fulfill({ json: { status: 'completed', result: {} } });
+  });
+
+  await ask(page);
+  await page.locator('#context-prompt-skip').click();
+  const rejects = await writeTo(page, '/v1/review/items/missing_info_prompt/mp2/reject');
+
+  const restored = requests.filter((entry) => entry.path === '/v1/review/items/missing_info_prompt/mp2/restore');
+  assert.deepEqual(restored.map((entry) => entry.ifMatch), ['deferred-etag']);
+  assert.deepEqual(rejects.map((entry) => entry.ifMatch), ['restored-etag']);
   await page.context().close();
 });

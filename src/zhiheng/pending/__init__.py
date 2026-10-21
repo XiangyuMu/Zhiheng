@@ -8,7 +8,10 @@ from .inbox import (
     PendingInbox,
     PendingItem,
     PendingItemNotFoundError,
+    PendingType,
     StalePendingItemError,
+    UnknownPendingTypeError,
+    require_known_types,
 )
 
 __all__ = [
@@ -19,5 +22,8 @@ __all__ = [
     "PendingInbox",
     "PendingItem",
     "PendingItemNotFoundError",
+    "PendingType",
     "StalePendingItemError",
+    "UnknownPendingTypeError",
+    "require_known_types",
 ]

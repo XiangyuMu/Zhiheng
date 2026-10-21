@@ -221,6 +221,33 @@ test('type keys, deferred view and newest-first order change the list', async ()
   await page.context().close();
 });
 
+test('a deferred item shows only 恢复 in its detail, whatever its type', async () => {
+  items.push(
+    item('personal_conflict', 'pc2', 'profile.home', '2026-09-02T00:00:00+00:00', {
+      deferred: true, actions: ['restore'],
+      detail: { state_key: 'profile.home', candidate_value: { text: '上海' }, existing_value: { text: '北京' } },
+    }),
+    item('missing_info_prompt', 'mp2', '你的城市是？', '2026-09-03T00:00:00+00:00', {
+      deferred: true, actions: ['restore'], detail: { state_key: 'profile.home', payload: { query: '你的城市是？' } },
+    }),
+  );
+  const page = await open();
+  await ready(page);
+  await page.locator('#show-deferred').check();
+  await page.locator('#queue .queue-item[data-entry-id="pc2"]').waitFor();
+  for (const id of ['m2', 'pc2', 'mp2']) {
+    await page.locator(`#queue .queue-item[data-entry-id="${id}"]`).click();
+    await page.locator(`#detail[data-ready$=":${id}"]`).waitFor();
+    const controls = await page.locator('#detail').evaluate((detail) => [...detail.querySelectorAll('button, textarea, select, input')]
+      .filter((control) => control.offsetParent !== null).map((control) => control.textContent.trim() || control.tagName));
+    assert.deepEqual(controls, ['恢复'], `${id} offers only 恢复`);
+  }
+  await page.keyboard.press('a');
+  await page.locator('#message').filter({ hasText: '先在详情中恢复' }).waitFor();
+  assert.deepEqual(writes, []);
+  await page.context().close();
+});
+
 test('shortcuts are ignored while typing and ? shows the key map', async () => {
   const page = await open();
   await ready(page);

@@ -76,7 +76,7 @@ def test_deferred_conclusion_leaves_default_view_and_appears_in_deferred_only(
     only = _items(client, deferred="only")
     assert [item["id"] for item in only] == [draft["id"]]
     assert only[0]["deferred"] is True
-    assert only[0]["actions"] == ["approve", "reject", "restore"]
+    assert only[0]["actions"] == ["restore"]
 
 
 def _act(client: TestClient, csrf: str, item: dict[str, Any], action: str, key: str) -> Any:
@@ -161,7 +161,7 @@ def test_relation_suggestion_is_listed_with_its_own_etag_and_creation_time(
 
     assert _act(client, csrf, item, "defer", "inbox-relation-defer").status_code == 200
     deferred = next(i for i in _items(client, deferred="only") if i["id"] == relation["id"])
-    assert deferred["actions"] == ["approve", "reject", "restore"]
+    assert deferred["actions"] == ["restore"]
     assert deferred["pending_since"] == item["pending_since"]
     assert _act(client, csrf, deferred, "restore", "inbox-relation-restore").status_code == 200
     assert any(i["id"] == relation["id"] for i in _items(client))
@@ -207,21 +207,36 @@ def test_personal_conflict_is_resolved_in_detail_but_can_be_deferred(tmp_path: P
     assert any(i["id"] == item["id"] and not i["deferred"] for i in _items(client))
 
 
-def test_skipped_conflict_no_longer_waits_anywhere(tmp_path: Path) -> None:
+def test_a_conflict_cannot_be_skipped_so_its_candidate_never_leaves_the_inbox(
+    tmp_path: Path,
+) -> None:
     client, _ = _client(tmp_path)
     csrf = _login(client)
     conflict = _conflict(client, csrf, "inbox-skip")
+    conflict_id = conflict["conflict_id"]
 
-    skipped = client.post(
-        f"/v1/personal-updates/conflicts/{conflict['conflict_id']}/decision",
+    via_conflict = client.post(
+        f"/v1/personal-updates/conflicts/{conflict_id}/decision",
         json={"decision": "skip"},
         headers=_headers(csrf, "inbox-skip-decision"),
     )
+    via_prompt = client.post(
+        f"/v1/personal-updates/context-prompts/{conflict_id}/decision",
+        json={"decision": "skip"},
+        headers=_headers(csrf, "inbox-skip-prompt"),
+    )
 
-    assert skipped.status_code == 200, skipped.text
-    assert all(i["id"] != conflict["conflict_id"] for i in _items(client, deferred="include"))
+    # ADR 0011: a conflict is resolved by choosing or supplementing, or deferred.
+    assert via_conflict.status_code == 422, via_conflict.text
+    assert via_prompt.status_code == 400, via_prompt.text
+    assert [(i["type"], i["id"]) for i in _items(client)] == [("personal_conflict", conflict_id)]
     pending = client.get("/v1/personal-updates/conflicts").json()["items"]
-    assert all(i["id"] != conflict["conflict_id"] for i in pending)
+    assert any(i["id"] == conflict_id for i in pending)
+    prompts = client.get(
+        "/v1/personal-updates/context-prompts", params={"query": "我现在居住在哪个城市？"}
+    ).json()["items"]
+    actions = next(p["actions"] for p in prompts if p["id"] == conflict_id)
+    assert "skip" not in actions
 
 
 def _missing_prompt(client: TestClient, csrf: str, key: str) -> dict[str, Any]:
@@ -437,11 +452,11 @@ def test_unclassified_knowledge_carries_its_suggested_domain(tmp_path: Path) -> 
 
     assert item["kind"] == "unclassified"
     assert item["detail"]["suggested_primary_domain_id"] == "computing_engineering"
-    assert item["actions"] == ["approve", "defer"]
+    assert item["actions"] == ["approve", "reject", "defer"]
     assert item["requires_individual_approval"] is False
     assert _act(client, csrf, item, "defer", "inbox-unclassified-defer").status_code == 200
     deferred = _items(client, type="classification", deferred="only")
-    assert [(i["id"], i["actions"]) for i in deferred] == [(knowledge_id, ["approve", "restore"])]
+    assert [(i["id"], i["actions"]) for i in deferred] == [(knowledge_id, ["restore"])]
     # The classification page's own restore shares the same 延后 state.
     restored = client.post(
         f"/v1/knowledge/{knowledge_id}/unclassified/restore",
@@ -478,9 +493,11 @@ def test_pending_taxonomy_proposal_is_a_classification_item(tmp_path: Path) -> N
     deferred = next(
         i for i in _items(client, type="classification", deferred="only") if i["id"] == item["id"]
     )
-    assert deferred["actions"] == ["approve", "reject", "restore"]
+    assert deferred["actions"] == ["restore"]
     assert deferred["pending_since"] == item["pending_since"]
-    rejected = _act(client, csrf, deferred, "reject", "inbox-legacy-reject")
+    assert _act(client, csrf, deferred, "restore", "inbox-legacy-restore").status_code == 200
+    back = next(i for i in _items(client, type="classification") if i["id"] == item["id"])
+    rejected = _act(client, csrf, back, "reject", "inbox-legacy-reject")
     assert rejected.status_code == 200, rejected.text
     assert rejected.json()["result"]["status"] == "rejected"
     assert all(

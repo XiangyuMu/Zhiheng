@@ -250,17 +250,34 @@ async function pendingPromptItem(prompt) {
   if (!item) throw new Error("这条提示已经处理过了，请刷新后重试。");
   return item;
 }
+const inboxAction = (item, verb) => mutate(
+  `/v1/review/items/${encodeURIComponent(item.type)}/${encodeURIComponent(item.id)}/${verb}`, {}, item.etag,
+);
+// The research question needs the prompt again, so a deferred one is restored before it is
+// decided (a deferred item only offers 恢复, ADR 0011); the fresh item carries the etags.
+async function livePromptItem(prompt) {
+  const item = await pendingPromptItem(prompt);
+  if (!item.deferred) return item;
+  await inboxAction(item, "restore");
+  return pendingPromptItem(prompt);
+}
 async function decideContextPrompt(prompt, decision, text) {
-  if (decision === "defer" || decision === "skip") {
+  if (decision === "defer") {
     const item = await pendingPromptItem(prompt);
-    const verb = decision === "skip" ? "reject" : "defer";
-    if (verb === "defer" && item.deferred) return;
-    if (!item.actions.includes(verb)) throw new Error("这条提示不能这样处理，请到待处理中查看。");
-    await mutate(`/v1/review/items/${encodeURIComponent(item.type)}/${encodeURIComponent(item.id)}/${verb}`, {}, item.etag);
+    if (item.deferred) return;
+    await inboxAction(item, "defer");
+    return;
+  }
+  if (decision === "skip") {
+    const item = await livePromptItem(prompt);
+    if (!item.actions.includes("reject")) throw new Error("这条提示不能这样处理，请到待处理中查看。");
+    await inboxAction(item, "reject");
     return;
   }
   if (decision === "confirm" || decision === "reject") {
-    await mutate(`/v1/personal-updates/conflicts/${encodeURIComponent(prompt.id)}/decision`, { decision }, prompt.candidate_etag || "*");
+    const etag = (await livePromptItem(prompt)).detail?.candidate_etag;
+    if (!etag) throw new Error("这条冲突已经变化，请到待处理中查看。");
+    await mutate(`/v1/personal-updates/conflicts/${encodeURIComponent(prompt.id)}/decision`, { decision }, etag);
     return;
   }
   await mutate(`/v1/personal-updates/context-prompts/${encodeURIComponent(prompt.id)}/decision`, {

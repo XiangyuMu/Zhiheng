@@ -241,7 +241,9 @@ class PersonalUpdateService:
                     "candidate_etag": self.repository.candidate_etag(
                         session, str(row["candidate_id"])
                     ),
-                    "actions": ["confirm", "supplement", "defer", "skip"],
+                    # A conflict is chosen, supplemented or deferred, never skipped:
+                    # skipping would leave its candidate undecided (ADR 0011).
+                    "actions": ["confirm", "reject", "supplement", "defer"],
                 }
             )
         missing_rows = session.execute(
@@ -455,38 +457,6 @@ class PersonalUpdateService:
             {"id": conflict_id, "owner": owner_user_id},
         )
         return {"conflict_id": conflict_id, "status": "pending"}
-
-    def skip_conflict(
-        self, session: Session, conflict_id: str, *, owner_user_id: str = "default"
-    ) -> dict[str, Any]:
-        row = session.execute(
-            text("SELECT id FROM memory_conflicts WHERE id = :id AND status = 'pending'"),
-            {"id": conflict_id},
-        ).first()
-        if row is None:
-            raise ValueError("conflict not found")
-        session.execute(
-            text(
-                """
-                UPDATE memory_conflicts
-                SET status = 'dismissed', resolution = 'skipped',
-                    resolved_at = CURRENT_TIMESTAMP
-                WHERE id = :id AND status = 'pending'
-                """
-            ),
-            {"id": conflict_id},
-        )
-        session.execute(
-            text(
-                """
-                UPDATE personal_conflicts
-                SET status = 'skipped', resolved_at = CURRENT_TIMESTAMP
-                WHERE id = :id AND owner_user_id = :owner
-                """
-            ),
-            {"id": conflict_id, "owner": owner_user_id},
-        )
-        return {"conflict_id": conflict_id, "status": "skipped"}
 
     def resolve_conflict(
         self,

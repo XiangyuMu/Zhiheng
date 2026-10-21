@@ -14,8 +14,6 @@ from zhiheng.models import ModelGateway, ModelRequest
 
 CLASSIFICATION_SUGGESTION_JOB_TYPE = "classification.suggest"
 CLASSIFICATION_SUGGESTION_EVENT = "knowledge.classification_suggestion_requested"
-# Deferring is not a decision: deferred suggestions can still be accepted or rejected.
-UNDECIDED_SUGGESTION_STATUSES = frozenset({"pending", "deferred"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,14 +331,14 @@ class ClassificationSuggestionService:
         request_id: str | None = None,
     ) -> ClassificationSuggestion:
         row = self._owned_suggestion(session, suggestion_id, owner_user_id)
-        if row["status"] not in UNDECIDED_SUGGESTION_STATUSES:
+        if row["status"] != "pending":
             raise ValueError("classification suggestion is no longer pending")
         session.execute(
             text(
                 """
                 UPDATE classification_suggestions
                 SET status = 'accepted', updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id AND owner_user_id = :owner AND status IN ('pending', 'deferred')
+                WHERE id = :id AND owner_user_id = :owner AND status = 'pending'
                 """
             ),
             {"id": suggestion_id, "owner": owner_user_id},
@@ -395,14 +393,14 @@ class ClassificationSuggestionService:
         request_id: str | None = None,
     ) -> ClassificationSuggestion:
         row = self._owned_suggestion(session, suggestion_id, owner_user_id)
-        if row["status"] not in UNDECIDED_SUGGESTION_STATUSES:
+        if row["status"] != "pending":
             raise ValueError("classification suggestion is no longer pending")
         session.execute(
             text(
                 """
                 UPDATE classification_suggestions
                 SET status = 'rejected', updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id AND owner_user_id = :owner AND status IN ('pending', 'deferred')
+                WHERE id = :id AND owner_user_id = :owner AND status = 'pending'
                 """
             ),
             {"id": suggestion_id, "owner": owner_user_id},
@@ -448,48 +446,6 @@ class ClassificationSuggestionService:
             {"owner": owner_user_id, "status": status, "limit": limit},
         ).mappings()
         return [_suggestion_from_row(cast(Mapping[str, Any], row)) for row in rows]
-
-    def defer(
-        self, session: Session, *, suggestion_id: str, owner_user_id: str
-    ) -> ClassificationSuggestion:
-        """Set a pending suggestion aside; it has no wake-up time and assigns nothing."""
-        return self._move(session, suggestion_id, owner_user_id, "pending", "deferred")
-
-    def restore(
-        self, session: Session, *, suggestion_id: str, owner_user_id: str
-    ) -> ClassificationSuggestion:
-        """Return a deferred suggestion to pending; its creation time is kept."""
-        return self._move(session, suggestion_id, owner_user_id, "deferred", "pending")
-
-    def _move(
-        self,
-        session: Session,
-        suggestion_id: str,
-        owner_user_id: str,
-        from_status: str,
-        to_status: str,
-    ) -> ClassificationSuggestion:
-        row = self._owned_suggestion(session, suggestion_id, owner_user_id)
-        if row["status"] == to_status:
-            return _suggestion_from_row(row)
-        if row["status"] != from_status:
-            raise ValueError(f"classification suggestion cannot become {to_status}")
-        session.execute(
-            text(
-                """
-                UPDATE classification_suggestions
-                SET status = :to_status, updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id AND owner_user_id = :owner AND status = :from_status
-                """
-            ),
-            {
-                "id": suggestion_id,
-                "owner": owner_user_id,
-                "from_status": from_status,
-                "to_status": to_status,
-            },
-        )
-        return _suggestion_from_row({**row, "status": to_status})
 
     @staticmethod
     def _owned_suggestion(

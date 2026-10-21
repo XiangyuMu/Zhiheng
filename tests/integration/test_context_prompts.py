@@ -27,7 +27,7 @@ def test_relevant_conflict_is_returned_with_sources_and_can_be_deferred(tmp_path
     assert prompt["conflict_id"] == conflict["conflict_id"]
     assert prompt["candidate_source"] == "user_explicit"
     assert prompt["existing_source"] == "explicit_direct"
-    assert set(("confirm", "supplement", "defer", "skip")) <= set(prompt["actions"])
+    assert prompt["actions"] == ["confirm", "reject", "supplement", "defer"]
     insufficiencies = response.json()["insufficiencies"]
     assert any(
         "条件一" in item and "北京" in item and "上海" in item and "暂缓" in item

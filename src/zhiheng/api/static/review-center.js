@@ -346,16 +346,22 @@
       return;
     }
     if (seq !== state.detailSeq) return;
-    detail.replaceChildren(...header, ...body);
+    detail.replaceChildren(...header, ...(item.deferred ? readOnly(body) : body));
     if (item.deferred) detail.append(node("p", "此事项已延后，恢复后回到待处理。", "muted"));
     detail.append(actionBar(item));
     state.readyKey = keyOf(item);
     detail.dataset.ready = keyOf(item);
   }
 
+  // A deferred item is only shown and restored (ADR 0011): its decisions wait until then.
+  const CONTROLS = "button, input, select, textarea";
+  function readOnly(parts) {
+    return parts.filter((part) => !part.matches(`${CONTROLS}, .decision-hint`) && !part.querySelector(CONTROLS));
+  }
+
   function actionBar(item) {
     const bar = node("div", undefined, "actions");
-    const verbs = item.deferred ? ["approve", "reject", "restore"] : ["approve", "reject", "defer"];
+    const verbs = item.deferred ? ["restore"] : ["approve", "reject", "defer"];
     verbs.filter((verb) => item.actions.includes(verb)).forEach((verb) => {
       const button = node("button", VERBS[verb], verb === "reject" ? "danger" : verb === "approve" ? "" : "secondary");
       button.type = "button";
@@ -487,9 +493,12 @@
         const button = node("button", label, decision === "reject" ? "danger" : "");
         button.type = "button";
         button.dataset.decision = decision;
-        button.addEventListener("click", () => immediate(button, item, "冲突已处理。", () => mutation(
-          `/v1/personal-updates/conflicts/${encodeURIComponent(item.id)}/decision`, "POST",
-          { decision }, detail.candidate_etag || "*",
+        // Guarded by the candidate etag the inbox listed, never "*".
+        button.addEventListener("click", () => immediate(button, item, "冲突已处理。", () => (
+          detail.candidate_etag
+            ? mutation(`/v1/personal-updates/conflicts/${encodeURIComponent(item.id)}/decision`, "POST",
+              { decision }, detail.candidate_etag)
+            : Promise.reject(new Error("冲突已经变化，请刷新后重试。"))
         )));
         return button;
       };
@@ -511,7 +520,7 @@
           ["已有记录", valueText(detail.existing_value)],
           ["新记录", valueText(detail.candidate_value)],
         ]),
-        node("p", "冲突不能直接批准或拒绝，请在下面选择或补充。", "muted"),
+        node("p", "冲突不能直接批准或拒绝，请在下面选择或补充。", "muted decision-hint"),
         choices,
         supplement,
       ];

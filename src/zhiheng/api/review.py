@@ -19,12 +19,14 @@ from zhiheng.api.memory import (
 )
 from zhiheng.conclusions import ConclusionRepository
 from zhiheng.pending import (
-    PENDING_TYPES,
     ActionUnavailableError,
     BatchTarget,
     IndividualApprovalRequiredError,
     PendingItemNotFoundError,
+    PendingType,
     StalePendingItemError,
+    UnknownPendingTypeError,
+    require_known_types,
 )
 from zhiheng.pending.inbox import DeferredFilter, PendingInbox, PendingItem, SortOrder
 from zhiheng.pending.sources import build_inbox
@@ -49,7 +51,7 @@ def build_app_inbox(app: FastAPI) -> PendingInbox:
     repo = ConclusionRepository()
 
     def approve_draft(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
-        key = f"pending:approve:{item.id}:{item.etag}"
+        key = f"pending:approved:{item.id}:{item.etag}"
         result = repo.approve(session, owner, item.id, item.etag, key)
         entry = repo.get(session, owner, item.id)
         assert entry is not None
@@ -84,11 +86,10 @@ def build_app_inbox(app: FastAPI) -> PendingInbox:
 def _types(value: str | None) -> list[str] | None:
     if not value:
         return None
-    types = [part.strip() for part in value.split(",") if part.strip()]
-    unknown = [item for item in types if item not in PENDING_TYPES]
-    if unknown:
-        raise HTTPException(status_code=400, detail=f"unknown pending type {unknown[0]}")
-    return types
+    try:
+        return require_known_types(part.strip() for part in value.split(",") if part.strip())
+    except UnknownPendingTypeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/items")
@@ -130,8 +131,10 @@ def perform_pending_action(
     mutation: MutationDep,
 ) -> dict[str, Any]:
     key, if_match = mutation
-    if item_type not in PENDING_TYPES:
-        raise HTTPException(status_code=404, detail="unknown pending type")
+    try:
+        require_known_types([item_type])
+    except UnknownPendingTypeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     receipt_id, replay = _begin_api_mutation(
         session,
         operation_key=f"api:pending:{user}:{key}",
@@ -155,7 +158,7 @@ def perform_pending_action(
 
 class BatchItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    type: Literal[PENDING_TYPES]  # type: ignore[valid-type]
+    type: PendingType
     id: str = Field(min_length=1, max_length=255)
     etag: str = Field(min_length=1, max_length=255)
 
@@ -176,7 +179,7 @@ def perform_pending_batch(
 ) -> dict[str, Any]:
     """Apply one action item by item; each item carries its own etag and outcome."""
     key, _ = mutation
-    targets = [BatchTarget(item.type, item.id, item.etag) for item in payload.items]
+    targets = [BatchTarget(item.type.value, item.id, item.etag) for item in payload.items]
     if len({(target.type, target.id) for target in targets}) != len(targets):
         raise HTTPException(status_code=400, detail="duplicate items in batch")
     receipt_id, replay = _begin_api_mutation(

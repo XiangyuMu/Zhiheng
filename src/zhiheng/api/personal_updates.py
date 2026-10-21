@@ -44,7 +44,8 @@ class PersonalUpdatePayload(BaseModel):
 class DecisionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    decision: Literal["confirm", "reject", "defer", "skip"]
+    # No "skip": a conflict is resolved by choosing or supplementing, or deferred (ADR 0011).
+    decision: Literal["confirm", "reject", "defer"]
 
 
 class ContextPromptDecisionPayload(BaseModel):
@@ -138,12 +139,13 @@ def decide_context_prompt(
         {"id": prompt_id},
     ).first()
     if conflict is not None:
-        if payload.decision in {"defer", "skip"}:
-            result = (
-                service.defer_conflict(session, prompt_id, owner_user_id=_user_id)
-                if payload.decision == "defer"
-                else service.skip_conflict(session, prompt_id, owner_user_id=_user_id)
+        if payload.decision == "skip":
+            raise HTTPException(
+                status_code=400,
+                detail="a conflict is resolved by choosing or supplementing, or deferred",
             )
+        if payload.decision == "defer":
+            result = service.defer_conflict(session, prompt_id, owner_user_id=_user_id)
             return {"status": "completed", "result": result}
         if payload.decision == "supplement":
             if payload.value is None:
@@ -278,16 +280,12 @@ def decide_conflict(
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="conflict not found")
-    if payload.decision in {"defer", "skip"}:
+    if payload.decision == "defer":
         if if_match != "*":
             raise HTTPException(status_code=412, detail="If-Match must be * for defer")
         response = {
             "status": "completed",
-            "result": (
-                service.defer_conflict(session, conflict_id, owner_user_id=_user_id)
-                if payload.decision == "defer"
-                else service.skip_conflict(session, conflict_id, owner_user_id=_user_id)
-            ),
+            "result": service.defer_conflict(session, conflict_id, owner_user_id=_user_id),
         }
         _record_decision(session, operation_key, request_hash, response)
         return response

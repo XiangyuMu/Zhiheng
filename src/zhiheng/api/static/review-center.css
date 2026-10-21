@@ -8,7 +8,7 @@
 .kb-page .type-filters { display: flex; flex-wrap: wrap; gap: var(--kb-space-2); margin: var(--kb-space-5) 0 var(--kb-space-3); }
 .kb-page .type-filter { min-height: 36px; padding: 6px 12px; gap: 6px; border-color: var(--line); background: var(--surface); color: var(--ink); font-weight: 500; }
 .kb-page .type-filter:hover { background: var(--kb-surface-muted); }
-.kb-page .type-filter[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: #2b54a1; }
+.kb-page .type-filter[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--kb-accent-strong); }
 .kb-page .filter-count { color: var(--muted); font-weight: 600; }
 .kb-page .list-options { display: flex; flex-wrap: wrap; align-items: center; gap: var(--kb-space-4); margin-bottom: var(--kb-space-2); }
 .kb-page .inline-option { display: inline-flex; align-items: center; gap: var(--kb-space-2); font-weight: 500; }
@@ -46,7 +46,7 @@
 
 .kb-page .detail { position: sticky; top: var(--kb-space-4); min-height: 360px; max-height: calc(100vh - 32px); overflow: auto; padding: 22px; }
 .kb-page .detail:focus { outline: none; }
-.kb-page .detail:focus-visible { outline: 3px solid #6b91e0; outline-offset: 3px; }
+.kb-page .detail:focus-visible { outline: 3px solid var(--kb-focus-ring); outline-offset: 3px; }
 .kb-page .detail h2 { margin-top: 0; overflow-wrap: anywhere; }
 .kb-page .detail dl { display: grid; grid-template-columns: 100px 1fr; gap: 8px; font-size: .92rem; }
 .kb-page .detail dt { color: var(--muted); }
@@ -70,7 +70,7 @@
 .kb-page .actions .danger { color: var(--danger); border-color: var(--danger); background: var(--surface); }
 .kb-page .field { width: 100%; min-height: 90px; }
 
-.kb-page .undo-toast { position: fixed; left: 50%; bottom: var(--kb-space-5); z-index: 20; display: flex; align-items: center; gap: var(--kb-space-3); max-width: calc(100vw - 32px); padding: var(--kb-space-2) var(--kb-space-2) var(--kb-space-2) var(--kb-space-4); transform: translateX(-50%); border-radius: var(--kb-radius-lg); background: var(--kb-text); color: #fff; box-shadow: var(--kb-shadow); }
+.kb-page .undo-toast { position: fixed; left: 50%; bottom: var(--kb-space-5); z-index: 20; display: flex; align-items: center; gap: var(--kb-space-3); max-width: calc(100vw - 32px); padding: var(--kb-space-2) var(--kb-space-2) var(--kb-space-2) var(--kb-space-4); transform: translateX(-50%); border-radius: var(--kb-radius-lg); background: var(--kb-text); color: var(--kb-surface); box-shadow: var(--kb-shadow); }
 .kb-page .undo-toast button { flex-shrink: 0; }
 /* While the toast shows, the sticky detail pane ends above it so its last buttons stay reachable. */
 .kb-page.undo-visible .detail { max-height: calc(100vh - 32px - 88px); }

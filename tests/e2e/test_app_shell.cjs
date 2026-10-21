@@ -127,6 +127,18 @@ test('the badge follows a write without reloading the page', async () => {
   await page.context().close();
 });
 
+test('the sidebar collapses at the ADR 0008 breakpoint of 900px', async () => {
+  pendingTotal = 0;
+  for (const [route] of PAGES) {
+    for (const [width, position] of [[900, 'relative'], [901, 'sticky']]) {
+      const page = await open(route, { width, height: 800 });
+      const actual = await page.locator('aside.sidebar').evaluate((aside) => getComputedStyle(aside).position);
+      assert.equal(actual, position, `${route} at ${width}px`);
+      await page.context().close();
+    }
+  }
+});
+
 test('at 390px every page keeps the sidebar without horizontal overflow', async () => {
   pendingTotal = 150;
   for (const [route] of PAGES) {
