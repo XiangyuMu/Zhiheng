@@ -65,10 +65,11 @@ def stage_backup(database: Path, object_root: Path, destination: Path) -> None:
             if _file_digest(path) != artifact.sha256 or path.stat().st_size != artifact.byte_size:
                 raise ValueError("artifact changed while staging backup")
         payload = {
-            "format_version": 2,
+            "format_version": 3,
             "original_object_root": str(object_root.resolve()),
             "database_sha256": _file_digest(snapshot),
             "artifacts": [asdict(item) for item in manifest],
+            "unmaterialized_text_versions": list(collect_unmaterialized_text_versions(snapshot)),
             "provider_secret_recovery": {
                 "encrypted_records_in_database": _has_provider_secret_records(snapshot),
                 "master_key_external_dependency": "native-keyring",
@@ -95,24 +96,17 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
     if any(path.is_symlink() for path in root.rglob("*")):
         raise ValueError("backup bundle must not contain symlinks")
     payload = json.loads((root / "manifest.json").read_text())
+    base_fields = {"format_version", "original_object_root", "database_sha256", "artifacts"}
     if not isinstance(payload, dict) or set(payload) not in (
-        {
-            "format_version",
-            "original_object_root",
-            "database_sha256",
-            "artifacts",
-        },
-        {
-            "format_version",
-            "original_object_root",
-            "database_sha256",
-            "artifacts",
-            "provider_secret_recovery",
-        },
+        base_fields,
+        base_fields | {"provider_secret_recovery"},
+        base_fields | {"provider_secret_recovery", "unmaterialized_text_versions"},
     ):
         raise ValueError("unsupported backup manifest schema")
-    if type(payload["format_version"]) is not int or payload["format_version"] not in {1, 2}:
+    if type(payload["format_version"]) is not int or payload["format_version"] not in {1, 2, 3}:
         raise ValueError("unsupported backup format version")
+    if (payload["format_version"] == 3) != ("unmaterialized_text_versions" in payload):
+        raise ValueError("unsupported backup manifest schema")
     if (
         not isinstance(payload["original_object_root"], str)
         or not Path(payload["original_object_root"]).is_absolute()
@@ -123,7 +117,7 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
     if not isinstance(payload["artifacts"], list):
         raise ValueError("backup artifacts must be a list")
     recovery = payload.get("provider_secret_recovery")
-    if payload["format_version"] == 2 and not isinstance(recovery, dict):
+    if payload["format_version"] >= 2 and not isinstance(recovery, dict):
         raise ValueError("provider secret recovery metadata is required")
     if recovery is not None and (
         not isinstance(recovery, dict)
@@ -144,6 +138,11 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
         _verify_provider_secret_records(root / "database.sqlite")
     if recovery is not None and recovery["encrypted_records_in_database"] != database_has_secrets:
         raise ValueError("provider secret recovery metadata does not match database")
+    unmaterialized = payload.get("unmaterialized_text_versions")
+    if unmaterialized is not None and unmaterialized != list(
+        collect_unmaterialized_text_versions(root / "database.sqlite")
+    ):
+        raise ValueError("unmaterialized text versions do not match database")
     expected_files = {"manifest.json", "database.sqlite"}
     artifacts: list[BackupArtifact] = []
     for item in payload["artifacts"]:
@@ -290,13 +289,39 @@ def _verify_provider_secret_records(database: Path) -> None:
         connection.close()
 
 
+def collect_unmaterialized_text_versions(snapshot: Path) -> tuple[str, ...]:
+    """List PDF content versions whose text was never written to the object store.
+
+    PDFs published before verified manifest references were persisted keep an
+    empty text reference; their text survives only in the database, so the
+    backup records them instead of pretending a separate artifact exists.
+    """
+    connection = sqlite3.connect(f"{snapshot.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        rows = connection.execute(
+            """
+            SELECT DISTINCT cv.id
+            FROM knowledge_versions kv
+            JOIN knowledge_objects ko ON ko.id = kv.knowledge_object_id
+            JOIN content_versions cv ON cv.id = kv.content_version_id
+            WHERE ko.lifecycle_status <> 'privacy_erased' AND cv.status <> 'privacy_erased'
+              AND cv.processor_name = 'pdf-parser' AND cv.text_artifact_uri = ''
+            ORDER BY cv.id
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+    return tuple(str(row[0]) for row in rows)
+
+
 def collect_artifact_manifest(snapshot: Path, object_root: Path) -> tuple[BackupArtifact, ...]:
     """Read references from a completed snapshot, then verify files outside SQLite.
 
     Caller must supply a private, completed SQLite backup, never the live DB.
     Soft-deleted and candidate objects remain recoverable; privacy-erased ones do not.
     Missing or corrupt referenced artifacts abort collection instead of producing
-    a deceptively successful partial backup.
+    a deceptively successful partial backup. A PDF content version references its
+    parse-attempt manifest, whose digest is the attempt's, not the extracted body's.
     """
     root = object_root.resolve()
     connection = sqlite3.connect(f"{snapshot.resolve().as_uri()}?mode=ro", uri=True)
@@ -311,11 +336,21 @@ def collect_artifact_manifest(snapshot: Path, object_root: Path) -> tuple[Backup
             WHERE ko.lifecycle_status <> 'privacy_erased'
               AND eo.status <> 'privacy_erased' AND cv.status <> 'privacy_erased'
             UNION
-            SELECT cv.text_artifact_uri, cv.content_sha256, NULL
+            SELECT cv.text_artifact_uri,
+                   CASE WHEN cv.processor_name = 'pdf-parser' THEN COALESCE(
+                     (SELECT a.manifest_sha256 FROM pdf_parse_attempts a
+                      WHERE a.evidence_object_id = cv.evidence_object_id
+                        AND a.manifest_uri = cv.text_artifact_uri
+                        AND a.manifest_sha256 <> ''
+                      ORDER BY a.attempt_no DESC LIMIT 1),
+                     cv.content_sha256)
+                   ELSE cv.content_sha256 END,
+                   NULL
             FROM knowledge_versions kv
             JOIN knowledge_objects ko ON ko.id = kv.knowledge_object_id
             JOIN content_versions cv ON cv.id = kv.content_version_id
             WHERE ko.lifecycle_status <> 'privacy_erased' AND cv.status <> 'privacy_erased'
+              AND NOT (cv.processor_name = 'pdf-parser' AND cv.text_artifact_uri = '')
             UNION
             SELECT kv.markdown_uri, NULL, NULL
             FROM knowledge_versions kv

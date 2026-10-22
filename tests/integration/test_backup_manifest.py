@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -58,6 +59,70 @@ def _snapshot(tmp_path: Path) -> tuple[Path, Path, Path]:
         target.close()
         source.close()
     return snapshot, root, Path(unquote(urlparse(artifacts.evidence_object_uri).path))
+
+
+def _add_pdf(snapshot: Path, root: Path, name: str, *, manifest: bool) -> str:
+    """Add a PDF knowledge item as published before (empty text ref) or after 5ffdf79."""
+    pdf = root / "evidence" / f"{name}.pdf"
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(f"%PDF-1.7 {name}".encode())
+    body_sha = hashlib.sha256(f"{name} extracted text".encode()).hexdigest()
+    text_uri = ""
+    with sqlite3.connect(snapshot) as connection:
+        connection.execute(
+            "INSERT INTO evidence_objects (id, object_uri, sha256, media_type, byte_size, "
+            "source_kind, status) VALUES (?, ?, ?, 'application/pdf', ?, 'upload', 'active')",
+            (
+                f"{name}-evidence",
+                pdf.as_uri(),
+                hashlib.sha256(pdf.read_bytes()).hexdigest(),
+                pdf.stat().st_size,
+            ),
+        )
+        if manifest:
+            manifest_path = root / "pdf-attempts" / name / "manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(json.dumps({"blocks": [f"{name} extracted text"]}))
+            text_uri = manifest_path.as_uri()
+            connection.execute(
+                "INSERT INTO pdf_tasks (id, evidence_object_id, options_hash, idempotency_key, "
+                "state) VALUES (?, ?, 'options', ?, 'parsed')",
+                (f"{name}-task", f"{name}-evidence", f"{name}-task"),
+            )
+            connection.execute(
+                "INSERT INTO pdf_parse_attempts (id, task_id, evidence_object_id, backend, "
+                "attempt_no, status, manifest_uri, manifest_sha256) "
+                "VALUES (?, ?, ?, 'mineru', 1, 'succeeded', ?, ?)",
+                (
+                    f"{name}-attempt",
+                    f"{name}-task",
+                    f"{name}-evidence",
+                    text_uri,
+                    hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                ),
+            )
+        connection.execute(
+            "INSERT INTO content_versions (id, evidence_object_id, version_no, processor_name, "
+            "processor_version, text_artifact_uri, content_sha256, status) "
+            "VALUES (?, ?, 1, 'pdf-parser', 'manifest-v1', ?, ?, 'active')",
+            (f"{name}-content", f"{name}-evidence", text_uri, body_sha),
+        )
+        connection.execute(
+            "INSERT INTO knowledge_objects (id, primary_domain_id, title, object_kind, "
+            "lifecycle_status, visibility_scope, sensitivity_level) "
+            "VALUES (?, 'technology.ai', ?, 'document', 'formal_current', 'private', 'normal')",
+            (f"{name}-object", name),
+        )
+        connection.execute(
+            "INSERT INTO knowledge_versions (id, knowledge_object_id, version_no, "
+            "content_version_id, source_quality) VALUES (?, ?, 1, ?, 'parsed')",
+            (f"{name}-version", f"{name}-object", f"{name}-content"),
+        )
+        connection.execute(
+            "UPDATE knowledge_objects SET current_version_id=? WHERE id=?",
+            (f"{name}-version", f"{name}-object"),
+        )
+    return f"{name}-content"
 
 
 def _add_provider_secret_record(snapshot: Path) -> None:
@@ -141,7 +206,8 @@ def test_staged_bundle_contains_verified_private_bytes(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
     stage_backup(snapshot, root, bundle)
     manifest = json.loads((bundle / "manifest.json").read_text())
-    assert manifest["format_version"] == 2
+    assert manifest["format_version"] == 3
+    assert manifest["unmaterialized_text_versions"] == []
     assert manifest["provider_secret_recovery"] == {
         "encrypted_records_in_database": False,
         "master_key_external_dependency": "native-keyring",
@@ -165,7 +231,7 @@ def test_provider_secret_records_are_verified_and_preserved_in_backup(tmp_path: 
 
     stage_backup(snapshot, root, bundle)
     manifest = json.loads((bundle / "manifest.json").read_text())
-    assert manifest["format_version"] == 2
+    assert manifest["format_version"] == 3
     assert manifest["provider_secret_recovery"]["encrypted_records_in_database"] is True
     assert len(verify_backup_bundle(bundle)) == 3
 
@@ -371,3 +437,84 @@ def test_backup_rejects_plaintext_provider_reference(tmp_path: Path) -> None:
     stage_backup(snapshot, root, bundle)
     with pytest.raises(ValueError, match="reference is invalid"):
         verify_backup_bundle(bundle)
+
+
+def test_backup_records_legacy_pdf_text_that_was_never_materialized(tmp_path: Path) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    legacy = _add_pdf(snapshot, root, "legacy", manifest=False)
+    bundle = tmp_path / "bundle"
+    stage_backup(snapshot, root, bundle)
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    assert manifest["format_version"] == 3
+    assert manifest["unmaterialized_text_versions"] == [legacy]
+    assert (bundle / "objects" / "evidence" / "legacy.pdf").read_bytes() == b"%PDF-1.7 legacy"
+    assert len(verify_backup_bundle(bundle)) == 4
+
+
+@pytest.mark.parametrize("listed", [[], ["legacy-content", "invented-content"]])
+def test_verification_rejects_unmaterialized_list_that_disagrees_with_database(
+    tmp_path: Path, listed: list[str]
+) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_pdf(snapshot, root, "legacy", manifest=False)
+    bundle = tmp_path / "bundle"
+    stage_backup(snapshot, root, bundle)
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["unmaterialized_text_versions"] = listed
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="unmaterialized"):
+        verify_backup_bundle(bundle)
+
+
+def test_backup_verifies_pdf_manifest_against_its_parse_attempt(tmp_path: Path) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_pdf(snapshot, root, "current", manifest=True)
+    manifest_bytes = (root / "pdf-attempts" / "current" / "manifest.json").read_bytes()
+    bundle = tmp_path / "bundle"
+    stage_backup(snapshot, root, bundle)
+    assert (bundle / "objects" / "pdf-attempts" / "current" / "manifest.json").read_bytes() == (
+        manifest_bytes
+    )
+    assert json.loads((bundle / "manifest.json").read_text())["unmaterialized_text_versions"] == []
+    assert len(verify_backup_bundle(bundle)) == 5
+
+
+def test_backup_still_aborts_on_corrupt_or_missing_pdf_manifest(tmp_path: Path) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_pdf(snapshot, root, "current", manifest=True)
+    manifest_path = root / "pdf-attempts" / "current" / "manifest.json"
+    manifest_path.write_text("{}")
+    with pytest.raises(ValueError, match="hash"):
+        stage_backup(snapshot, root, tmp_path / "corrupt")
+    manifest_path.unlink()
+    with pytest.raises(FileNotFoundError):
+        stage_backup(snapshot, root, tmp_path / "missing")
+
+
+def test_backup_still_aborts_on_empty_text_reference_outside_pdfs(tmp_path: Path) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    with sqlite3.connect(snapshot) as connection:
+        connection.execute("UPDATE content_versions SET text_artifact_uri=''")
+    with pytest.raises(ValueError, match="materialized"):
+        stage_backup(snapshot, root, tmp_path / "bundle")
+
+
+def test_restore_prepares_bundle_with_legacy_and_current_pdfs(tmp_path: Path) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    legacy = _add_pdf(snapshot, root, "legacy", manifest=False)
+    _add_pdf(snapshot, root, "current", manifest=True)
+    bundle = tmp_path / "bundle"
+    stage_backup(snapshot, root, bundle)
+    journal = ExternalEraseJournal(tmp_path / "independent-journal.jsonl", "synthetic-secret")
+    journal.path.touch()
+    survivors = prepare_restored_bundle(bundle, journal, project_root=Path.cwd())
+    assert {item.relative_path for item in survivors} >= {
+        "evidence/legacy.pdf",
+        "evidence/current.pdf",
+        "pdf-attempts/current/manifest.json",
+    }
+    with sqlite3.connect(bundle / "database.sqlite") as connection:
+        assert connection.execute(
+            "SELECT text_artifact_uri FROM content_versions WHERE id=?", (legacy,)
+        ).fetchone() == ("",)
