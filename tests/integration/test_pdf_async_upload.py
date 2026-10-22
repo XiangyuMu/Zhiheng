@@ -747,8 +747,9 @@ def test_pdf_parse_lease_exhausted_by_a_dead_worker_fails_the_task(tmp_path: Pat
 
     with session_scope(session_factory) as session:
         assert (
-            session.execute(text("SELECT status FROM jobs WHERE job_type='knowledge.parse_pdf'"))
-            .scalar_one()
+            session.execute(
+                text("SELECT status FROM jobs WHERE job_type='knowledge.parse_pdf'")
+            ).scalar_one()
             == "dead"
         )
     body = client.get(task["status_url"]).json()

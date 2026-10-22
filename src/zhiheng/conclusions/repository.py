@@ -39,9 +39,7 @@ class ConclusionRepository:
         inactive_domains = {str(row[0]) for row in domain_rows if str(row[1]) != "active"}
         record_types = {
             str(row[0])
-            for row in session.execute(
-                text("SELECT id FROM record_types WHERE status='active'")
-            )
+            for row in session.execute(text("SELECT id FROM record_types WHERE status='active'"))
         }
         return domains, record_types, inactive_domains
 
@@ -132,7 +130,9 @@ class ConclusionRepository:
         ).scalar_one_or_none()
         if existing:
             return cast(dict[str, Any], json.loads(str(existing)))
-        allowed_domains, allowed_record_types, inactive_domains = self._classification_catalog(session)
+        allowed_domains, allowed_record_types, inactive_domains = self._classification_catalog(
+            session
+        )
         classification = normalize_classification(
             payload.get("classification"),
             fallback_domain_id=str(payload.get("domain_id", "education_learning")),
@@ -273,7 +273,9 @@ class ConclusionRepository:
                     **cast(dict[str, Any], classification_value or {}),
                     "primary_domain_id": payload["domain_id"],
                 }
-            allowed_domains, allowed_record_types, inactive_domains = self._classification_catalog(session)
+            allowed_domains, allowed_record_types, inactive_domains = self._classification_catalog(
+                session
+            )
             classification = normalize_classification(
                 cast(dict[str, Any] | None, classification_value),
                 fallback_domain_id=str(payload.get("domain_id", "education_learning")),
@@ -834,8 +836,8 @@ class ConclusionRepository:
                 )
         session.execute(
             text(
-                    "INSERT INTO conclusion_relation_events "
-                    "(id,relation_id,owner_user_id,from_status,to_status,actor_user_id,"
+                "INSERT INTO conclusion_relation_events "
+                "(id,relation_id,owner_user_id,from_status,to_status,actor_user_id,"
                 "left_version,right_version,left_source_id,right_source_id,created_at) "
                 "VALUES (:id,:relation,:o,:from_status,:to_status,:actor,:lv,:rv,:ls,:rs,:created_at)"
             ),

@@ -130,7 +130,7 @@ def test_current_suspension_hides_current_version(tmp_path: Path) -> None:
                 "(entry_id,version,state,reason,evidence_json) "
                 "VALUES (:entry_id,1,'suspended','current-entry','{}')"
             ),
-                {"entry_id": new["current_entry_id"]},
+            {"entry_id": new["current_entry_id"]},
         )
         visible = session.execute(
             text("SELECT id FROM current_formal_knowledge WHERE id=:id"),
@@ -186,13 +186,14 @@ def test_approved_conflict_hides_both_current_versions(tmp_path: Path) -> None:
                 "right_id": right["id"],
             },
         )
-        visible = session.execute(
-            text(
-                "SELECT id FROM current_formal_knowledge "
-                "WHERE id IN (:left_id,:right_id)"
-            ),
-            {"left_id": left["knowledge_id"], "right_id": right["knowledge_id"]},
-        ).scalars().all()
+        visible = (
+            session.execute(
+                text("SELECT id FROM current_formal_knowledge WHERE id IN (:left_id,:right_id)"),
+                {"left_id": left["knowledge_id"], "right_id": right["knowledge_id"]},
+            )
+            .scalars()
+            .all()
+        )
     assert visible == []
 
 

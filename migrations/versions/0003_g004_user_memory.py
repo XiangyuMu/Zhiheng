@@ -1015,12 +1015,8 @@ def downgrade() -> None:
     op.drop_table("memory_confirmation_requests")
     op.drop_index("ix_memory_evidence_refs_target", table_name="memory_evidence_refs")
     op.drop_table("memory_evidence_refs")
-    op.drop_index(
-        "ix_formal_memory_versions_source_decision", table_name="formal_memory_versions"
-    )
-    op.drop_index(
-        "ix_formal_memory_versions_source_candidate", table_name="formal_memory_versions"
-    )
+    op.drop_index("ix_formal_memory_versions_source_decision", table_name="formal_memory_versions")
+    op.drop_index("ix_formal_memory_versions_source_candidate", table_name="formal_memory_versions")
     op.drop_table("formal_memory_versions")
     op.drop_index("uq_formal_memories_one_current_state_key", table_name="formal_memories")
     op.drop_index("ix_formal_memories_origin_decision", table_name="formal_memories")

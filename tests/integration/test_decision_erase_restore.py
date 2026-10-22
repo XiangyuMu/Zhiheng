@@ -410,8 +410,7 @@ def test_restic_restore_replays_decision_erase_for_formal_and_knowledge_sources(
         ).all()
     object_factory.kw["bind"].dispose()
     object_paths = {
-        str(source_id): Path(unquote(urlparse(str(uri)).path))
-        for source_id, uri in object_rows
+        str(source_id): Path(unquote(urlparse(str(uri)).path)) for source_id, uri in object_rows
     }
     assert not object_paths[knowledge_id].exists()
     assert object_paths[other_knowledge_id].read_bytes() == TARGET_TEXT.encode()

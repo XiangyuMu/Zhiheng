@@ -298,9 +298,7 @@ def _seed_baseline_stable_release() -> None:
         {
             "id": BASELINE_VALIDATION_ID,
             "proposal_id": BASELINE_PROPOSAL_ID,
-            "fixed_set_result_json": _json_text(
-                {name: True for name in BASELINE_FIXED_EVAL_SETS}
-            ),
+            "fixed_set_result_json": _json_text({name: True for name in BASELINE_FIXED_EVAL_SETS}),
             "dynamic_set_result_json": _json_text(
                 {
                     "candidate_only": False,

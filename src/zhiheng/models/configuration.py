@@ -219,8 +219,7 @@ def list_providers(
         .all()
     )
     return [
-        _provider_response(dict(row), secret_store=secret_store, session=session)
-        for row in rows
+        _provider_response(dict(row), secret_store=secret_store, session=session) for row in rows
     ]
 
 
@@ -320,16 +319,19 @@ def update_provider(
         raise RuntimeError("provider configuration changed; refresh and retry")
     # Reserve the exact revision while holding the database write lock.  This
     # makes the ETag check and subsequent secret rotation one atomic mutation.
-    reserved = cast(CursorResult[Any], session.execute(
-        text(
-            """
+    reserved = cast(
+        CursorResult[Any],
+        session.execute(
+            text(
+                """
             UPDATE model_provider_configs
             SET updated_at = updated_at
             WHERE id = :provider_id AND policy_revision = :if_match
             """
+            ),
+            {"provider_id": provider_id, "if_match": if_match},
         ),
-        {"provider_id": provider_id, "if_match": if_match},
-    ))
+    )
     if reserved.rowcount != 1:
         raise RuntimeError("provider configuration changed; refresh and retry")
 
@@ -390,9 +392,11 @@ def update_provider(
     else:
         rotated_secret = None
     revision = f"{current_revision}:updated"
-    updated_result = cast(CursorResult[Any], session.execute(
-        text(
-            """
+    updated_result = cast(
+        CursorResult[Any],
+        session.execute(
+            text(
+                """
             UPDATE model_provider_configs
             SET provider_kind = :provider_kind,
                 display_name = :display_name,
@@ -409,24 +413,25 @@ def update_provider(
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = :id AND policy_revision = :if_match
             """
+            ),
+            {
+                "id": provider_id,
+                "provider_kind": provider_kind,
+                "display_name": display_name,
+                "enabled": enabled,
+                "archived": archived,
+                "policy_json": json.dumps({"allowed_models": all_models}, separators=(",", ":")),
+                "secret_ref": secret_ref,
+                "model_allowlist_json": json.dumps(all_models, separators=(",", ":")),
+                "text_models": json.dumps(text_models, separators=(",", ":")),
+                "multimodal_models": json.dumps(multimodal_models, separators=(",", ":")),
+                "endpoint_url": endpoint_url,
+                "endpoint_origin": _endpoint_origin(endpoint_url),
+                "policy_revision": revision,
+                "if_match": if_match,
+            },
         ),
-        {
-            "id": provider_id,
-            "provider_kind": provider_kind,
-            "display_name": display_name,
-            "enabled": enabled,
-            "archived": archived,
-            "policy_json": json.dumps({"allowed_models": all_models}, separators=(",", ":")),
-            "secret_ref": secret_ref,
-            "model_allowlist_json": json.dumps(all_models, separators=(",", ":")),
-            "text_models": json.dumps(text_models, separators=(",", ":")),
-            "multimodal_models": json.dumps(multimodal_models, separators=(",", ":")),
-            "endpoint_url": endpoint_url,
-            "endpoint_origin": _endpoint_origin(endpoint_url),
-            "policy_revision": revision,
-            "if_match": if_match,
-        },
-    ))
+    )
     if updated_result.rowcount != 1:
         raise RuntimeError("provider configuration changed; refresh and retry")
     _sync_model_records(
@@ -464,16 +469,19 @@ def delete_provider_secret(
         raise LookupError("provider not found")
     if str(row["policy_revision"]) != if_match:
         raise RuntimeError("provider configuration changed; refresh and retry")
-    reserved = cast(CursorResult[Any], session.execute(
-        text(
-            """
+    reserved = cast(
+        CursorResult[Any],
+        session.execute(
+            text(
+                """
             UPDATE model_provider_configs
             SET updated_at = updated_at
             WHERE id = :provider_id AND policy_revision = :if_match
             """
+            ),
+            {"provider_id": provider_id, "if_match": if_match},
         ),
-        {"provider_id": provider_id, "if_match": if_match},
-    ))
+    )
     if reserved.rowcount != 1:
         raise RuntimeError("provider configuration changed; refresh and retry")
     secret_ref = row.get("secret_ref")
@@ -486,9 +494,11 @@ def delete_provider_secret(
         secret_store.revoke(session, provider_id=provider_id)
     elif secret_ref and str(secret_ref).startswith("local:"):
         raise RuntimeError("provider secret store is unavailable")
-    updated_result = cast(CursorResult[Any], session.execute(
-        text(
-            """
+    updated_result = cast(
+        CursorResult[Any],
+        session.execute(
+            text(
+                """
             UPDATE model_provider_configs
             SET secret_ref = NULL,
                 enabled = 0,
@@ -496,12 +506,13 @@ def delete_provider_secret(
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = :provider_id
             """
+            ),
+            {
+                "provider_id": provider_id,
+                "policy_revision": f"{if_match}:secret-revoked",
+            },
         ),
-        {
-            "provider_id": provider_id,
-            "policy_revision": f"{if_match}:secret-revoked",
-        },
-    ))
+    )
     if updated_result.rowcount != 1:
         raise RuntimeError("provider configuration changed; refresh and retry")
     _record_secret_lifecycle_audit(
@@ -539,21 +550,24 @@ def migrate_provider_secret(
     if secret_store is None:
         raise RuntimeError("provider secret store is unavailable")
     reserved_revision = f"{if_match}:secret-migrating:{new_id()}"
-    reserved = cast(CursorResult[Any], session.execute(
-        text(
-            """
+    reserved = cast(
+        CursorResult[Any],
+        session.execute(
+            text(
+                """
             UPDATE model_provider_configs
             SET policy_revision = :reserved_revision,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = :provider_id AND policy_revision = :if_match
             """
+            ),
+            {
+                "provider_id": provider_id,
+                "if_match": if_match,
+                "reserved_revision": reserved_revision,
+            },
         ),
-        {
-            "provider_id": provider_id,
-            "if_match": if_match,
-            "reserved_revision": reserved_revision,
-        },
-    ))
+    )
     if reserved.rowcount != 1:
         raise RuntimeError("provider configuration changed; refresh and retry")
     stored = secret_store.migrate_environment_reference(
@@ -561,23 +575,26 @@ def migrate_provider_secret(
         provider_id=provider_id,
         secret_ref=secret_ref,
     )
-    updated_result = cast(CursorResult[Any], session.execute(
-        text(
-            """
+    updated_result = cast(
+        CursorResult[Any],
+        session.execute(
+            text(
+                """
             UPDATE model_provider_configs
             SET secret_ref = :secret_ref,
                 policy_revision = :policy_revision,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = :provider_id AND policy_revision = :reserved_revision
             """
+            ),
+            {
+                "provider_id": provider_id,
+                "secret_ref": stored.secret_ref,
+                "policy_revision": f"{if_match}:secret-migrated",
+                "reserved_revision": reserved_revision,
+            },
         ),
-        {
-            "provider_id": provider_id,
-            "secret_ref": stored.secret_ref,
-            "policy_revision": f"{if_match}:secret-migrated",
-            "reserved_revision": reserved_revision,
-        },
-    ))
+    )
     if updated_result.rowcount != 1:
         raise RuntimeError("provider configuration changed; refresh and retry")
     _record_secret_lifecycle_audit(
@@ -775,7 +792,7 @@ def recent_audits(
                 SELECT id, provider_id, model_id, audit_kind, status, diagnostic_code,
                        diagnostic_message, duration_ms, secret_version, created_at
                 FROM model_connectivity_audits
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 ORDER BY created_at DESC, id DESC
                 LIMIT :limit OFFSET :offset
                 """
@@ -1047,10 +1064,7 @@ def refresh_provider_models(
     suggested_capabilities = (
         '["embedding"]' if row["provider_kind"] == "siliconflow" else '["text"]'
     )
-    existing = {
-        str(item["model_id"]): item
-        for item in _model_records(session, provider_id)
-    }
+    existing = {str(item["model_id"]): item for item in _model_records(session, provider_id)}
     ids = [item.model_id for item in discovered]
     for item in discovered:
         current = existing.get(item.model_id)
@@ -1129,13 +1143,17 @@ def update_provider_model(
         raise LookupError("provider not found")
     if if_match is not None and str(row["policy_revision"]) != if_match:
         raise RuntimeError("provider configuration changed; refresh and retry")
-    current_row = session.execute(
-        text(
-            "SELECT confirmed_capabilities_json, protocol FROM model_provider_models "
-            "WHERE provider_id=:provider_id AND model_id=:model_id"
-        ),
-        {"provider_id": provider_id, "model_id": model_id},
-    ).mappings().one_or_none()
+    current_row = (
+        session.execute(
+            text(
+                "SELECT confirmed_capabilities_json, protocol FROM model_provider_models "
+                "WHERE provider_id=:provider_id AND model_id=:model_id"
+            ),
+            {"provider_id": provider_id, "model_id": model_id},
+        )
+        .mappings()
+        .one_or_none()
+    )
     if current_row is None:
         raise LookupError("model not found")
     current = current_row["confirmed_capabilities_json"]
@@ -1237,7 +1255,10 @@ def _validate_endpoint(endpoint_url: str, provider_kind: str) -> None:
         raise ValueError("external provider requires an https endpoint")
     if provider_kind == "openai" and _endpoint_origin(endpoint_url) != "https://api.openai.com":
         raise ValueError("openai provider requires official api.openai.com endpoint")
-    if provider_kind == "siliconflow" and endpoint_url.rstrip("/") != "https://api.siliconflow.cn/v1":
+    if (
+        provider_kind == "siliconflow"
+        and endpoint_url.rstrip("/") != "https://api.siliconflow.cn/v1"
+    ):
         raise ValueError("siliconflow provider requires official api.siliconflow.cn endpoint")
 
 

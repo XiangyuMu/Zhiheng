@@ -11,9 +11,7 @@ from sqlalchemy import text
 from tests.integration.test_memory_api import _client, _headers, _login
 
 
-def _draft_with_source(
-    client: TestClient, csrf: str, name: str, claim: str
-) -> dict[str, Any]:
+def _draft_with_source(client: TestClient, csrf: str, name: str, claim: str) -> dict[str, Any]:
     source = client.post(
         "/v1/conclusions/sources",
         json={"text": f"完整对话 {name}：在每天学习的前提下，{claim}。保留讨论语境。"},
@@ -134,7 +132,8 @@ def test_relation_approval_preserves_sources_versions_and_review_history(
         original_proposal = next(item for item in after["relations"] if item["left_version"] == 1)
         expected_original = next(item for item in proposals if item["left_version"] == 1)
         assert original_proposal == expected_original | {
-            "left_status": "formal", "right_status": old_status
+            "left_status": "formal",
+            "right_status": old_status,
         }
 
     with sessions() as session:

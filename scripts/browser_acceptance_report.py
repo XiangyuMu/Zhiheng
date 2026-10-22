@@ -57,6 +57,7 @@ def _pdf_capability_evidence_error(evidence: dict[str, Any]) -> str | None:
         return "unsupported PDF import evidence must show the unsupported state and stable code"
     return None
 
+
 ISSUE8_CHECKS = {
     "conflict_confirmation": "conflict confirmation is completed through the real browser dialog",
     "missing_supplement": "missing information is supplemented through the real browser dialog",
@@ -225,8 +226,6 @@ def load_checks(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return payload, None
 
 
-
-
 def validate_checks(output: Path) -> dict[str, Any]:
     results: dict[str, Any] = {}
     for name, relative in EXPECTED_CHECKS.items():
@@ -277,9 +276,11 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     result["error"] = f"Issue #55 required cases missing: {missing_cases}"
                     results[name] = result
                     continue
-                for kind, (stop_reason, diagnostic_code, audit_status) in (
-                    ANSWER_FAILURE_CASES.items()
-                ):
+                for kind, (
+                    stop_reason,
+                    diagnostic_code,
+                    audit_status,
+                ) in ANSWER_FAILURE_CASES.items():
                     case = case_by_kind[kind]
                     screenshot = output / relative.parent / str(case.get("screenshot", ""))
                     if (
@@ -356,27 +357,30 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         results[name] = result
                         continue
                     leakage = evidence_payload["leakage"]
-                    if any(
-                        leakage.get(key) is not True
-                        for key in (
-                            "page",
-                            "accessibility",
-                            "input_values",
-                            "storage",
-                            "api_log",
-                            "worker_log",
-                            "database",
-                            "audit",
+                    if (
+                        any(
+                            leakage.get(key) is not True
+                            for key in (
+                                "page",
+                                "accessibility",
+                                "input_values",
+                                "storage",
+                                "api_log",
+                                "worker_log",
+                                "database",
+                                "audit",
+                            )
                         )
-                    ) or not isinstance(leakage.get("model_config_responses"), int) \
-                        or leakage.get("model_config_responses", 0) <= 0 \
-                        or not isinstance(leakage.get("http_responses"), int) \
-                        or leakage.get("http_responses", 0) <= 0 \
-                        or not isinstance(leakage.get("screenshot"), str) \
-                        or not isinstance(leakage.get("legacy_key_scanned"), bool) \
-                        or leakage.get("legacy_key_scanned") is not True \
-                        or not isinstance(leakage.get("ciphertexts_scanned"), int) \
-                        or leakage.get("ciphertexts_scanned", 0) <= 0:
+                        or not isinstance(leakage.get("model_config_responses"), int)
+                        or leakage.get("model_config_responses", 0) <= 0
+                        or not isinstance(leakage.get("http_responses"), int)
+                        or leakage.get("http_responses", 0) <= 0
+                        or not isinstance(leakage.get("screenshot"), str)
+                        or not isinstance(leakage.get("legacy_key_scanned"), bool)
+                        or leakage.get("legacy_key_scanned") is not True
+                        or not isinstance(leakage.get("ciphertexts_scanned"), int)
+                        or leakage.get("ciphertexts_scanned", 0) <= 0
+                    ):
                         result["error"] = "provider leakage evidence is incomplete"
                         results[name] = result
                         continue
@@ -407,8 +411,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     evidence_payload = payload.get("evidence")
                     if missing_provider or not isinstance(evidence_payload, dict):
                         result["error"] = (
-                            "required provider restart checks/evidence missing: "
-                            f"{missing_provider}"
+                            f"required provider restart checks/evidence missing: {missing_provider}"
                         )
                         results[name] = result
                         continue
@@ -510,8 +513,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     ]
                     if missing_models:
                         result["error"] = (
-                            "required Provider model checks missing: "
-                            f"{missing_models}"
+                            f"required Provider model checks missing: {missing_models}"
                         )
                         results[name] = result
                         continue

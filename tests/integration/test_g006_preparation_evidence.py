@@ -228,9 +228,12 @@ def test_preparation_reuse_preserves_independent_candidate_and_stage_evidence(
             stage=G006ExecutionStage.CANARY,
             idempotency_key=f"advance-{second.release_id}-canary",
         )
-        assert repeated_release["id"] == by_candidate_stage[
-            (second.binding.candidate_id, G006ExecutionStage.CANARY.value)
-        ]["id"]
+        assert (
+            repeated_release["id"]
+            == by_candidate_stage[(second.binding.candidate_id, G006ExecutionStage.CANARY.value)][
+                "id"
+            ]
+        )
 
         _assert_trajectory_bindings(
             database,
@@ -311,7 +314,9 @@ def _advance_stage(
 
 
 def _proposal_runs(database: Path, secret: str) -> list[dict[str, Any]]:
-    engine = create_sqlite_engine(Settings(environment="test", database_url=f"sqlite:///{database}"))
+    engine = create_sqlite_engine(
+        Settings(environment="test", database_url=f"sqlite:///{database}")
+    )
     factory = create_session_factory(engine)
     try:
         service = ProposalExecutionService(
@@ -332,7 +337,9 @@ def _proposal_runs(database: Path, secret: str) -> list[dict[str, Any]]:
 
 
 def _release_runs(database: Path, secret: str) -> list[dict[str, Any]]:
-    engine = create_sqlite_engine(Settings(environment="test", database_url=f"sqlite:///{database}"))
+    engine = create_sqlite_engine(
+        Settings(environment="test", database_url=f"sqlite:///{database}")
+    )
     factory = create_session_factory(engine)
     try:
         service = ReleaseExecutionService(
@@ -353,7 +360,9 @@ def _release_runs(database: Path, secret: str) -> list[dict[str, Any]]:
 
 
 def _load_proposal_run(database: Path, secret: str, run_id: str) -> dict[str, Any]:
-    engine = create_sqlite_engine(Settings(environment="test", database_url=f"sqlite:///{database}"))
+    engine = create_sqlite_engine(
+        Settings(environment="test", database_url=f"sqlite:///{database}")
+    )
     factory = create_session_factory(engine)
     try:
         return ProposalExecutionService(
@@ -366,7 +375,9 @@ def _load_proposal_run(database: Path, secret: str, run_id: str) -> dict[str, An
 
 
 def _load_release_run(database: Path, secret: str, run_id: str) -> dict[str, Any]:
-    engine = create_sqlite_engine(Settings(environment="test", database_url=f"sqlite:///{database}"))
+    engine = create_sqlite_engine(
+        Settings(environment="test", database_url=f"sqlite:///{database}")
+    )
     factory = create_session_factory(engine)
     try:
         return ReleaseExecutionService(
@@ -385,7 +396,9 @@ def _assert_trajectory_bindings(
     proposal_runs: Iterable[dict[str, Any]],
     release_runs: Iterable[dict[str, Any]],
 ) -> None:
-    engine = create_sqlite_engine(Settings(environment="test", database_url=f"sqlite:///{database}"))
+    engine = create_sqlite_engine(
+        Settings(environment="test", database_url=f"sqlite:///{database}")
+    )
     factory = create_session_factory(engine)
     try:
         repository = TrajectoryRepository(deployment_secret=secret, session_factory=factory)

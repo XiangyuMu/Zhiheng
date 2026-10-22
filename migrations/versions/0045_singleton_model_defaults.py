@@ -17,12 +17,13 @@ def upgrade() -> None:
     # ``model_route_defaults`` stores the current selection, not a history.
     # Keep the newest row if an old database contains accidental duplicates.
     bind = op.get_bind()
-    rows = bind.execute(
-        sa.text(
-            "SELECT id FROM model_route_defaults "
-            "ORDER BY updated_at DESC, id DESC"
+    rows = (
+        bind.execute(
+            sa.text("SELECT id FROM model_route_defaults ORDER BY updated_at DESC, id DESC")
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for duplicate_id in rows[1:]:
         bind.execute(
             sa.text("DELETE FROM model_route_defaults WHERE id=:id"),

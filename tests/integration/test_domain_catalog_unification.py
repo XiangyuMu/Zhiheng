@@ -147,9 +147,7 @@ def test_dotted_legacy_domain_migrates_item_by_item_and_rolls_back(tmp_path: Pat
     client = _client(tmp_path)
     csrf = _login(client)
     hashing = _import(client, csrf, "legacy-a", primary_domain_id="personal.notes")
-    chat = _import(
-        client, csrf, "legacy-b", title="聊天开场白", primary_domain_id="personal.notes"
-    )
+    chat = _import(client, csrf, "legacy-b", title="聊天开场白", primary_domain_id="personal.notes")
 
     created = client.post(
         "/v1/taxonomy/proposals/legacy-migration",

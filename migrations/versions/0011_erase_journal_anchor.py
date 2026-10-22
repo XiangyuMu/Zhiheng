@@ -19,7 +19,9 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("genesis_digest", sa.String(length=64), nullable=False),
         sa.Column(
-            "created_at", sa.DateTime(), server_default=sa.text("CURRENT_TIMESTAMP"),
+            "created_at",
+            sa.DateTime(),
+            server_default=sa.text("CURRENT_TIMESTAMP"),
             nullable=False,
         ),
         sa.CheckConstraint("id = 1", name="ck_privacy_erase_anchor_singleton"),

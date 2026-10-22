@@ -356,9 +356,7 @@ def test_provider_query_embedder_cache_rebuilds_when_route_changes(
             "secret_ref": "secret-b",
         },
     ]
-    app_state = types.SimpleNamespace(
-        embedding_route=routes[0], provider_secret_store=object()
-    )
+    app_state = types.SimpleNamespace(embedding_route=routes[0], provider_secret_store=object())
     created: list[dict[str, str]] = []
 
     class _FakeProviderEmbedder:
@@ -412,9 +410,7 @@ def test_provider_query_embedding_http_error_falls_back_to_fts(
             del args, kwargs
             return "fts-result"
 
-    app_state = types.SimpleNamespace(
-        embedding_route=route, provider_secret_store=object()
-    )
+    app_state = types.SimpleNamespace(embedding_route=route, provider_secret_store=object())
     retriever = VectorAwareHybridRetriever(
         settings=settings,
         app_state=app_state,
@@ -434,9 +430,7 @@ def test_provider_query_embedding_http_error_falls_back_to_fts(
     result = retriever.search(
         session,
         "query",
-        release_context=cast(
-            ReleaseContext, types.SimpleNamespace(release_id="stable")
-        ),
+        release_context=cast(ReleaseContext, types.SimpleNamespace(release_id="stable")),
     )
 
     assert cast(Any, result) == "fts-result"

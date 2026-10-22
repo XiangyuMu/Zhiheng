@@ -709,7 +709,10 @@ def test_one_unlinked_block_cannot_hide_among_current_pdf_blocks(tmp_path: Path)
             ),
             {"id": new_id()},
         )
-        assert session.execute(
-            text("SELECT count(*) FROM evidence_blocks WHERE content_version_id IS NOT NULL")
-        ).scalar_one() == 1
+        assert (
+            session.execute(
+                text("SELECT count(*) FROM evidence_blocks WHERE content_version_id IS NOT NULL")
+            ).scalar_one()
+            == 1
+        )
     _assert_not_searchable(client, knowledge_id)

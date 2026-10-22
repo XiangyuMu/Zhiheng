@@ -14,9 +14,14 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("model_provider_configs", sa.Column("catalog_status", sa.String(32), nullable=False, server_default="unknown"))
+    op.add_column(
+        "model_provider_configs",
+        sa.Column("catalog_status", sa.String(32), nullable=False, server_default="unknown"),
+    )
     op.add_column("model_provider_configs", sa.Column("catalog_error", sa.Text()))
-    op.add_column("model_provider_configs", sa.Column("catalog_refreshed_at", sa.DateTime(timezone=True)))
+    op.add_column(
+        "model_provider_configs", sa.Column("catalog_refreshed_at", sa.DateTime(timezone=True))
+    )
 
 
 def downgrade() -> None:

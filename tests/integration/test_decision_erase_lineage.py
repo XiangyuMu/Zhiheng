@@ -196,9 +196,7 @@ def test_erase_decision_run_lineage_matrix_preserves_legacy_collisions(
         _link_decision_run_source(
             session,
             run_id=unrelated_linked_id,
-            source_type=(
-                "knowledge_object" if target_type == "formal_memory" else "formal_memory"
-            ),
+            source_type=("knowledge_object" if target_type == "formal_memory" else "formal_memory"),
             source_id=ids["knowledge_id"] if target_type == "formal_memory" else ids["goal_id"],
         )
         _insert_legacy_decision_run(
@@ -342,10 +340,7 @@ def test_erase_decision_run_lineage_matrix_preserves_legacy_collisions(
         assert request_status == "completed_with_unresolved"
         assert DecisionSupportService().get_analysis(session, linked_run_id) is None
 
-    assert (
-        client.post("/v1/decisions/analyze", json=payload, headers=headers).status_code
-        == 409
-    )
+    assert client.post("/v1/decisions/analyze", json=payload, headers=headers).status_code == 409
     assert (
         client.post(
             f"/v1/decisions/{linked_run_id}/save",

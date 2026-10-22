@@ -1,4 +1,5 @@
 """Keep approved same-premise conflicts out of unconditional serving."""
+
 from alembic import op
 
 revision = "0035_conclusion_conflict_serving"
@@ -13,14 +14,17 @@ def upgrade() -> None:
         "SELECT sql FROM sqlite_master WHERE name='current_formal_knowledge'"
     ).scalar_one()
     op.execute("DROP VIEW current_formal_knowledge")
-    op.execute(definition + """ AND NOT EXISTS (
+    op.execute(
+        definition
+        + """ AND NOT EXISTS (
         SELECT 1 FROM conclusion_entries e
         JOIN conclusion_relations r ON e.id IN (r.left_id,r.right_id)
         JOIN conclusion_entries le ON le.id=r.left_id
         JOIN conclusion_entries re ON re.id=r.right_id
         WHERE e.knowledge_id=ko.id AND r.kind='conflict' AND r.status='approved'
           AND le.status='formal' AND re.status='formal'
-    )""")
+    )"""
+    )
 
 
 def downgrade() -> None:

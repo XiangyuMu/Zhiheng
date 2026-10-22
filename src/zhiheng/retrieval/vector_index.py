@@ -54,9 +54,11 @@ class SqliteVecAdapter:
     def load(self, session: Session) -> None:
         # Extensions are connection-local. Reloading sqlite-vec while this
         # connection has live virtual tables can fail during initialization.
-        loaded = session.connection().exec_driver_sql(
-            "SELECT 1 FROM pragma_function_list WHERE name='vec_version' LIMIT 1"
-        ).scalar()
+        loaded = (
+            session.connection()
+            .exec_driver_sql("SELECT 1 FROM pragma_function_list WHERE name='vec_version' LIMIT 1")
+            .scalar()
+        )
         if loaded is not None:
             return
         sqlite_vec = self._sqlite_vec_module()

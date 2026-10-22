@@ -21,9 +21,7 @@ depends_on = None
 def upgrade() -> None:
     columns = {
         str(row[1])
-        for row in op.get_bind().execute(
-            sa.text("PRAGMA table_info(conversation_extraction_runs)")
-        )
+        for row in op.get_bind().execute(sa.text("PRAGMA table_info(conversation_extraction_runs)"))
     }
     if "supplement_resolved_at" not in columns:
         op.execute(

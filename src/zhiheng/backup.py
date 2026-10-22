@@ -95,18 +95,21 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
     if any(path.is_symlink() for path in root.rglob("*")):
         raise ValueError("backup bundle must not contain symlinks")
     payload = json.loads((root / "manifest.json").read_text())
-    if not isinstance(payload, dict) or set(payload) not in ({
-        "format_version",
-        "original_object_root",
-        "database_sha256",
-        "artifacts",
-    }, {
-        "format_version",
-        "original_object_root",
-        "database_sha256",
-        "artifacts",
-        "provider_secret_recovery",
-    }):
+    if not isinstance(payload, dict) or set(payload) not in (
+        {
+            "format_version",
+            "original_object_root",
+            "database_sha256",
+            "artifacts",
+        },
+        {
+            "format_version",
+            "original_object_root",
+            "database_sha256",
+            "artifacts",
+            "provider_secret_recovery",
+        },
+    ):
         raise ValueError("unsupported backup manifest schema")
     if type(payload["format_version"]) is not int or payload["format_version"] not in {1, 2}:
         raise ValueError("unsupported backup format version")
@@ -124,7 +127,8 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
         raise ValueError("provider secret recovery metadata is required")
     if recovery is not None and (
         not isinstance(recovery, dict)
-        or set(recovery) != {
+        or set(recovery)
+        != {
             "encrypted_records_in_database",
             "master_key_external_dependency",
             "missing_master_key_behavior",
@@ -186,9 +190,10 @@ def _has_provider_secret_records(database: Path) -> bool:
 def _verify_provider_secret_references(database: Path) -> None:
     connection = sqlite3.connect(database)
     try:
-        tables = {row[0] for row in connection.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )}
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
         if "model_provider_configs" not in tables:
             return
         references = connection.execute(
@@ -249,7 +254,8 @@ def _verify_provider_secret_records(database: Path) -> None:
         record_ids = {str(row[0]) for row in rows}
         for secret_ref in providers.values():
             if (
-                isinstance(secret_ref, str) and secret_ref.startswith("local:")
+                isinstance(secret_ref, str)
+                and secret_ref.startswith("local:")
                 and secret_ref.removeprefix("local:") not in record_ids
             ):
                 raise ValueError("restored provider secret reference is dangling")

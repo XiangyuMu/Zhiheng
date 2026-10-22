@@ -108,9 +108,7 @@ class ControlState:
     def _write_unlocked(self, value: dict[str, Any]) -> None:
         body = json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary_name = tempfile.mkstemp(
-            prefix=f".{self.path.name}.", dir=self.path.parent
-        )
+        fd, temporary_name = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(body)
@@ -139,18 +137,20 @@ class ControlState:
     def arm(self, category: str, expected_state: str, expected_error_code: str) -> None:
         if category not in _SCENARIO_BY_CATEGORY:
             raise ValueError(f"unsupported Issue 54 category: {category}")
-        self.write({
-            "schema": "issue54.external-parser-control.v1",
-            "armed": {
-                "category": category,
-                "expected_state": expected_state,
-                "expected_error_code": expected_error_code,
-                "armed_at": _now(),
-                "fault_task_id": None,
-                "active": False,
-            },
-            "observations": [],
-        })
+        self.write(
+            {
+                "schema": "issue54.external-parser-control.v1",
+                "armed": {
+                    "category": category,
+                    "expected_state": expected_state,
+                    "expected_error_code": expected_error_code,
+                    "armed_at": _now(),
+                    "fault_task_id": None,
+                    "active": False,
+                },
+                "observations": [],
+            }
+        )
 
     def observe(
         self,
@@ -166,13 +166,16 @@ class ControlState:
             observations = state.setdefault("observations", [])
             if not isinstance(observations, list):
                 raise RuntimeError("controller observations must be a list")
-            observations.append({
-                "at": _now(),
-                "method": method,
-                "path": path,
-                "status": status,
-                **({"upstream_task_id": upstream_task_id} if upstream_task_id else {}),
-            })
+            observations.append(
+                {
+                    "at": _now(),
+                    "method": method,
+                    "path": path,
+                    "status": status,
+                    **({"upstream_task_id": upstream_task_id} if upstream_task_id else {}),
+                }
+            )
+
         self.update(mutate)
 
 
@@ -211,6 +214,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             if task_id is None and self.command == "POST" and path == "/tasks":
                 forwarded = self.server.forward(self.command, path, body, self.headers)
                 upstream_task_id = _json_task_id(forwarded[1])
+
                 def activate(value: dict[str, Any]) -> None:
                     armed_value = value.get("armed")
                     if isinstance(armed_value, dict) and upstream_task_id:
@@ -220,6 +224,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                         armed_value["fault_task_id"] = current_task_id or upstream_task_id
                         armed_value["active"] = True
                         armed_value["active_at"] = time.time()
+
                 self.server.control.observe(
                     self.command,
                     path,
@@ -230,10 +235,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 self._send(*forwarded)
                 return
             active_at = armed.get("active_at")
-            fault_ready = (
-                isinstance(active_at, (int, float))
-                and time.time() - active_at >= 0.5
-            )
+            fault_ready = isinstance(active_at, (int, float)) and time.time() - active_at >= 0.5
             if (
                 task_id
                 and armed.get("active")
@@ -321,11 +323,13 @@ def _proof(control: ControlState, category: str, task_id: str, attempt_id: str) 
                 break
     if not isinstance(upstream_task_id, str) or not upstream_task_id.strip():
         raise RuntimeError("controller has no observed upstream parser task identity")
+
     def activate(value: dict[str, Any]) -> None:
         current = value.get("armed")
         if isinstance(current, dict) and current.get("category") == category:
             current["active"] = True
             current["fault_task_id"] = upstream_task_id
+
     control.update(activate)
     return {
         "injected": True,
@@ -397,9 +401,8 @@ def main() -> int:
     host, separator, port_text = args.listen.rpartition(":")
     if not separator or not host or not port_text.isdigit():
         parser.error("--listen must be HOST:PORT")
-    server = _FaultProxyServer(
-        (host, int(port_text)), args.upstream, ControlState(args.state)
-    )
+    server = _FaultProxyServer((host, int(port_text)), args.upstream, ControlState(args.state))
+
     def stop(*_: Any) -> None:
         threading.Thread(target=server.shutdown, daemon=True).start()
 

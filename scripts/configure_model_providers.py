@@ -15,16 +15,28 @@ from urllib.parse import urlparse
 
 PROVIDERS = (
     (
-        "provider-deepseek", "deepseek", "openai-compatible",
-        "https://api.deepseek.com/v1", "deepseek-chat", "ZHIHENG_PRIVATE_DEEPSEEK_API_KEY",
+        "provider-deepseek",
+        "deepseek",
+        "openai-compatible",
+        "https://api.deepseek.com/v1",
+        "deepseek-chat",
+        "ZHIHENG_PRIVATE_DEEPSEEK_API_KEY",
     ),
     (
-        "provider-openai", "OpenAI", "openai", "https://api.openai.com/v1",
-        "gpt-4.1-mini", "ZHIHENG_PRIVATE_OPENAI_API_KEY",
+        "provider-openai",
+        "OpenAI",
+        "openai",
+        "https://api.openai.com/v1",
+        "gpt-4.1-mini",
+        "ZHIHENG_PRIVATE_OPENAI_API_KEY",
     ),
     (
-        "provider-codex2api", "Codex2API relay", "openai",
-        "http://10.249.190.76:8080/v1", "gpt-6-astra", "ZHIHENG_PRIVATE_CODEX2API_API_KEY",
+        "provider-codex2api",
+        "Codex2API relay",
+        "openai",
+        "http://10.249.190.76:8080/v1",
+        "gpt-6-astra",
+        "ZHIHENG_PRIVATE_CODEX2API_API_KEY",
     ),
 )
 
@@ -58,9 +70,15 @@ def main() -> None:
                   policy_revision=excluded.policy_revision
                 """,
                 (
-                    provider_id, kind, display_name, 1,
+                    provider_id,
+                    kind,
+                    display_name,
+                    1,
                     json.dumps({"allowed_models": [model]}, separators=(",", ":")),
-                    f"env:{secret_name}", json.dumps([model]), endpoint, origin,
+                    f"env:{secret_name}",
+                    json.dumps([model]),
+                    endpoint,
+                    origin,
                     "provider-config-v1",
                 ),
             )

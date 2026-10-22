@@ -25,9 +25,7 @@ from zhiheng.models.configuration import defaults
 from zhiheng.secrets import InMemoryMasterKeyBackend, ProviderSecretStore
 
 
-def _client(
-    tmp_path: Path, secret_store: ProviderSecretStore | None = None
-) -> TestClient:
+def _client(tmp_path: Path, secret_store: ProviderSecretStore | None = None) -> TestClient:
     db_path = tmp_path / "zhiheng.db"
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
@@ -67,9 +65,7 @@ def _client(
     return TestClient(app)
 
 
-def _empty_client(
-    tmp_path: Path, secret_store: ProviderSecretStore | None = None
-) -> TestClient:
+def _empty_client(tmp_path: Path, secret_store: ProviderSecretStore | None = None) -> TestClient:
     db_path = tmp_path / "zhiheng.db"
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
@@ -284,8 +280,7 @@ def test_connectivity_rejects_stale_normalized_model(tmp_path: Path) -> None:
     with app.state.session_factory() as session:
         session.execute(
             text(
-                "UPDATE model_provider_models SET stale=1, enabled=0 "
-                "WHERE provider_id=:provider_id"
+                "UPDATE model_provider_models SET stale=1, enabled=0 WHERE provider_id=:provider_id"
             ),
             {"provider_id": provider_id},
         )
@@ -576,17 +571,21 @@ def test_provider_key_is_encrypted_persisted_and_secret_free_over_http(
             text("SELECT secret_ref FROM model_provider_configs WHERE id=:id"),
             {"id": body["provider_id"]},
         ).scalar_one()
-        raw_secret = session.execute(
-            text(
-                """
+        raw_secret = (
+            session.execute(
+                text(
+                    """
                 SELECT provider_id, secret_version, algorithm, nonce_b64,
                        ciphertext_b64, secret_fingerprint
                 FROM provider_secret_records
                 WHERE provider_id=:id
                 """
-            ),
-            {"id": body["provider_id"]},
-        ).mappings().one()
+                ),
+                {"id": body["provider_id"]},
+            )
+            .mappings()
+            .one()
+        )
     assert str(raw_provider).startswith("local:")
     serialized_secret_row = json.dumps(dict(raw_secret), sort_keys=True)
     assert synthetic_key not in serialized_secret_row
@@ -978,21 +977,16 @@ def test_provider_key_rotation_revokes_old_version_and_delete_disables_provider(
         ("secret_rotated", "succeeded", 3),
     ]
     assert all(
-        row[3] is None or len(str(row[3]).removeprefix("fingerprint:")) <= 12
-        for row in lifecycle
+        row[3] is None or len(str(row[3]).removeprefix("fingerprint:")) <= 12 for row in lifecycle
     )
     assert "sk-issue37" not in json.dumps([tuple(row) for row in lifecycle])
-    events = client.get(
-        f"/v1/model-config/secret-audits?provider_id={provider['provider_id']}"
-    )
+    events = client.get(f"/v1/model-config/secret-audits?provider_id={provider['provider_id']}")
     assert events.status_code == 200
     assert events.headers["cache-control"] == "no-store"
     assert len(events.json()) == 3
     assert all(event["model_id"] is None for event in events.json())
     assert all(event["audit_kind"] == "secret_lifecycle" for event in events.json())
-    assert client.get(
-        f"/v1/model-config/audits?provider_id={provider['provider_id']}"
-    ).json() == []
+    assert client.get(f"/v1/model-config/audits?provider_id={provider['provider_id']}").json() == []
     connectivity = client.post(
         f"/v1/model-config/providers/{provider['provider_id']}/connectivity-test",
         headers={"X-CSRF-Token": csrf, "Idempotency-Key": "rotation-connectivity"},
@@ -1115,9 +1109,7 @@ def test_rotated_key_is_the_only_key_sent_to_provider_http_transport(
         return FakeResponse()
 
     monkeypatch.setattr("zhiheng.models._transports.httpx.post", fake_post)
-    transport = OpenAICompatibleChatTransport(
-        store.bind_session_factory(app.state.session_factory)
-    )
+    transport = OpenAICompatibleChatTransport(store.bind_session_factory(app.state.session_factory))
     response = transport.complete(
         route=TransportRoute(
             provider_id=provider["provider_id"],
@@ -1189,9 +1181,7 @@ def test_legacy_environment_secret_migrates_once_and_survives_environment_remova
             ),
             {"id": provider["provider_id"]},
         ).all()
-    assert [(row[0], row[1], row[2]) for row in lifecycle] == [
-        ("secret_migrated", "succeeded", 1)
-    ]
+    assert [(row[0], row[1], row[2]) for row in lifecycle] == [("secret_migrated", "succeeded", 1)]
     assert legacy_value not in json.dumps([tuple(row) for row in lifecycle])
     repeat = client.post(
         f"/v1/model-config/providers/{provider['provider_id']}/secret/migrate",
@@ -1374,8 +1364,7 @@ def test_failed_legacy_migration_can_retry_with_same_etag_and_new_idempotency_ke
     with app.state.session_factory() as session:
         versions = session.execute(
             text(
-                "SELECT secret_version, status FROM provider_secret_records "
-                "WHERE provider_id=:id"
+                "SELECT secret_version, status FROM provider_secret_records WHERE provider_id=:id"
             ),
             {"id": provider["provider_id"]},
         ).all()
@@ -1529,10 +1518,11 @@ def test_defaults_reject_incomplete_persisted_route(tmp_path: Path) -> None:
                 "(id, text_provider_id, text_model_id, etag) "
                 "VALUES ('broken-default', :provider, NULL, 'broken')"
             ),
-                {"provider": "provider-test"},
+            {"provider": "provider-test"},
         )
-    with app.state.session_factory() as session, pytest.raises(
-        RuntimeError, match="incomplete route"
+    with (
+        app.state.session_factory() as session,
+        pytest.raises(RuntimeError, match="incomplete route"),
     ):
         defaults(session)
 
@@ -1726,6 +1716,7 @@ def test_connectivity_probe_diagnoses_timeout_and_tls_failures(
         (httpx.TimeoutException("timed out"), "timeout"),
         (httpx.ConnectError("certificate verify failed: tls", request=None), "tls_error"),
     ):
+
         def raise_error(*args: object, _error: Exception = error, **kwargs: object) -> object:
             del args, kwargs
             raise _error
@@ -1877,39 +1868,54 @@ def test_connectivity_selects_confirmed_model_among_unconfirmed_catalog(
     client = _empty_client(tmp_path)
     csrf = _login(client)
     created = client.post(
-        '/v1/model-config/providers',
-        headers={'X-CSRF-Token': csrf, 'Idempotency-Key': 'selection-provider'},
-        json={'provider_kind': 'siliconflow', 'display_name': 'Selection',
-              'base_url': 'https://api.siliconflow.cn/v1', 'enabled': True},
+        "/v1/model-config/providers",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "selection-provider"},
+        json={
+            "provider_kind": "siliconflow",
+            "display_name": "Selection",
+            "base_url": "https://api.siliconflow.cn/v1",
+            "enabled": True,
+        },
     )
     assert created.status_code == 200
     provider = created.json()
     app = cast(FastAPI, client.app)
     with app.state.session_factory() as session:
-        for index, model in enumerate(('BAAI/bge-m3', 'Pro/BAAI/bge-m3')):
-            session.execute(text(
-                'INSERT INTO model_provider_models '
-                '(id, provider_id, model_id, source, protocol, '
-                'suggested_capabilities_json, confirmed_capabilities_json, enabled, stale) '
-                "VALUES (:id,:provider,:model,'discovered','embeddings',"
-                "'[\"embedding\"]',:confirmed,1,0)"
-            ), {'id': f'selection-{index}', 'provider': provider['provider_id'],
-                'model': model, 'confirmed': '["embedding"]' if index else '[]'})
+        for index, model in enumerate(("BAAI/bge-m3", "Pro/BAAI/bge-m3")):
+            session.execute(
+                text(
+                    "INSERT INTO model_provider_models "
+                    "(id, provider_id, model_id, source, protocol, "
+                    "suggested_capabilities_json, confirmed_capabilities_json, enabled, stale) "
+                    "VALUES (:id,:provider,:model,'discovered','embeddings',"
+                    "'[\"embedding\"]',:confirmed,1,0)"
+                ),
+                {
+                    "id": f"selection-{index}",
+                    "provider": provider["provider_id"],
+                    "model": model,
+                    "confirmed": '["embedding"]' if index else "[]",
+                },
+            )
         session.commit()
     probed: list[str] = []
 
     def probe(**kwargs: Any) -> tuple[str, str, str]:
-        probed.append(kwargs['model_id'])
-        return 'succeeded', 'ok', '连接正常'
+        probed.append(kwargs["model_id"])
+        return "succeeded", "ok", "连接正常"
 
-    monkeypatch.setattr('zhiheng.models.gateway.probe_model_provider_connectivity', probe)
+    monkeypatch.setattr("zhiheng.models.gateway.probe_model_provider_connectivity", probe)
     endpoint = f"/v1/model-config/providers/{provider['provider_id']}/connectivity-test"
-    response = client.post(endpoint, headers={
-        'X-CSRF-Token': csrf, 'Idempotency-Key': 'selection-test'})
+    response = client.post(
+        endpoint, headers={"X-CSRF-Token": csrf, "Idempotency-Key": "selection-test"}
+    )
     assert response.status_code == 200, response.text
-    assert response.json()['model_id'] == 'Pro/BAAI/bge-m3'
-    assert probed == ['Pro/BAAI/bge-m3']
-    rejected = client.post(endpoint, params={'model_id': 'BAAI/bge-m3'}, headers={
-        'X-CSRF-Token': csrf, 'Idempotency-Key': 'selection-unconfirmed'})
+    assert response.json()["model_id"] == "Pro/BAAI/bge-m3"
+    assert probed == ["Pro/BAAI/bge-m3"]
+    rejected = client.post(
+        endpoint,
+        params={"model_id": "BAAI/bge-m3"},
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "selection-unconfirmed"},
+    )
     assert rejected.status_code == 422
-    assert probed == ['Pro/BAAI/bge-m3']
+    assert probed == ["Pro/BAAI/bge-m3"]

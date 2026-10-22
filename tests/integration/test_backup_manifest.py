@@ -328,12 +328,15 @@ def test_prepare_refuses_missing_latest_journal_before_mutating_bundle(tmp_path:
     assert (bundle / "database.sqlite").read_bytes() == before
 
 
-@pytest.mark.parametrize("mutation", [
-    "UPDATE model_provider_configs SET secret_ref='local:absent'",
-    "DELETE FROM provider_secret_records",
-    "UPDATE provider_secret_records SET status='rotated'",
-    "DELETE FROM model_provider_configs",
-])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "UPDATE model_provider_configs SET secret_ref='local:absent'",
+        "DELETE FROM provider_secret_records",
+        "UPDATE provider_secret_records SET status='rotated'",
+        "DELETE FROM model_provider_configs",
+    ],
+)
 def test_backup_rejects_inconsistent_secret_references(tmp_path: Path, mutation: str) -> None:
     snapshot, root, _ = _snapshot(tmp_path)
     _add_provider_secret_record(snapshot)

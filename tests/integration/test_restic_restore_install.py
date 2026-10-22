@@ -334,9 +334,7 @@ def _free_loopback_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _wait_for_api(
-    process: subprocess.Popen[str], base_url: str, log_path: Path
-) -> None:
+def _wait_for_api(process: subprocess.Popen[str], base_url: str, log_path: Path) -> None:
     deadline = time.monotonic() + 30
     with httpx.Client(base_url=base_url, timeout=1.0) as client:
         while time.monotonic() < deadline:
@@ -387,9 +385,7 @@ class Keyring:
 """
     (backend / "macOS.py").write_text(implementation)
     (backend / "SecretService.py").write_text(implementation)
-    key_file.write_text(
-        json.dumps({"zhiheng.provider-secrets:default": encoded}), encoding="utf-8"
-    )
+    key_file.write_text(json.dumps({"zhiheng.provider-secrets:default": encoded}), encoding="utf-8")
 
 
 def test_restic_restore_installs_clean_bundle_into_new_target(tmp_path: Path) -> None:
@@ -596,9 +592,9 @@ def test_restic_restore_real_api_worker_starts_and_serves_knowledge_without_keyr
             "ZHIHENG_DATABASE_URL": f"sqlite:///{target_db}",
             "ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH": str(target_objects),
             "ZHIHENG_ENVIRONMENT": "test",
-        "ZHIHENG_SECRET_KEY": JOURNAL_SECRET,
-        "ZHIHENG_API_HOST": "127.0.0.1",
-        "ZHIHENG_API_PORT": str(port),
+            "ZHIHENG_SECRET_KEY": JOURNAL_SECRET,
+            "ZHIHENG_API_HOST": "127.0.0.1",
+            "ZHIHENG_API_PORT": str(port),
         }
     )
     api_log = tmp_path / "real-api.log"
@@ -655,9 +651,7 @@ def test_restic_restore_real_api_worker_starts_and_serves_knowledge_without_keyr
                 items = search.json()["items"]
                 assert items, search.text
                 item = next(
-                    entry
-                    for entry in items
-                    if entry["knowledge_object_id"] == knowledge_object_id
+                    entry for entry in items if entry["knowledge_object_id"] == knowledge_object_id
                 )
                 reader = client.get(f"/v1/knowledge/{item['knowledge_object_id']}/reader")
                 assert reader.status_code == 200, reader.text

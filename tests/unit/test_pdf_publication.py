@@ -100,9 +100,7 @@ def test_nonformal_block_is_preserved_but_not_published() -> None:
     repository = Mock()
     repository.persist_manifest.return_value = "attempt-1"
     manifest = _manifest()
-    manifest["blocks"].append(
-        {"key": "body-2", "status": "candidate", "text": "uncertain text"}
-    )
+    manifest["blocks"].append({"key": "body-2", "status": "candidate", "text": "uncertain text"})
 
     result = publish_parse_result(session, repository, manifest)
 
