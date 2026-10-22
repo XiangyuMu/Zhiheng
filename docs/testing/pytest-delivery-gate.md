@@ -8,6 +8,7 @@ restic 使用系统安装（macOS：`brew install restic`；Ubuntu：`sudo apt-g
 ```sh
 uv sync --extra dev --frozen
 uv run ruff check .
+uv run ruff format --check .
 uv run mypy src tests
 run_id="$(date +%Y%m%d-%H%M%S)-$$"
 uv run python scripts/pytest_delivery_gate.py --output "$HOME/.local/share/zhiheng-pytest-evidence/$run_id" --timeout 900 --natural-completion
