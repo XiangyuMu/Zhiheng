@@ -25,7 +25,8 @@ def test_json_diagnostic_preserves_command_and_exit_metadata(
 ) -> None:
     command = ["docker", "version", "--format", "json"]
     monkeypatch.setattr(
-        warmup_module.subprocess, "run",
+        warmup_module.subprocess,
+        "run",
         Mock(return_value=subprocess.CompletedProcess(command, 0, '{"version":"test"}', "")),
     )
     result = warmup_module._capture_json_command(command)

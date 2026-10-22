@@ -79,7 +79,8 @@ def test_collector_bounds_hung_step(tmp_path: Path) -> None:
 
 
 def test_collector_preserves_process_group_cleanup_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = collector()
     original_killpg = module.os.killpg
@@ -113,7 +114,8 @@ def test_unknown_parser_profile_is_rejected() -> None:
 
 
 def test_host_runtime_requires_explicit_token_and_real_warmup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = collector()
     monkeypatch.setenv("ZHIHENG_MINERU_RUNTIME", "host")
@@ -312,28 +314,39 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                     "kind": kind,
                     "status": "passed",
                     "receipt": {
-                        "task_id": f"restart-{kind}", "source_sha256": "source",
+                        "task_id": f"restart-{kind}",
+                        "source_sha256": "source",
                         "evidence_object_id": f"evidence-{kind}",
                         "parser_attempt_id": f"attempt-{kind}",
                     },
                     "active_lease_before_restart": {
                         "jobs": [
                             {
-                                "status": "processing", "attempts": 1,
+                                "status": "processing",
+                                "attempts": 1,
                                 "lease_owner_sha256": "lease",
                             }
                         ]
                     },
-                    **({
-                        "active_parser_before_restart": {
-                            "task_id": "restart-gateway", "attempt_id": "attempt-gateway",
-                            "state": "running", "upstream_task_id": "upstream-task", "ready": True,
+                    **(
+                        {
+                            "active_parser_before_restart": {
+                                "task_id": "restart-gateway",
+                                "attempt_id": "attempt-gateway",
+                                "state": "running",
+                                "upstream_task_id": "upstream-task",
+                                "ready": True,
+                            }
                         }
-                    } if kind == "gateway" else {}),
+                        if kind == "gateway"
+                        else {}
+                    ),
                     "terminal": {
-                        "state": "parsed", "task_id": f"restart-{kind}",
+                        "state": "parsed",
+                        "task_id": f"restart-{kind}",
                         "evidence_object_id": f"evidence-{kind}",
-                        "source_sha256": "source", "manifest_sha256": f"manifest-{kind}",
+                        "source_sha256": "source",
+                        "manifest_sha256": f"manifest-{kind}",
                         "manifest_uri": f"file:///objects/{kind}/manifest.json",
                     },
                     "searchable": {
@@ -390,7 +403,7 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                         "source_sha256": "a" * 64,
                         "source_file_sha256": "a" * 64,
                     },
-                }
+                },
             ],
             "answers": [
                 {
@@ -408,13 +421,18 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                     "citation_payload_count": 1,
                     "claims_count": 1,
                     "bound_source": {
-                        "knowledge_object_id": "text", "knowledge_version_id": "text-version",
-                        "evidence_object_id": "text-evidence", "source_sha256": "c" * 64,
+                        "knowledge_object_id": "text",
+                        "knowledge_version_id": "text-version",
+                        "evidence_object_id": "text-evidence",
+                        "source_sha256": "c" * 64,
                     },
                     "bound_citation": {
-                        "citation_id": "text-citation", "source_id": "text",
-                        "source_version_id": "text-version", "evidence_object_id": "text-evidence",
-                        "content_version_id": "text-content", "content_span_id": "text-span",
+                        "citation_id": "text-citation",
+                        "source_id": "text",
+                        "source_version_id": "text-version",
+                        "evidence_object_id": "text-evidence",
+                        "content_version_id": "text-content",
+                        "content_span_id": "text-span",
                         "page_no": None,
                     },
                 },
@@ -425,13 +443,18 @@ def valid_payloads() -> dict[int, dict[str, Any]]:
                     "citation_payload_count": 1,
                     "claims_count": 1,
                     "bound_source": {
-                        "knowledge_object_id": "pdf", "knowledge_version_id": "pdf-version",
-                        "evidence_object_id": "pdf-evidence", "source_sha256": "a" * 64,
+                        "knowledge_object_id": "pdf",
+                        "knowledge_version_id": "pdf-version",
+                        "evidence_object_id": "pdf-evidence",
+                        "source_sha256": "a" * 64,
                     },
                     "bound_citation": {
-                        "citation_id": "pdf-citation", "source_id": "pdf",
-                        "source_version_id": "pdf-version", "evidence_object_id": "pdf-evidence",
-                        "content_version_id": "pdf-content", "content_span_id": "pdf-span",
+                        "citation_id": "pdf-citation",
+                        "source_id": "pdf",
+                        "source_version_id": "pdf-version",
+                        "evidence_object_id": "pdf-evidence",
+                        "content_version_id": "pdf-content",
+                        "content_span_id": "pdf-span",
                         "page_no": 1,
                     },
                 },
@@ -611,7 +634,8 @@ def test_synthetic_environment_does_not_inherit_real_storage_or_routes() -> None
 
 
 def test_browser_stage_runs_synthetic_workers_without_the_real_pdf_backend(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = collector()
     repo = tmp_path / "checkout"
@@ -619,19 +643,31 @@ def test_browser_stage_runs_synthetic_workers_without_the_real_pdf_backend(
     output = tmp_path / "evidence"
     monkeypatch.setenv("ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH", "/real/objects")
     monkeypatch.setattr(sys, "argv", ["delivery", "--output", str(output)])
-    monkeypatch.setattr(module, "git", lambda root, *args: (
-        str(repo) if args == ("rev-parse", "--show-toplevel") else
-        "same-sha" if args == ("rev-parse", "HEAD") else ""
-    ))
+    monkeypatch.setattr(
+        module,
+        "git",
+        lambda root, *args: (
+            str(repo)
+            if args == ("rev-parse", "--show-toplevel")
+            else "same-sha"
+            if args == ("rev-parse", "HEAD")
+            else ""
+        ),
+    )
     monkeypatch.setattr(module, "load_pdf_evidence_matrix", lambda root: evidence_matrix())
     monkeypatch.setattr(module, "mineru_command", lambda *args: ["synthetic"])
     environments: dict[str, dict[str, str]] = {}
 
-    def run(root: Path, dest: Path, name: str, argv: list[str],
-            timeout: float | None, env: dict[str, str]) -> dict[str, Any]:
+    def run(
+        root: Path,
+        dest: Path,
+        name: str,
+        argv: list[str],
+        timeout: float | None,
+        env: dict[str, str],
+    ) -> dict[str, Any]:
         environments[name] = env
-        return {"name": name, "command": argv, "status": "passed", "exit_code": 0,
-                "seconds": 0.01}
+        return {"name": name, "command": argv, "status": "passed", "exit_code": 0, "seconds": 0.01}
 
     monkeypatch.setattr(module, "execute", run)
     module.main()
@@ -662,13 +698,19 @@ def test_executor_timeout_reaps_shell_descendants(tmp_path: Path) -> None:
         f"echo $! > {shlex.quote(str(pid_file))}; wait"
     )
     result = module.execute(
-        tmp_path, tmp_path, "descendant", ["bash", "-c", command], 1,
+        tmp_path,
+        tmp_path,
+        "descendant",
+        ["bash", "-c", command],
+        1,
         module.clean_environment(),
     )
     assert result["status"] == "timeout"
     pid = int(pid_file.read_text())
     state = subprocess.run(
-        ["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True,
+        ["ps", "-p", str(pid), "-o", "stat="],
+        capture_output=True,
+        text=True,
     )
     assert state.returncode != 0 or state.stdout.strip().startswith("Z")
     log = tmp_path / "descendant.log"
@@ -680,7 +722,9 @@ def test_executor_timeout_reaps_shell_descendants(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("outcome", ["success", "nonzero", "timeout"])
 def test_restart_result_is_private_and_failure_stops_pdf_parse(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
 ) -> None:
     import hashlib
     import shlex
@@ -698,25 +742,37 @@ def test_restart_result_is_private_and_failure_stops_pdf_parse(
     command = f"{shlex.quote(sys.executable)} -c {shlex.quote(code)} {marker}"
     monkeypatch.setenv("ZHIHENG_RESTART_WORKER_COMMAND", command)
     monkeypatch.setattr(sys, "argv", ["delivery", "--output", str(output)])
-    monkeypatch.setattr(module, "git", lambda root, *args: (
-        str(repo) if args == ("rev-parse", "--show-toplevel") else
-        "same-sha" if args == ("rev-parse", "HEAD") else ""
-    ))
+    monkeypatch.setattr(
+        module,
+        "git",
+        lambda root, *args: (
+            str(repo)
+            if args == ("rev-parse", "--show-toplevel")
+            else "same-sha"
+            if args == ("rev-parse", "HEAD")
+            else ""
+        ),
+    )
     monkeypatch.setattr(module, "load_pdf_evidence_matrix", lambda root: evidence_matrix())
     monkeypatch.setattr(module, "mineru_command", lambda *args: ["synthetic"])
     calls: list[str] = []
     execute = module.execute
 
-    def run(root: Path, dest: Path, name: str, argv: list[str],
-            timeout: float | None, env: dict[str, str]) -> dict[str, Any]:
+    def run(
+        root: Path,
+        dest: Path,
+        name: str,
+        argv: list[str],
+        timeout: float | None,
+        env: dict[str, str],
+    ) -> dict[str, Any]:
         calls.append(name)
         if name == "pdf-worker-restart":
             # Only the timeout case needs a short budget; the others must
             # survive a cold interpreter start on a loaded CI runner.
             budget = 0.3 if outcome == "timeout" else 30.0
             return cast(dict[str, Any], execute(root, dest, name, argv, budget, env))
-        return {"name": name, "command": argv, "status": "passed", "exit_code": 0,
-                "seconds": 0.01}
+        return {"name": name, "command": argv, "status": "passed", "exit_code": 0, "seconds": 0.01}
 
     monkeypatch.setattr(module, "execute", run)
     module.main()
@@ -727,9 +783,14 @@ def test_restart_result_is_private_and_failure_stops_pdf_parse(
     restart = step["runtime_restart"]
     assert "command" not in restart
     assert restart["command_sha256"] == hashlib.sha256(command.encode()).hexdigest()
-    assert restart["status"] == {
-        "success": "passed", "nonzero": "failed", "timeout": "timeout",
-    }[outcome]
+    assert (
+        restart["status"]
+        == {
+            "success": "passed",
+            "nonzero": "failed",
+            "timeout": "timeout",
+        }[outcome]
+    )
     assert ("pdf-parse" in calls) == (outcome == "success")
     if outcome == "nonzero":
         assert restart["exit_code"] == 7
@@ -749,8 +810,12 @@ def test_collector_creates_private_evidence_with_permissive_umask(tmp_path: Path
         module.create_evidence_directory(output)
         module.write_report(output, {"status": "failed"})
         result = module.execute(
-            tmp_path, output, "failure", [sys.executable, "-c", "raise SystemExit(1)"],
-            5, module.clean_environment(),
+            tmp_path,
+            output,
+            "failure",
+            [sys.executable, "-c", "raise SystemExit(1)"],
+            5,
+            module.clean_environment(),
         )
         assert result["exit_code"] == 1
         assert stat.S_IMODE(output.stat().st_mode) == 0o700
@@ -764,7 +829,9 @@ def test_collector_creates_private_evidence_with_permissive_umask(tmp_path: Path
 
 def failure_evidence() -> dict[str, Any]:
     return {
-        "status": "passed", "sha": "same-sha", "injected": True,
+        "status": "passed",
+        "sha": "same-sha",
+        "injected": True,
         "boundary": "model_transport",
         "command": ["node", "tests/e2e/check_answer_failures_issue55.cjs"],
         "input_digest": "a" * 64,
@@ -874,9 +941,7 @@ def test_pdf_stages_require_one_input_digest(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("value", [True, float("nan"), float("inf"), 10**400])
-def test_issue54_timing_rejects_non_finite_or_boolean_values(
-    tmp_path: Path, value: object
-) -> None:
+def test_issue54_timing_rejects_non_finite_or_boolean_values(tmp_path: Path, value: object) -> None:
     module = collector()
     payloads = valid_payloads()
     payloads[54]["restart_scenarios"][0]["elapsed_ms"] = value
@@ -886,9 +951,7 @@ def test_issue54_timing_rejects_non_finite_or_boolean_values(
 
 
 @pytest.mark.parametrize("value", [True, float("nan"), float("inf"), 10**400])
-def test_issue56_timing_rejects_non_finite_or_boolean_values(
-    tmp_path: Path, value: object
-) -> None:
+def test_issue56_timing_rejects_non_finite_or_boolean_values(tmp_path: Path, value: object) -> None:
     module = collector()
     payloads = valid_payloads()
     payloads[56]["steps"][0]["seconds"] = value
@@ -927,12 +990,14 @@ def test_issue55_pdf_answer_must_bind_to_accepted_pdf(tmp_path: Path) -> None:
 def test_issue55_pdf_answer_rejects_unrelated_citation_identity(tmp_path: Path) -> None:
     module = collector()
     payloads = valid_payloads()
+
     def replace_source(value: object) -> object:
         if isinstance(value, dict):
             return {key: replace_source(item) for key, item in value.items()}
         if isinstance(value, list):
             return [replace_source(item) for item in value]
         return "a" * 64 if value == "source" else value
+
     payloads = cast(
         dict[int, dict[str, Any]],
         {issue: replace_source(payload) for issue, payload in payloads.items()},

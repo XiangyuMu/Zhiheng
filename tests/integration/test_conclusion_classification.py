@@ -117,9 +117,13 @@ def test_dynamic_catalog_domain_is_allowed_but_disabled_domain_is_rejected(tmp_p
                 "VALUES ('custom.issue15','Issue 15 自定义领域','',990,2,'active')"
             )
         )
-        session.execute(text("INSERT INTO domain_catalog "
-                             "(id,name,description,sort_order,schema_version,status) "
-                             "VALUES ('custom.issue15.disabled','停用领域','',991,2,'disabled')"))
+        session.execute(
+            text(
+                "INSERT INTO domain_catalog "
+                "(id,name,description,sort_order,schema_version,status) "
+                "VALUES ('custom.issue15.disabled','停用领域','',991,2,'disabled')"
+            )
+        )
     source = client.post(
         "/v1/conclusions/sources",
         json={"text": "动态领域原始材料"},

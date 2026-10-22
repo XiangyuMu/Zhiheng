@@ -31,8 +31,7 @@ RETIRED_V1_DOMAIN_IDS = (
 )
 
 _SET_STATUS = sa.text(
-    "UPDATE domain_catalog SET status = :status, updated_at = CURRENT_TIMESTAMP "
-    "WHERE id IN :ids"
+    "UPDATE domain_catalog SET status = :status, updated_at = CURRENT_TIMESTAMP WHERE id IN :ids"
 ).bindparams(sa.bindparam("ids", expanding=True))
 _SET_RELATIONSHIPS = sa.text(
     "UPDATE domain_catalog SET name = :name, description = :description, "

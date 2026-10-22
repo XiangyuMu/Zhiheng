@@ -321,9 +321,10 @@ class MemoryCandidateSource:
     def items(self, session: Session, owner: str) -> list[PendingItem]:
         # A candidate behind a personal conflict is decided through that
         # conflict, so it is listed (and counted) once, as the conflict.
-        rows = session.execute(
-            text(
-                """
+        rows = (
+            session.execute(
+                text(
+                    """
                 SELECT mc.id, mc.candidate_type, mc.state_key, mc.status,
                        mc.current_version_id, mc.rationale, mc.created_at, mcv.value_json
                 FROM memory_candidates mc
@@ -333,8 +334,11 @@ class MemoryCandidateSource:
                     SELECT 1 FROM memory_conflicts c WHERE c.candidate_id = mc.id
                   )
                 """
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
         evidence = _candidate_evidence(session, [str(row["current_version_id"]) for row in rows])
         items = []
         for row in rows:
@@ -538,9 +542,7 @@ def _classification_action(action: str) -> ActionHandler:
                 session, user_id=owner, proposal_id=item.id, expected_etag=item.etag, reason=""
             )
         else:
-            transition = (
-                taxonomy.defer_proposal if action == "defer" else taxonomy.restore_proposal
-            )
+            transition = taxonomy.defer_proposal if action == "defer" else taxonomy.restore_proposal
             result = transition(
                 session, user_id=owner, proposal_id=item.id, expected_etag=item.etag
             )

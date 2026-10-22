@@ -25,8 +25,11 @@ def main() -> int:
     if (
         origin.scheme not in {"http", "https"}
         or origin.hostname not in {"127.0.0.1", "localhost", "::1"}
-        or origin.username is not None or origin.password is not None
-        or origin.query or origin.fragment or origin.path not in {"", "/"}
+        or origin.username is not None
+        or origin.password is not None
+        or origin.query
+        or origin.fragment
+        or origin.path not in {"", "/"}
     ):
         parser.error("MinerU gateway must be a loopback origin without credentials")
     _ = origin.port

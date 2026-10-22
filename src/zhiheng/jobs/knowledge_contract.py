@@ -82,9 +82,8 @@ def project_import_status(
             failure=failure,
         )
     if (
-        (failure is not None and _is_unsupported_failure(failure.code))
-        or job_status == JobStatus.UNSUPPORTED.value
-    ):
+        failure is not None and _is_unsupported_failure(failure.code)
+    ) or job_status == JobStatus.UNSUPPORTED.value:
         public_status = ImportPublicStatus.UNSUPPORTED
     elif job_status == JobStatus.QUEUED.value:
         public_status = ImportPublicStatus.QUEUED

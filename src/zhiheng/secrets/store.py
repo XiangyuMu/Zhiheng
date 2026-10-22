@@ -241,9 +241,7 @@ def _ensure_secure_lock_directory(path: Path) -> None:
         # private so another local user cannot inspect or replace its lock.
         is_leaf = current == path
         directory_is_safe = (
-            _is_secure_directory(entry_stat)
-            if is_leaf
-            else _is_safe_parent_directory(entry_stat)
+            _is_secure_directory(entry_stat) if is_leaf else _is_safe_parent_directory(entry_stat)
         )
         if not directory_is_safe:
             raise MasterKeyUnavailable("native keyring lock directory is insecure")

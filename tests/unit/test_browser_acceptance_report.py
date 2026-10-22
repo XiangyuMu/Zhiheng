@@ -453,15 +453,19 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "provider-models-issue47/evidence.json",
         "provider-models-restart/checks.json",
     ):
-        write_checks(tmp_path, relative, {
-            "checks": [
-                "browser refresh discovers and persists a normalized Provider model",
-                "confirmed default model survives API and Worker restart",
-                "stale model and catalog failure remain visible after refresh",
-                "DeepSeek embedding rejection and unsupported indexing stop polling",
-            ],
-            "browserErrors": [],
-        })
+        write_checks(
+            tmp_path,
+            relative,
+            {
+                "checks": [
+                    "browser refresh discovers and persists a normalized Provider model",
+                    "confirmed default model survives API and Worker restart",
+                    "stale model and catalog failure remain visible after refresh",
+                    "DeepSeek embedding rejection and unsupported indexing stop polling",
+                ],
+                "browserErrors": [],
+            },
+        )
     write_checks(tmp_path, "answer-failures-issue55/report.json", complete_answer_failure_report())
     (tmp_path / "api.log").write_text("api ready")
     (tmp_path / "worker.log").write_text("worker ready")
@@ -485,10 +489,14 @@ def test_browser_acceptance_report_rejects_issue55_browser_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    write_checks(tmp_path, "answer-failures-issue55/report.json", {
-        **complete_answer_failure_report(),
-        "browserErrors": ["unexpected page error"],
-    })
+    write_checks(
+        tmp_path,
+        "answer-failures-issue55/report.json",
+        {
+            **complete_answer_failure_report(),
+            "browserErrors": ["unexpected page error"],
+        },
+    )
 
     code, report = run_report(tmp_path, monkeypatch, exit_code=0)
 

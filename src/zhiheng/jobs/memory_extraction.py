@@ -504,7 +504,9 @@ def _record_conclusion_extraction_failure(
             )
     except Exception as persistence_error:
         logger.exception("failed to persist conversation extraction review outcome")
-        raise RuntimeError("conversation extraction review persistence failed") from persistence_error
+        raise RuntimeError(
+            "conversation extraction review persistence failed"
+        ) from persistence_error
 
 
 def _event_memory_tables_available(session: Session) -> bool:

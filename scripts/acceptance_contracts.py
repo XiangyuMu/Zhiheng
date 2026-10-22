@@ -52,7 +52,10 @@ def valid_issue55_answer_binding(
     if not isinstance(source, dict) or not isinstance(citation, dict):
         return False
     source_fields = (
-        "knowledge_object_id", "knowledge_version_id", "evidence_object_id", "source_sha256",
+        "knowledge_object_id",
+        "knowledge_version_id",
+        "evidence_object_id",
+        "source_sha256",
     )
     if any(not isinstance(source.get(field), str) or not source[field] for field in source_fields):
         return False
@@ -63,12 +66,15 @@ def valid_issue55_answer_binding(
     if any(source.get(field) != imported_knowledge.get(field) for field in source_fields):
         return False
     citation_fields = (
-        "citation_id", "source_id", "source_version_id", "evidence_object_id",
-        "content_version_id", "content_span_id",
+        "citation_id",
+        "source_id",
+        "source_version_id",
+        "evidence_object_id",
+        "content_version_id",
+        "content_span_id",
     )
     if any(
-        not isinstance(citation.get(field), str) or not citation[field]
-        for field in citation_fields
+        not isinstance(citation.get(field), str) or not citation[field] for field in citation_fields
     ):
         return False
     if citation.get("source_id") != source["knowledge_object_id"]:

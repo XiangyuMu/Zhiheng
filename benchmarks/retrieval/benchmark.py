@@ -235,9 +235,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--iterations", type=int, default=3)
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument(
-        "--device", choices=("auto", "cpu", "mps", "cuda"), default="auto"
-    )
+    parser.add_argument("--device", choices=("auto", "cpu", "mps", "cuda"), default="auto")
     parser.add_argument("--model", default=MODEL_ID)
     parser.add_argument("--revision", default="main")
     parser.add_argument("--output", type=Path, required=True)
@@ -249,9 +247,7 @@ def parse_args() -> argparse.Namespace:
     if not 1 <= args.queries <= len(GOLD_CASES):
         parser.error(f"--queries must be between 1 and {len(GOLD_CASES)}")
     if args.iterations < 1 or args.warmup < 0 or args.batch_size < 1:
-        parser.error(
-            "iterations and batch-size must be positive; warmup cannot be negative"
-        )
+        parser.error("iterations and batch-size must be positive; warmup cannot be negative")
     return args
 
 
@@ -289,9 +285,7 @@ def resolve_model_revision(model_id: str, requested_revision: str) -> str:
 
 
 def pretokenize(text: str) -> str:
-    return " ".join(
-        token.strip() for token in jieba.cut(text, cut_all=False) if token.strip()
-    )
+    return " ".join(token.strip() for token in jieba.cut(text, cut_all=False) if token.strip())
 
 
 def fts_match_expression(text: str) -> str:
@@ -304,9 +298,7 @@ def fts_match_expression(text: str) -> str:
     return " OR ".join(dict.fromkeys(tokens)) or '"__empty_query__"'
 
 
-def make_corpus(
-    document_count: int, seed: int
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def make_corpus(document_count: int, seed: int) -> tuple[list[dict[str, Any]], dict[str, int]]:
     rng = random.Random(seed)
     documents: list[dict[str, Any]] = []
     gold_rowids: dict[str, int] = {}
@@ -323,9 +315,7 @@ def make_corpus(
     while len(documents) < document_count:
         index = len(documents) + 1
         template = rng.choice(DISTRACTOR_TEMPLATES)
-        qualifier = rng.choice(
-            ("基础记录", "阶段笔记", "复盘摘要", "学习卡片", "资料摘录")
-        )
+        qualifier = rng.choice(("基础记录", "阶段笔记", "复盘摘要", "学习卡片", "资料摘录"))
         documents.append(
             {
                 "id": index,
@@ -375,9 +365,7 @@ def serialize_vector(vector: np.ndarray) -> bytes:
     return sqlite_vec.serialize_float32(array.tolist())
 
 
-def fts_search(
-    connection: sqlite3.Connection, query: str, limit: int
-) -> list[tuple[int, float]]:
+def fts_search(connection: sqlite3.Connection, query: str, limit: int) -> list[tuple[int, float]]:
     rows = connection.execute(
         """
         SELECT rowid, bm25(chunks_fts) AS score
@@ -416,10 +404,7 @@ def rrf_merge(
         for rank, (rowid, _) in enumerate(rows, start=1):
             scores[rowid] = scores.get(rowid, 0.0) + 1.0 / (RRF_K + rank)
     return [
-        rowid
-        for rowid, _ in sorted(scores.items(), key=lambda item: (-item[1], item[0]))[
-            :limit
-        ]
+        rowid for rowid, _ in sorted(scores.items(), key=lambda item: (-item[1], item[0]))[:limit]
     ]
 
 
@@ -434,9 +419,7 @@ def gpu_memory(device: str) -> dict[str, float | None]:
     if device == "cuda" and torch.cuda.is_available():
         return {
             "allocated_mb": round(torch.cuda.memory_allocated() / (1024 * 1024), 2),
-            "peak_allocated_mb": round(
-                torch.cuda.max_memory_allocated() / (1024 * 1024), 2
-            ),
+            "peak_allocated_mb": round(torch.cuda.max_memory_allocated() / (1024 * 1024), 2),
         }
     if device == "mps" and hasattr(torch, "mps"):
         current = getattr(torch.mps, "current_allocated_memory", lambda: 0)()
@@ -485,9 +468,7 @@ def markdown_report(result: dict[str, Any]) -> str:
         "",
     ]
     for name, check in result["checks"].items():
-        lines.append(
-            f"- {'PASS' if check['passed'] else 'FAIL'}：{name} — {check['detail']}"
-        )
+        lines.append(f"- {'PASS' if check['passed'] else 'FAIL'}：{name} — {check['detail']}")
     lines.extend(
         [
             "",
@@ -558,17 +539,13 @@ def main() -> int:
         fts_insert_ms = (time.perf_counter() - fts_insert_started) * 1000
 
         model_load_started = time.perf_counter()
-        model = SentenceTransformer(
-            args.model, revision=resolved_revision, device=device
-        )
+        model = SentenceTransformer(args.model, revision=resolved_revision, device=device)
         model_load_ms = (time.perf_counter() - model_load_started) * 1000
         rss_after_model = rss_mb(process)
         from huggingface_hub import snapshot_download
 
         snapshot_path = Path(
-            snapshot_download(
-                args.model, revision=resolved_revision, local_files_only=True
-            )
+            snapshot_download(args.model, revision=resolved_revision, local_files_only=True)
         )
         model_snapshot_bytes = directory_size(snapshot_path)
 
@@ -597,9 +574,7 @@ def main() -> int:
         document_encode_ms = (time.perf_counter() - document_encode_started) * 1000
         dimensions = int(document_vectors.shape[1])
         if dimensions != 1024:
-            raise RuntimeError(
-                f"Expected bge-m3 to produce 1024 dimensions, got {dimensions}"
-            )
+            raise RuntimeError(f"Expected bge-m3 to produce 1024 dimensions, got {dimensions}")
 
         connection.execute(
             f"CREATE VIRTUAL TABLE chunk_vec USING vec0(embedding float[{dimensions}])"
@@ -648,9 +623,7 @@ def main() -> int:
             fts_latencies.append((time.perf_counter() - started) * 1000)
 
             started = time.perf_counter()
-            vector_rows = vector_search(
-                connection, query_vectors[case.key], RETRIEVAL_DEPTH
-            )
+            vector_rows = vector_search(connection, query_vectors[case.key], RETRIEVAL_DEPTH)
             vector_latencies.append((time.perf_counter() - started) * 1000)
 
             started = time.perf_counter()
@@ -717,9 +690,7 @@ def main() -> int:
                 "device": device,
                 "logical_cpu_count": psutil.cpu_count(logical=True),
                 "physical_cpu_count": psutil.cpu_count(logical=False),
-                "system_memory_mb": round(
-                    psutil.virtual_memory().total / (1024 * 1024), 2
-                ),
+                "system_memory_mb": round(psutil.virtual_memory().total / (1024 * 1024), 2),
                 "packages": {
                     "sqlite-vec": package_version("sqlite-vec"),
                     "sentence-transformers": package_version("sentence-transformers"),
@@ -745,9 +716,7 @@ def main() -> int:
                 "batch_size": args.batch_size,
                 "model_load_ms": round(model_load_ms, 3),
                 "document_encode_ms": round(document_encode_ms, 3),
-                "documents_per_second": round(
-                    len(documents) / (document_encode_ms / 1000), 3
-                ),
+                "documents_per_second": round(len(documents) / (document_encode_ms / 1000), 3),
                 "query_latency": latency_summary(query_encode_latencies),
                 "model_snapshot_bytes": model_snapshot_bytes,
             },
@@ -776,9 +745,7 @@ def main() -> int:
                 "rss_peak_mb": round(peak_rss, 2),
                 "benchmark_wall_seconds": round(benchmark_wall_seconds, 3),
                 "process_cpu_seconds": round(process_cpu_seconds, 3),
-                "cpu_to_wall_ratio": round(
-                    process_cpu_seconds / benchmark_wall_seconds, 3
-                ),
+                "cpu_to_wall_ratio": round(process_cpu_seconds / benchmark_wall_seconds, 3),
                 "gpu": gpu_memory(device),
                 "db_before_checkpoint_bytes": db_before_checkpoint,
                 "wal_before_checkpoint_bytes": wal_before_checkpoint,
@@ -789,8 +756,7 @@ def main() -> int:
             },
             "checks": {
                 "sqlite_vec_loaded": {
-                    "passed": sqlite_vec_version.removeprefix("v")
-                    == package_version("sqlite-vec"),
+                    "passed": sqlite_vec_version.removeprefix("v") == package_version("sqlite-vec"),
                     "detail": f"extension={sqlite_vec_version}, package={package_version('sqlite-vec')}",
                 },
                 "bge_m3_dimensions": {
@@ -810,9 +776,7 @@ def main() -> int:
         fingerprint_input = json.dumps(
             result, ensure_ascii=False, sort_keys=True, default=str
         ).encode("utf-8")
-        result["run"]["result_fingerprint"] = hashlib.sha256(
-            fingerprint_input
-        ).hexdigest()
+        result["run"]["result_fingerprint"] = hashlib.sha256(fingerprint_input).hexdigest()
         args.output.write_text(
             json.dumps(result, ensure_ascii=False, indent=2, default=str) + "\n",
             encoding="utf-8",

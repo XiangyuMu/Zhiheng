@@ -174,9 +174,7 @@ def test_failed_final_migration_cas_rolls_back_secret_insert(
     app_secret_store = app.state.provider_secret_store
     original_migrate = app_secret_store.migrate_environment_reference
 
-    def invalidate_reserved_revision(
-        session: Any, *, provider_id: str, secret_ref: str
-    ) -> Any:
+    def invalidate_reserved_revision(session: Any, *, provider_id: str, secret_ref: str) -> Any:
         stored = original_migrate(session, provider_id=provider_id, secret_ref=secret_ref)
         session.execute(
             text(

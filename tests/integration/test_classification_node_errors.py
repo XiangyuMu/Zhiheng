@@ -17,9 +17,7 @@ def test_duplicate_child_name_is_rejected_without_blocking_new_nodes(tmp_path: P
         "parent_id": parent.json()["id"],
         "name": "间隔练习",
     }
-    first = client.post(
-        "/v1/classifications", json=payload, headers=_headers(csrf, "first-child")
-    )
+    first = client.post("/v1/classifications", json=payload, headers=_headers(csrf, "first-child"))
     assert first.status_code == 201
     duplicate = client.post(
         "/v1/classifications", json=payload, headers=_headers(csrf, "duplicate-child")

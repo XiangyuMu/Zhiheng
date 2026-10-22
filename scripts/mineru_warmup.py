@@ -101,9 +101,7 @@ def _capture_command(command: list[str], *, timeout: float = 10) -> dict[str, ob
     return {**metadata, "status": "captured", "data": stdout}
 
 
-def _capture_json_command(
-    command: list[str], *, timeout: float = 10
-) -> dict[str, object]:
+def _capture_json_command(command: list[str], *, timeout: float = 10) -> dict[str, object]:
     result = _capture_command(command, timeout=timeout)
     if result["status"] != "captured":
         return result
@@ -112,13 +110,12 @@ def _capture_json_command(
     except (TypeError, ValueError, json.JSONDecodeError):
         return {
             **{key: value for key, value in result.items() if key != "data"},
-            "status": "unavailable", "error": "invalid_json",
+            "status": "unavailable",
+            "error": "invalid_json",
         }
 
 
-def _capture_text_command(
-    command: list[str], *, timeout: float = 10
-) -> dict[str, object]:
+def _capture_text_command(command: list[str], *, timeout: float = 10) -> dict[str, object]:
     return _capture_command(command, timeout=timeout)
 
 

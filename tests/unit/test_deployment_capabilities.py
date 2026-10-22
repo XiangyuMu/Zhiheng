@@ -56,9 +56,9 @@ def test_declared_off_pdf_parsing_builds_no_executor() -> None:
 
 
 def test_declared_backend_without_url_is_not_configured() -> None:
-    pdf = deployment_capabilities(
-        _settings(pdf_parser_backend="mineru", pdf_mineru_token=TOKEN)
-    )["pdf_parsing"]
+    pdf = deployment_capabilities(_settings(pdf_parser_backend="mineru", pdf_mineru_token=TOKEN))[
+        "pdf_parsing"
+    ]
 
     assert pdf["configured"] is False
     assert "ZHIHENG_PDF_MINERU_URL" in pdf["detail"]

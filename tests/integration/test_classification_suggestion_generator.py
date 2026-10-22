@@ -43,13 +43,16 @@ def test_generator_suggests_a_matching_node_for_imported_knowledge(tmp_path: Pat
 
     assert [s.candidate_node_id for s in generated] == [node.json()["id"]]
     with session_scope(factory) as session:
-        stored = session.execute(
-            text(
-                "SELECT status FROM classification_suggestions"
-                " WHERE knowledge_object_id = :id"
-            ),
-            {"id": knowledge_id},
-        ).scalars().all()
+        stored = (
+            session.execute(
+                text(
+                    "SELECT status FROM classification_suggestions WHERE knowledge_object_id = :id"
+                ),
+                {"id": knowledge_id},
+            )
+            .scalars()
+            .all()
+        )
     assert stored == ["pending"]
 
 
@@ -85,11 +88,14 @@ def test_queued_suggestion_request_is_turned_into_suggestions_by_the_worker_job(
 
     assert completed == 1
     with session_scope(factory) as session:
-        stored = session.execute(
-            text(
-                "SELECT status FROM classification_suggestions"
-                " WHERE knowledge_object_id = :id"
-            ),
-            {"id": knowledge_id},
-        ).scalars().all()
+        stored = (
+            session.execute(
+                text(
+                    "SELECT status FROM classification_suggestions WHERE knowledge_object_id = :id"
+                ),
+                {"id": knowledge_id},
+            )
+            .scalars()
+            .all()
+        )
     assert stored == ["pending"]

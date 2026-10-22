@@ -180,14 +180,18 @@ def test_index_job_persists_actual_embedding_provider_provenance(
     )
 
     with session_scope(session_factory) as session:
-        generation = session.execute(
-            text(
-                """
+        generation = (
+            session.execute(
+                text(
+                    """
                 SELECT provider_id, model_id, model_revision, index_status
                 FROM embedding_generations
                 """
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
 
     assert completed == 1
     assert generation["provider_id"] == "provider-siliconflow-a"
@@ -213,15 +217,11 @@ def test_index_job_marks_unsupported_without_confirmed_embedding_route(tmp_path:
     )
 
     with session_scope(session_factory) as session:
-        row = session.execute(
-            text("SELECT status, payload_json FROM jobs")
-        ).mappings().one()
+        row = session.execute(text("SELECT status, payload_json FROM jobs")).mappings().one()
         failure = session.execute(
             text("SELECT error_message FROM job_attempts ORDER BY started_at DESC LIMIT 1")
         ).scalar_one()
-        serving_chunks = session.execute(
-            text("SELECT count(*) FROM serving_chunks")
-        ).scalar_one()
+        serving_chunks = session.execute(text("SELECT count(*) FROM serving_chunks")).scalar_one()
         vectors = session.execute(
             text("SELECT count(*) FROM embedding_generations WHERE index_status='active'")
         ).scalar_one()

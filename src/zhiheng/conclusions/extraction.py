@@ -133,10 +133,14 @@ class HeuristicConversationConclusionExtractor:
         items: list[dict[str, Any]] = []
         seen: set[tuple[int, int]] = set()
         for candidate in candidates:
-            if candidate.claim in extracted_claims or (
-                candidate.claim_start,
-                candidate.claim_end,
-            ) in seen:
+            if (
+                candidate.claim in extracted_claims
+                or (
+                    candidate.claim_start,
+                    candidate.claim_end,
+                )
+                in seen
+            ):
                 continue
             if not _has_negative_context(source, candidate):
                 continue

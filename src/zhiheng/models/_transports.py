@@ -152,18 +152,22 @@ def probe_provider_connectivity(
         return "failed", "response_format_error", "供应商返回格式无法识别"
     if provider_kind == "ollama":
         models = payload.get("models") if isinstance(payload, dict) else None
-        model_names = {
-            str(item.get("name"))
-            for item in models
-            if isinstance(item, dict) and item.get("name")
-        } if isinstance(models, list) else set()
+        model_names = (
+            {
+                str(item.get("name"))
+                for item in models
+                if isinstance(item, dict) and item.get("name")
+            }
+            if isinstance(models, list)
+            else set()
+        )
     else:
         models = payload.get("data") if isinstance(payload, dict) else None
-        model_names = {
-            str(item.get("id"))
-            for item in models
-            if isinstance(item, dict) and item.get("id")
-        } if isinstance(models, list) else set()
+        model_names = (
+            {str(item.get("id")) for item in models if isinstance(item, dict) and item.get("id")}
+            if isinstance(models, list)
+            else set()
+        )
     if not model_names:
         return "failed", "response_format_error", "供应商返回格式无法识别"
     if model_id and model_id not in model_names:

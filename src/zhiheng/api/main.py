@@ -184,6 +184,7 @@ def create_app(
     secret_store: ProviderSecretStore | None = None,
 ) -> FastAPI:
     app_settings = settings or get_settings()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if not getattr(app.state, "startup_barrier_complete", False):
@@ -1017,7 +1018,10 @@ def create_app(
         _require_session(session, session_service, session_token)
         response.headers["Cache-Control"] = "no-store"
         return recent_audits(
-            session, limit=limit, offset=offset, provider_id=provider_id,
+            session,
+            limit=limit,
+            offset=offset,
+            provider_id=provider_id,
             audit_kind="secret_lifecycle",
         )
 

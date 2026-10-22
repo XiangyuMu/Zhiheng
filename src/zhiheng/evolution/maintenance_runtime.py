@@ -357,7 +357,11 @@ class MaintenanceRuntime:
                 ),
                 {"id": target_id},
             )
-            state = "applied" if int(session.execute(text("SELECT changes()")).scalar_one()) else "skipped"
+            state = (
+                "applied"
+                if int(session.execute(text("SELECT changes()")).scalar_one())
+                else "skipped"
+            )
         elif target_type == "derived_index":
             session.execute(
                 text(
@@ -368,7 +372,11 @@ class MaintenanceRuntime:
                 ),
                 {"id": target_id},
             )
-            state = "applied" if int(session.execute(text("SELECT changes()")).scalar_one()) else "skipped"
+            state = (
+                "applied"
+                if int(session.execute(text("SELECT changes()")).scalar_one())
+                else "skipped"
+            )
         else:
             state = "skipped"
         session.execute(

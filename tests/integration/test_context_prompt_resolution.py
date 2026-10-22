@@ -88,9 +88,7 @@ def test_missing_information_can_be_supplied_after_deferral(
         headers=_headers(csrf, "supply-follow-up"),
     )
     assert follow_up.status_code == 200, follow_up.text
-    assert not any(
-        item["kind"] == "missing" for item in follow_up.json()["context_prompts"]
-    )
+    assert not any(item["kind"] == "missing" for item in follow_up.json()["context_prompts"])
 
 
 def test_conflict_resolution_rejects_stale_candidate_etag(tmp_path: Path) -> None:

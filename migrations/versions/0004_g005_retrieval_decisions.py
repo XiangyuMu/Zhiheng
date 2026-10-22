@@ -504,9 +504,7 @@ def downgrade() -> None:
     op.drop_column("retrieval_runs", "usage_json")
     op.drop_column("retrieval_runs", "budget_json")
 
-    op.drop_index(
-        "ix_embedding_generations_purpose_status", table_name="embedding_generations"
-    )
+    op.drop_index("ix_embedding_generations_purpose_status", table_name="embedding_generations")
     op.drop_index(
         "uq_embedding_generations_active_model_purpose", table_name="embedding_generations"
     )

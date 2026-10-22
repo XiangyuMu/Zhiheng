@@ -212,9 +212,7 @@ class PendingInbox:
         for target in targets:
             savepoint = session.begin_nested()
             try:
-                outcome = self.perform(
-                    session, owner, target.type, target.id, action, target.etag
-                )
+                outcome = self.perform(session, owner, target.type, target.id, action, target.etag)
             except (LookupError, ValueError) as exc:
                 savepoint.rollback()
                 results.append(_batch_result(target, "failed", _reason(exc), str(exc), None))

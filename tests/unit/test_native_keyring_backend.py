@@ -253,9 +253,7 @@ def test_native_keyring_rejects_invalid_persisted_key(monkeypatch: pytest.Monkey
 
 def test_native_keyring_rejects_invalid_persisted_encoding(monkeypatch: pytest.MonkeyPatch) -> None:
     keyring = _FakeKeyring()
-    _FakeKeyring.values = {
-        (NativeKeyringMasterKeyBackend.service_name, "instance-a"): "not-base64"
-    }
+    _FakeKeyring.values = {(NativeKeyringMasterKeyBackend.service_name, "instance-a"): "not-base64"}
     monkeypatch.setattr("zhiheng.secrets.store.sys.platform", "darwin")
     monkeypatch.setattr(
         "zhiheng.secrets.store.import_module",

@@ -1,4 +1,5 @@
 """Track automatic personal-information updates and unresolved prompts."""
+
 from alembic import op
 
 revision = "0031_personal_updates"

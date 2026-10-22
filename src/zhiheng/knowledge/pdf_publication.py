@@ -325,9 +325,7 @@ def publish_parse_result(
             # and digest returned by the parser protocol; the manifest fields
             # remain a compatibility fallback for local fixtures.
             manifest_uri=str(manifest_uri or manifest.get("manifest_uri") or ""),
-            manifest_sha256=str(
-                manifest_sha256 or manifest.get("manifest_sha256") or ""
-            ),
+            manifest_sha256=str(manifest_sha256 or manifest.get("manifest_sha256") or ""),
         )
         formal_block_count = sum(
             1 for block in manifest.get("blocks", ()) if block.get("status") == "formal"

@@ -83,11 +83,11 @@ def formalize_conclusion(
                     "SELECT ko.id, eo.source_metadata_json FROM conclusion_entries e "
                     "JOIN knowledge_objects ko ON ko.id=e.knowledge_id "
                     "JOIN knowledge_versions kv ON kv.id=ko.current_version_id "
-                "JOIN content_versions cv ON cv.id=kv.content_version_id "
-                "JOIN evidence_objects eo ON eo.id=cv.evidence_object_id "
-                "WHERE e.id=:id AND e.owner_user_id=:o "
-                "AND ko.lifecycle_status='formal_current' "
-                "AND ko.visibility_scope='formal'"
+                    "JOIN content_versions cv ON cv.id=kv.content_version_id "
+                    "JOIN evidence_objects eo ON eo.id=cv.evidence_object_id "
+                    "WHERE e.id=:id AND e.owner_user_id=:o "
+                    "AND ko.lifecycle_status='formal_current' "
+                    "AND ko.visibility_scope='formal'"
                 ),
                 {"id": related_entry_id, "o": user},
             )

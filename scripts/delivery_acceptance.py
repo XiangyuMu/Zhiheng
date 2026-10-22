@@ -264,13 +264,24 @@ def mineru_command(name: str, output: Path) -> list[str]:
             raise ValueError("host MinerU requires ZHIHENG_MINERU_TOKEN_FILE")
         if name == "mineru-warmup":
             return [
-                sys.executable, "scripts/mineru_http_warmup.py", "--url", url,
-                "--token-file", token_file, "--diagnostics", str(output / "mineru-warmup.json"),
-                "--timeout", str(mineru_warmup_timeout()),
+                sys.executable,
+                "scripts/mineru_http_warmup.py",
+                "--url",
+                url,
+                "--token-file",
+                token_file,
+                "--diagnostics",
+                str(output / "mineru-warmup.json"),
+                "--timeout",
+                str(mineru_warmup_timeout()),
             ]
         return [
-            sys.executable, "scripts/mineru_http_health.py", "--url", url,
-            "--token-file", token_file,
+            sys.executable,
+            "scripts/mineru_http_health.py",
+            "--url",
+            url,
+            "--token-file",
+            token_file,
         ]
     if name == "mineru-warmup":
         return ["bash", "scripts/mineru_local.sh", "start"]
@@ -311,6 +322,7 @@ def validate_stage_evidence(
     expected_pdf_sha256: str | None = None,
 ) -> None:
     """Require each real PDF stage to leave a passed report bound to this SHA."""
+
     def require_dict(value: Any, label: str) -> dict[str, Any]:
         if not isinstance(value, dict):
             raise ValueError(f"{label} must be an object")
@@ -429,15 +441,11 @@ def validate_stage_evidence(
             expected_provider = os.environ.get("ZHIHENG_EXPECTED_EMBEDDING_PROVIDER_ID")
             if expected_provider and provider_id != expected_provider:
                 raise ValueError("Issue 53 embedding provider differs from the configured route")
-            model_id = require_nonempty(
-                generation.get("model_id"), "Issue 53 retrieval model_id"
-            )
+            model_id = require_nonempty(generation.get("model_id"), "Issue 53 retrieval model_id")
             expected_model = os.environ.get("ZHIHENG_EXPECTED_EMBEDDING_MODEL_ID")
             if expected_model and model_id != expected_model:
                 raise ValueError("Issue 53 embedding model differs from the configured route")
-            require_nonempty(
-                generation.get("model_revision"), "Issue 53 retrieval model_revision"
-            )
+            require_nonempty(generation.get("model_revision"), "Issue 53 retrieval model_revision")
             require_positive_number(generation.get("dimension"), "Issue 53 retrieval dimension")
             if generation.get("purpose") != "retrieval":
                 raise ValueError("Issue 53 retrieval generation purpose is not retrieval")
@@ -530,10 +538,9 @@ def validate_stage_evidence(
                     if restart_scenario
                     else {}
                 )
-                if (
-                    proof.get("kind") != restart.get("kind")
-                    or proof.get("task_id") != scenario_receipt.get("task_id")
-                ):
+                if proof.get("kind") != restart.get("kind") or proof.get(
+                    "task_id"
+                ) != scenario_receipt.get("task_id"):
                     raise ValueError("Issue 54 restart proof is not bound to current task")
                 if proof.get("ready") is not True and proof.get("observed_ready") is not True:
                     raise ValueError("Issue 54 restart proof is missing readiness")
@@ -549,9 +556,8 @@ def validate_stage_evidence(
             parser_receipt = require_dict(
                 parser_scenario.get("receipt"), "Issue 54 gateway receipt"
             )
-            if (
-                parser_proof.get("task_id") != parser_receipt.get("task_id")
-                or not parser_proof.get("upstream_task_id")
+            if parser_proof.get("task_id") != parser_receipt.get("task_id") or not parser_proof.get(
+                "upstream_task_id"
             ):
                 raise ValueError("Issue 54 parser proof is not bound to current task")
             if (
@@ -567,9 +573,7 @@ def validate_stage_evidence(
                 "auto_retry_exhausted",
                 "manual_ui_retry",
             }
-            observed = {
-                item.get("category") for item in faults if item.get("status") == "passed"
-            }
+            observed = {item.get("category") for item in faults if item.get("status") == "passed"}
             if observed != required:
                 raise ValueError("Issue 54 evidence does not prove all five fault categories")
             for fault in faults:
@@ -578,10 +582,9 @@ def validate_stage_evidence(
                 if fault.get("source_sha256") != source_sha:
                     raise ValueError("Issue 54 fault source digest is not bound to input")
                 observed_state = require_dict(fault.get("observed"), "Issue 54 fault observed")
-                if (
-                    observed_state.get("state") != fault.get("expected_state")
-                    or observed_state.get("error_code") != fault.get("expected_error_code")
-                ):
+                if observed_state.get("state") != fault.get("expected_state") or observed_state.get(
+                    "error_code"
+                ) != fault.get("expected_error_code"):
                     raise ValueError("Issue 54 fault terminal state is not bound to expectation")
                 polling = require_dict(observed_state.get("polling"), "Issue 54 fault polling")
                 if polling.get("polling_stopped") is not True:
@@ -612,10 +615,9 @@ def validate_stage_evidence(
                     )
                     if fault.get("ui_retry_clicked") is not True:
                         raise ValueError("Issue 54 manual retry did not use the UI")
-                    if (
-                        retry_result.get("task_id") != fault.get("task_id")
-                        or retry_result.get("source_sha256") != fault.get("source_sha256")
-                    ):
+                    if retry_result.get("task_id") != fault.get("task_id") or retry_result.get(
+                        "source_sha256"
+                    ) != fault.get("source_sha256"):
                         raise ValueError("Issue 54 manual retry result is not bound to fault")
                     require_nonempty(
                         retry_result.get("manifest_sha256"),
@@ -641,7 +643,8 @@ def validate_stage_evidence(
             except (OSError, json.JSONDecodeError) as error:
                 raise ValueError("Issue 55 failure evidence is missing or invalid") from error
             if (
-                failure.get("status") != "passed" or failure.get("sha") != sha
+                failure.get("status") != "passed"
+                or failure.get("sha") != sha
                 or failure.get("injected") is not True
                 or failure.get("boundary") != "model_transport"
             ):
@@ -651,7 +654,9 @@ def validate_stage_evidence(
             cases = require_object_list(failure.get("cases"), "Issue 55 failure cases")
             expected_failures = {
                 "invalid_output": (
-                    "invalid_model_output", "answer_model_invalid_output", "succeeded",
+                    "invalid_model_output",
+                    "answer_model_invalid_output",
+                    "succeeded",
                 ),
                 "transport_failure": ("model_failed", "provider_error", "failed"),
             }
@@ -659,9 +664,11 @@ def validate_stage_evidence(
                 raise ValueError("Issue 55 requires both invalid output and transport failure")
             for case in cases:
                 if (
-                    case.get("status") != "passed" or case.get("ui_visible") is not True
+                    case.get("status") != "passed"
+                    or case.get("ui_visible") is not True
                     or case.get("stop_reason") != expected_failures[case["kind"]][0]
-                    or type(case.get("dispatch_count")) is not int or case["dispatch_count"] != 1
+                    or type(case.get("dispatch_count")) is not int
+                    or case["dispatch_count"] != 1
                 ):
                     raise ValueError("Issue 55 failure lacks bounded dispatch or visible UI")
                 for field in ("audit_id", "provider_id", "model_id", "diagnostic_code"):
@@ -683,9 +690,8 @@ def validate_stage_evidence(
                 for item in imports
                 if isinstance(item.get("file"), str) and item["file"].lower().endswith(".pdf")
             ]
-            if (
-                expected_pdf_sha256 is not None
-                and (len(pdf_imports) != 1 or pdf_imports[0].get("sha256") != expected_pdf_sha256)
+            if expected_pdf_sha256 is not None and (
+                len(pdf_imports) != 1 or pdf_imports[0].get("sha256") != expected_pdf_sha256
             ):
                 raise ValueError("Issue 55 PDF import is not bound to the accepted PDF")
             by_kind = {item.get("kind"): item for item in answers}
@@ -742,8 +748,7 @@ def validate_stage_evidence(
             text_imports = [
                 item
                 for item in imports
-                if isinstance(item.get("file"), str)
-                and not item["file"].lower().endswith(".pdf")
+                if isinstance(item.get("file"), str) and not item["file"].lower().endswith(".pdf")
             ]
             if len(text_imports) != 1:
                 raise ValueError("Issue 55 text import identity is missing")
@@ -756,9 +761,7 @@ def validate_stage_evidence(
                 or text_knowledge.get("source_file_sha256") != text_digest
             ):
                 raise ValueError("Issue 55 text import file digest is not bound to knowledge")
-            if not valid_issue55_answer_binding(
-                by_kind["text"], text_knowledge
-            ):
+            if not valid_issue55_answer_binding(by_kind["text"], text_knowledge):
                 raise ValueError(
                     "Issue 55 text answer citation is not bound to the accepted import"
                 )
@@ -774,13 +777,26 @@ def validate_stage_evidence(
             if any(item.get("status") != "passed" or item.get("exit_code") != 0 for item in steps):
                 raise ValueError("Issue 56 evidence contains incomplete quality-gate steps")
             required_steps = {
-                "dependencies", "versions", "compile", "ruff", "mypy", "pytest", "browser",
-                "real-pdf-preflight", "mineru-warmup", "parser-health", "pdf-parse", "pdf-search",
-                "pdf-recovery", "real-files", "extraction",
+                "dependencies",
+                "versions",
+                "compile",
+                "ruff",
+                "mypy",
+                "pytest",
+                "browser",
+                "real-pdf-preflight",
+                "mineru-warmup",
+                "parser-health",
+                "pdf-parse",
+                "pdf-search",
+                "pdf-recovery",
+                "real-files",
+                "extraction",
             }
-            if len(steps) != len(required_steps) or {
-                item.get("name") for item in steps
-            } != required_steps:
+            if (
+                len(steps) != len(required_steps)
+                or {item.get("name") for item in steps} != required_steps
+            ):
                 raise ValueError("Issue 56 evidence is missing required quality-gate steps")
             if any(
                 not is_finite_number(item.get("seconds"), minimum=0)
@@ -975,8 +991,12 @@ def main() -> int:
             restart_command = os.environ.get("ZHIHENG_RESTART_WORKER_COMMAND")
             if restart_command:
                 runtime_restart = execute(
-                    repo, output, "pdf-worker-restart",
-                    ["bash", "-lc", restart_command], 60, env,
+                    repo,
+                    output,
+                    "pdf-worker-restart",
+                    ["bash", "-lc", restart_command],
+                    60,
+                    env,
                 )
                 runtime_restart.pop("command", None)
                 runtime_restart["command_sha256"] = hashlib.sha256(

@@ -120,9 +120,7 @@ def upgrade() -> None:
                   (id, name, description, sort_order, schema_version, status)
                 VALUES (:id, :name, :description, :sort_order, 2, 'active')
                 """
-            ).bindparams(
-                id=domain_id, name=name, description=description, sort_order=sort_order
-            )
+            ).bindparams(id=domain_id, name=name, description=description, sort_order=sort_order)
         )
 
 

@@ -56,6 +56,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_provider_secret_records_provider_status", table_name="provider_secret_records")
+    op.drop_index(
+        "ix_provider_secret_records_provider_status", table_name="provider_secret_records"
+    )
     op.drop_table("provider_secret_records")
     op.drop_table("provider_secret_instances")

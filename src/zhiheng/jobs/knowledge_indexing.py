@@ -156,9 +156,7 @@ class ProviderTextEmbedder:
         for offset in range(0, len(unique_texts), PROVIDER_EMBED_BATCH_SIZE):
             batch = unique_texts[offset : offset + PROVIDER_EMBED_BATCH_SIZE]
             vectors = self._transport.embed(route=transport_route, texts=batch)
-            if len(vectors) != len(batch) or any(
-                len(vector) != dimension for vector in vectors
-            ):
+            if len(vectors) != len(batch) or any(len(vector) != dimension for vector in vectors):
                 raise ValueError("embedding response dimension does not match configured index")
             for source_text, vector in zip(batch, vectors, strict=True):
                 if normalize:
@@ -898,7 +896,9 @@ class KnowledgeIndexJobExecutor:
                 )
                 for chunk_text in chunk_texts
             ]
-        embeddings_by_chunk_id = dict(zip((chunk.chunk_id for chunk in serving_chunks), vectors, strict=True))
+        embeddings_by_chunk_id = dict(
+            zip((chunk.chunk_id for chunk in serving_chunks), vectors, strict=True)
+        )
 
         with session_scope(session_factory) as session:
             self._require_current_job_lease(session, job)
@@ -1192,7 +1192,6 @@ def _lease_heartbeat(
                 },
             )
             return
-
 
 
 def _json_object(value: Any) -> dict[str, Any]:

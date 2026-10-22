@@ -598,9 +598,7 @@ def list_import_tasks(
         source_status = str(row["source_status"]) if row["source_status"] else None
         job_status = str(row["job_status"]) if row["job_status"] else source_status
         if str(row["task_type"]) == "pdf":
-            public_status = _pdf_status(
-                source_status, job_status, bool(row["searchable"]), failure
-            )
+            public_status = _pdf_status(source_status, job_status, bool(row["searchable"]), failure)
         else:
             public_status = project_import_status(
                 job_status=job_status,

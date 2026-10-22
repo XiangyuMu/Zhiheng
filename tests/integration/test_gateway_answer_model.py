@@ -676,6 +676,8 @@ def test_gateway_negative_existence_guard_accepts_insufficiency_wording(answer: 
     guarded = _guard_negative_existence_response("这些材料是否给出作者的银行账户号码？", result)
     assert guarded.answerability == "insufficient"
     assert not guarded.claims
+
+
 def _legacy_prompt_length(
     *,
     query: str,

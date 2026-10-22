@@ -154,9 +154,11 @@ def test_answer_api_uses_configured_model_gateway_and_counting_transport(
     assert {ref["formal_memory_id"] for ref in payload["personalization_refs"]} == {ids["goal_id"]}
     with session_scope(session_factory) as session:
         assert session.execute(text("SELECT count(*) FROM model_call_audits")).scalar_one() == 1
-        audit = session.execute(
-            text("SELECT id, provider_id, model_id, status FROM model_call_audits")
-        ).mappings().one()
+        audit = (
+            session.execute(text("SELECT id, provider_id, model_id, status FROM model_call_audits"))
+            .mappings()
+            .one()
+        )
         assert payload["answer_audit_id"] == audit["id"]
         assert payload["answer_provider_id"] == audit["provider_id"]
         assert payload["answer_model_id"] == audit["model_id"]
@@ -164,7 +166,8 @@ def test_answer_api_uses_configured_model_gateway_and_counting_transport(
 
 
 def test_answer_api_insufficient_answer_does_not_present_retrieved_material_as_citations(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "secret-value")
     client, session_factory, transport = _gateway_client(tmp_path, external_models_enabled=True)
@@ -262,9 +265,7 @@ def test_answer_api_revoke_after_claim_remains_privacy_denied(
     assert "answer_model_id" not in payload
     assert "answer_safety_reason_code" not in payload
     with session_scope(session_factory) as session:
-        audit = session.execute(
-            text("SELECT status FROM model_call_audits")
-        ).scalar_one()
+        audit = session.execute(text("SELECT status FROM model_call_audits")).scalar_one()
         assert audit == "dispatching"
 
 
@@ -307,12 +308,16 @@ def test_answer_api_transport_exception_fails_closed_with_failed_audit_and_repla
     assert payload["claims"] == []
     assert payload["citations"]
     with session_scope(session_factory) as session:
-        audit = session.execute(
-            text(
-                "SELECT id, provider_id, model_id, status, diagnostic_code "
-                "FROM model_call_audits"
+        audit = (
+            session.execute(
+                text(
+                    "SELECT id, provider_id, model_id, status, diagnostic_code "
+                    "FROM model_call_audits"
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         assert audit["status"] == "failed"
         assert audit["diagnostic_code"] == "provider_error"
         assert payload["answer_audit_id"] == audit["id"]
@@ -367,12 +372,16 @@ def test_answer_api_invalid_model_output_fails_closed_with_audit_metadata(
     assert payload["claims"] == []
     assert payload["citations"]
     with session_scope(session_factory) as session:
-        audit = session.execute(
-            text(
-                "SELECT id, provider_id, model_id, status, diagnostic_code "
-                "FROM model_call_audits"
+        audit = (
+            session.execute(
+                text(
+                    "SELECT id, provider_id, model_id, status, diagnostic_code "
+                    "FROM model_call_audits"
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         assert audit["status"] == "succeeded"
         assert audit["diagnostic_code"] == "answer_model_invalid_output"
         assert payload["answer_audit_id"] == audit["id"]

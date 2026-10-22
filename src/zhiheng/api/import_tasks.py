@@ -142,8 +142,7 @@ def get_import_batch(
     states = [str(r["status"]) for r in rows]
     total = len(states)
     completed = sum(
-        s
-        in {"succeeded", "failed", "dead_letter", "unsupported", "duplicate", "cancelled"}
+        s in {"succeeded", "failed", "dead_letter", "unsupported", "duplicate", "cancelled"}
         for s in states
     )
     progress_completed = sum(int(r["progress_completed"] or 0) for r in rows)

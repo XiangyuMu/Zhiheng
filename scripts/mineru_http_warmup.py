@@ -20,8 +20,11 @@ def local_origin(url: str) -> str:
     if (
         parsed.scheme not in {"http", "https"}
         or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
-        or parsed.username is not None or parsed.password is not None
-        or parsed.query or parsed.fragment or parsed.path not in {"", "/"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
     ):
         raise ValueError("MinerU gateway must be a loopback origin without credentials")
     _ = parsed.port
@@ -58,9 +61,7 @@ def warmup(url: str, token_file: Path, diagnostics: Path, timeout: float) -> int
         report["gateway_url"] = url
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
-        report["sha"] = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True
-        ).strip()
+        report["sha"] = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
         token = token_file.read_text(encoding="utf-8").strip()
         if not token:
             raise ValueError("MinerU token file is empty")
@@ -79,15 +80,14 @@ def warmup(url: str, token_file: Path, diagnostics: Path, timeout: float) -> int
                 )
                 probe = ready.get("probe")
                 if (
-                    ready.get("status") == "ready" and ready.get("model") == "ready"
+                    ready.get("status") == "ready"
+                    and ready.get("model") == "ready"
                     and isinstance(probe, dict)
                     and probe.get("attempt_id") == report["attempt_id"]
                     and probe.get("state") == "succeeded"
                     and time.monotonic() - started <= timeout
                 ):
-                    report["probe"] = {
-                        "attempt_id": probe["attempt_id"], "state": probe["state"]
-                    }
+                    report["probe"] = {"attempt_id": probe["attempt_id"], "state": probe["state"]}
                     report["status"] = "passed"
                     return 0
             except (OSError, ValueError, urllib.error.URLError) as error:

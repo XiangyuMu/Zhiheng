@@ -69,7 +69,9 @@ def upgrade() -> None:
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
-        sa.ForeignKeyConstraint(["run_id"], ["conversation_extraction_runs.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["run_id"], ["conversation_extraction_runs.id"], ondelete="CASCADE"
+        ),
         sa.CheckConstraint(
             "kind IN ('manual_supplement','failure')",
             name="ck_conversation_extraction_review_items_kind",

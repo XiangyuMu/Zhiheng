@@ -216,13 +216,17 @@ class HybridRetriever:
             # sources remain eligible alongside knowledge objects.  Knowledge
             # objects still need their stricter formal qualification; other
             # source types are passed to the normal authorizer below.
-            title_rows = session.execute(
-                text(
-                    "SELECT DISTINCT source_type, source_id, source_version_id "
-                    "FROM chunks WHERE title = :title AND status = 'ready'"
-                ),
-                {"title": filters.title},
-            ).mappings().all()
+            title_rows = (
+                session.execute(
+                    text(
+                        "SELECT DISTINCT source_type, source_id, source_version_id "
+                        "FROM chunks WHERE title = :title AND status = 'ready'"
+                    ),
+                    {"title": filters.title},
+                )
+                .mappings()
+                .all()
+            )
             identities: set[tuple[str, str, str]] = set()
             for row in title_rows:
                 candidate_identity = (
@@ -372,9 +376,7 @@ class HybridRetriever:
                 )
             session.execute(text("ROLLBACK TO SAVEPOINT hybrid_manifest_run"))
             session.execute(text("RELEASE SAVEPOINT hybrid_manifest_run"))
-        raise RetrievalContextChangedError(
-            "authorized context manifest changed before response"
-        )
+        raise RetrievalContextChangedError("authorized context manifest changed before response")
 
     def _reseal(
         self,
@@ -525,9 +527,7 @@ def _filter_authorized_chunks(
     )
     event_ids = sorted({source_id for source_id, _version_id in event_pairs})
     conditions = ["ko.id IN (SELECT value FROM json_each(:retrieval_ids))"]
-    params: dict[str, object] = {
-        "retrieval_ids": json.dumps(knowledge_ids, ensure_ascii=False)
-    }
+    params: dict[str, object] = {"retrieval_ids": json.dumps(knowledge_ids, ensure_ascii=False)}
     if filters.domain_id is not None:
         conditions.append("ko.primary_domain_id = :retrieval_domain_id")
         params["retrieval_domain_id"] = filters.domain_id
@@ -557,9 +557,7 @@ def _filter_authorized_chunks(
     allowed_events: set[tuple[str, str]] = set()
     if event_ids and filters.domain_id is None:
         event_conditions = ["e.id IN (SELECT value FROM json_each(:event_ids))"]
-        event_params: dict[str, object] = {
-            "event_ids": json.dumps(event_ids, ensure_ascii=False)
-        }
+        event_params: dict[str, object] = {"event_ids": json.dumps(event_ids, ensure_ascii=False)}
         if filters.title is not None:
             event_conditions.append("v.title = :event_title")
             event_params["event_title"] = filters.title

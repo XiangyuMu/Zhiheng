@@ -49,6 +49,7 @@ def configured_pdf_parse_executor(settings: Settings | None = None) -> PdfParseJ
         )
     return _configured_pdf_parse_executor(settings)
 
+
 __all__ = [
     "KnowledgeIndexJobExecutor",
     "KnowledgeJobRepository",

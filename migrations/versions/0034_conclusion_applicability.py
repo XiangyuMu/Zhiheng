@@ -9,16 +9,21 @@ depends_on = None
 
 
 def _view(*, applicability: bool) -> None:
-    extra = """
+    extra = (
+        """
           OR EXISTS (SELECT 1 FROM conclusion_applicability a
                      WHERE a.entry_id=e.id AND a.version=e.approved_version
                        AND a.state='suspended')
           OR EXISTS (SELECT 1 FROM json_each(v.payload_json,'$.premises') p
                      WHERE json_extract(p.value,'$.confirmed')=1
                        AND julianday(json_extract(p.value,'$.valid_until'))<=julianday('now'))
-    """ if applicability else ""
+    """
+        if applicability
+        else ""
+    )
     op.execute("DROP VIEW current_formal_knowledge")
-    op.execute("""CREATE VIEW current_formal_knowledge AS
+    op.execute(
+        """CREATE VIEW current_formal_knowledge AS
       SELECT ko.*, kv.id AS version_id, kv.version_no, kv.summary, kv.markdown_uri,
              kv.content_version_id, cv.evidence_object_id, cv.status AS content_status
       FROM knowledge_objects ko JOIN knowledge_versions kv ON kv.id=ko.current_version_id
@@ -30,7 +35,10 @@ def _view(*, applicability: bool) -> None:
         WHERE e.knowledge_id=ko.id AND (e.status!='formal'
           OR (json_extract(v.payload_json,'$.valid_until') IS NOT NULL
             AND julianday(json_extract(v.payload_json,'$.valid_until'))<=julianday('now'))
-    """ + extra + "))")
+    """
+        + extra
+        + "))"
+    )
 
 
 def upgrade() -> None:

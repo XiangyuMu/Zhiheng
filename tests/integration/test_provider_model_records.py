@@ -38,13 +38,17 @@ def test_model_record_migration_preserves_legacy_allowlist(tmp_path: Path) -> No
         )
     command.upgrade(cfg, "head")
     with engine.connect() as connection:
-        rows = connection.execute(
-            text(
-                "SELECT model_id, source, protocol, suggested_capabilities_json, "
-                "confirmed_capabilities_json FROM model_provider_models "
-                "WHERE provider_id='legacy-provider' ORDER BY model_id"
+        rows = (
+            connection.execute(
+                text(
+                    "SELECT model_id, source, protocol, suggested_capabilities_json, "
+                    "confirmed_capabilities_json FROM model_provider_models "
+                    "WHERE provider_id='legacy-provider' ORDER BY model_id"
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
     assert [row["model_id"] for row in rows] == ["gpt-4o", "gpt-4o-mini"]
     assert all(row["source"] == "legacy" for row in rows)
     assert all(row["protocol"] == "responses" for row in rows)

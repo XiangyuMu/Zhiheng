@@ -35,7 +35,8 @@ def main() -> None:
             check=True,
         )
         summaries = [
-            item for line in result.stdout.splitlines()
+            item
+            for line in result.stdout.splitlines()
             if (item := json.loads(line)).get("message_type") == "summary"
         ]
         if len(summaries) != 1 or not summaries[0].get("snapshot_id"):

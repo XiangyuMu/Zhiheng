@@ -68,12 +68,14 @@ def normalize_classification(
         value = suggestion
     primary = str(value.get("primary_domain_id") or fallback_domain_id)
     primary_is_catalog_domain = allowed_domain_ids is not None and primary in allowed_domain_ids
-    if not (_is_known_domain(primary) or primary_is_catalog_domain) or (
-        inactive_domain_ids is not None and primary in inactive_domain_ids
-    ) or (
-        allowed_domain_ids is not None
-        and primary not in allowed_domain_ids
-        and "." not in primary
+    if (
+        not (_is_known_domain(primary) or primary_is_catalog_domain)
+        or (inactive_domain_ids is not None and primary in inactive_domain_ids)
+        or (
+            allowed_domain_ids is not None
+            and primary not in allowed_domain_ids
+            and "." not in primary
+        )
     ):
         raise ValueError("unsupported conclusion primary domain")
     related = sorted(
@@ -89,11 +91,7 @@ def normalize_classification(
             or (allowed_domain_ids is not None and item in allowed_domain_ids)
         )
         or (inactive_domain_ids is not None and item in inactive_domain_ids)
-        or (
-            allowed_domain_ids is not None
-            and item not in allowed_domain_ids
-            and "." not in item
-        )
+        or (allowed_domain_ids is not None and item not in allowed_domain_ids and "." not in item)
         for item in related
     ):
         raise ValueError("unsupported conclusion related domain")

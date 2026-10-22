@@ -42,9 +42,7 @@ def test_control_state_is_atomic_and_proof_uses_observed_upstream_identity(
     control = module.ControlState(tmp_path / "control.json")
     control.arm("parser_failure", "failed", "mineru_failed")
     control.observe("POST", "/tasks", 202, "upstream-123")
-    proof = module._proof(
-        control, "parser_failure", "browser-task", "parser-attempt"
-    )
+    proof = module._proof(control, "parser_failure", "browser-task", "parser-attempt")
 
     assert proof["injected"] is True
     assert proof["boundary"] == "external_parser"
@@ -103,9 +101,7 @@ def test_proxy_forwards_real_submission_then_injects_status_fault(tmp_path: Path
     proxy_thread.start()
     base = f"http://127.0.0.1:{proxy.server_address[1]}"
     try:
-        submission = urlopen(
-            Request(f"{base}/tasks", data=b"pdf", method="POST"), timeout=5
-        )
+        submission = urlopen(Request(f"{base}/tasks", data=b"pdf", method="POST"), timeout=5)
         assert submission.status == 202
         assert json.loads(submission.read())["task_id"] == "upstream-1"
         deadline = time.monotonic() + 5

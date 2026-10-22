@@ -491,9 +491,7 @@ def answer_question(
     response.context_prompts = _contextual_prompts(
         session, query=payload.query, user_id=user_id, result=result
     )
-    conflicts = [
-        prompt for prompt in response.context_prompts if prompt["kind"] == "conflict"
-    ]
+    conflicts = [prompt for prompt in response.context_prompts if prompt["kind"] == "conflict"]
     if conflicts:
         alternatives = []
         for prompt in conflicts:
@@ -593,9 +591,7 @@ def _contextual_prompts(
     if (
         not prompts
         and _needs_personal_context(query, result)
-        and not service.has_supplemented_missing_prompt(
-            session, owner_user_id=user_id, query=query
-        )
+        and not service.has_supplemented_missing_prompt(session, owner_user_id=user_id, query=query)
     ):
         prompts.append(
             service.create_missing_prompt(
@@ -851,9 +847,7 @@ def _answer_authority_digest(
     )
     if citation_digest is None:
         return None
-    return sha256_json(
-        {"citations": citation_digest, "conversation_context": conversation_context}
-    )
+    return sha256_json({"citations": citation_digest, "conversation_context": conversation_context})
 
 
 def _ensure_query_services(app: Any, *, eager_answer_model: bool = False) -> None:
