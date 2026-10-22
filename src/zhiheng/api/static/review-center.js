@@ -608,17 +608,43 @@
         const suggestion = item.detail.suggested_primary_domain_id;
         const picker = domainSelect(domains, suggestion || "", "主领域");
         picker.dataset.domainPicker = "true";
+        // 分类节点建议: a checked node brings its domain; nodes stay within the chosen domain.
+        const nodeChecks = (item.detail.suggested_nodes || []).map((suggested) => {
+          const check = document.createElement("input");
+          check.type = "checkbox";
+          check.value = suggested.node_id;
+          check.dataset.domainId = suggested.domain_id;
+          check.addEventListener("change", () => {
+            if (check.checked) picker.value = suggested.domain_id;
+            nodeChecks.forEach(({ check: other }) => {
+              if (other.dataset.domainId !== picker.value) other.checked = false;
+            });
+          });
+          const label = node("label", undefined, "inline-option");
+          label.append(check, ` ${suggested.path}`, node("small", suggested.explanation, "muted"));
+          return { check, label };
+        });
+        picker.addEventListener("change", () => nodeChecks.forEach(({ check }) => {
+          if (check.dataset.domainId !== picker.value) check.checked = false;
+        }));
+        const fields = [labelled("选择领域", picker)];
+        if (nodeChecks.length) {
+          const group = node("fieldset", undefined, "suggested-nodes");
+          group.append(node("legend", "建议分类"), ...nodeChecks.map(({ label }) => label));
+          fields.push(group);
+        }
         return [
           definitions([
             ["摘要", item.summary],
             ["当前领域", name(item.detail.primary_domain_id)],
             ["建议领域", suggestion ? name(suggestion) : "无建议，请选择领域"],
           ]),
-          form([labelled("选择领域", picker)], "确认归类", (submit) => {
+          form(fields, "确认归类", (submit) => {
             if (!picker.value) { say("请先选择主领域。", "hint"); return; }
+            const nodeIds = nodeChecks.filter(({ check }) => check.checked).map(({ check }) => check.value);
             immediate(submit, item, "已归类。", () => mutation(
               `/v1/knowledge/${encodeURIComponent(item.id)}/classifications`, "PUT",
-              { primary_domain_id: picker.value, node_ids: [] },
+              { primary_domain_id: picker.value, node_ids: nodeIds },
             ));
           }),
         ];

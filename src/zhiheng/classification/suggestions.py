@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import json_text, new_id, sha256_json
+from zhiheng.knowledge.classification import UNCLASSIFIED_SQL
 from zhiheng.models import ModelGateway, ModelRequest
 
 CLASSIFICATION_SUGGESTION_JOB_TYPE = "classification.suggest"
@@ -199,8 +200,10 @@ class ClassificationSuggestionService:
         knowledge = (
             session.execute(
                 text(
-                    """
+                    f"""
                 SELECT ko.id, ko.title, ko.owner_user_id, eo.media_type,
+                       (ko.lifecycle_status <> 'soft_deleted' AND {UNCLASSIFIED_SQL})
+                         AS still_unclassified,
                        coalesce(kv.summary, '') AS summary,
                        coalesce((SELECT group_concat(sc.raw_text, char(10))
                                  FROM serving_chunks sc
@@ -222,6 +225,11 @@ class ClassificationSuggestionService:
             raise ValueError("knowledge object not found")
         if knowledge["owner_user_id"] not in {None, owner_user_id}:
             raise PermissionError("knowledge object is owned by another user")
+        # Checked again here, in the transaction that writes: the item may have been
+        # classified or deleted after the request was queued, and a suggestion written
+        # after classification would never be superseded (#88).
+        if not knowledge["still_unclassified"]:
+            return []
         nodes = [
             ClassificationNode(
                 id=str(row["id"]),
@@ -478,15 +486,20 @@ def enqueue_classification_suggestion(
     knowledge_object_id: str,
     owner_user_id: str,
     idempotency_key: str,
-) -> str:
+) -> str | None:
+    """Queue one suggestion request; a repeated idempotency key queues nothing."""
     event_id = new_id()
     session.execute(
         text(
             """
-            INSERT OR IGNORE INTO outbox_events
+            INSERT INTO outbox_events
               (id, event_type, aggregate_type, aggregate_id, payload_json, status)
-            VALUES (:id, :event_type, 'knowledge_object', :aggregate_id,
-                    :payload, 'pending')
+            SELECT :id, :event_type, 'knowledge_object', :aggregate_id, :payload, 'pending'
+            WHERE NOT EXISTS (
+              SELECT 1 FROM outbox_events
+              WHERE event_type = :event_type AND aggregate_id = :aggregate_id
+                AND json_extract(payload_json, '$.idempotency_key') = :idempotency_key
+            )
             """
         ),
         {
@@ -500,9 +513,41 @@ def enqueue_classification_suggestion(
                     "idempotency_key": idempotency_key,
                 }
             ),
+            "idempotency_key": idempotency_key,
         },
     )
+    if int(session.execute(text("SELECT changes()")).scalar_one()) != 1:
+        return None
     return event_id
+
+
+def request_suggestions_after_indexing(session: Session, knowledge_object_id: str) -> None:
+    """An import became searchable: ask once per version for 分类节点建议 while it is
+    still unclassified, since only then are they shown (#88)."""
+    row = (
+        session.execute(
+            text(
+                f"""
+                SELECT ko.owner_user_id, ko.current_version_id
+                FROM knowledge_objects ko
+                WHERE ko.id = :id AND ko.owner_user_id IS NOT NULL
+                  AND ko.lifecycle_status NOT IN ('privacy_erased', 'soft_deleted')
+                  AND {UNCLASSIFIED_SQL}
+                """
+            ),
+            {"id": knowledge_object_id},
+        )
+        .mappings()
+        .first()
+    )
+    if row is None:
+        return
+    enqueue_classification_suggestion(
+        session,
+        knowledge_object_id=knowledge_object_id,
+        owner_user_id=str(row["owner_user_id"]),
+        idempotency_key=f"indexed:{row['current_version_id']}",
+    )
 
 
 def _suggestion_from_row(row: Mapping[str, Any]) -> ClassificationSuggestion:

@@ -391,6 +391,26 @@ class ClassificationRepository:
                 ),
                 {"knowledge_id": knowledge_id, "node_id": node_id, "user_id": user_id},
             )
+        # Classifying the item decides its 分类节点建议: an assigned node's suggestion is
+        # accepted; the rest are superseded, since the user never rejected them.
+        session.execute(
+            text(
+                """
+                UPDATE classification_suggestions
+                SET status = CASE
+                      WHEN json_extract(candidate_json, '$.node_id') IN (
+                        SELECT classification_node_id FROM knowledge_classifications
+                        WHERE knowledge_object_id = :knowledge_id
+                      ) THEN 'accepted'
+                      ELSE 'superseded'
+                    END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE knowledge_object_id = :knowledge_id AND owner_user_id = :user_id
+                  AND status = 'pending'
+                """
+            ),
+            {"knowledge_id": knowledge_id, "user_id": user_id},
+        )
         after = self.get_assignments(session, knowledge_id=knowledge_id, user_id=user_id)
         session.execute(
             text(

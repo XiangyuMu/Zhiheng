@@ -405,7 +405,10 @@ def test_publisher_run_once_executes_knowledge_jobs_without_publisher_capability
         embedding_count = session.execute(
             text("SELECT count(*) FROM chunk_embeddings")
         ).scalar_one()
-        outbox_status = session.execute(text("SELECT status FROM outbox_events")).scalar_one()
+        # Indexing also queues a 分类节点建议 request (#88); this test is about the ingest event.
+        outbox_status = session.execute(
+            text("SELECT status FROM outbox_events WHERE event_type = 'evidence.ingested'")
+        ).scalar_one()
 
     assert completed == 1
     assert fake_embedder.calls == ["publisher 部署入口也必须执行知识索引。"]

@@ -218,6 +218,35 @@ test('a memory candidate detail shows its version-bound evidence and impact', as
   await page.context().close();
 });
 
+test('checking a suggested node picks its domain and 确认归类 assigns that node', async () => {
+  items = items.map((entry) => (entry.id === 'k1' ? {
+    ...entry,
+    detail_actions: ['choose_domain', 'choose_node'],
+    detail: {
+      ...entry.detail,
+      suggested_nodes: [
+        { suggestion_id: 's1', node_id: 'n1', name: '睡眠', path: '健康/睡眠', domain_id: 'health', explanation: '标题匹配' },
+        { suggestion_id: 's2', node_id: 'n2', name: '复习', path: '教育学习/复习', domain_id: 'education_learning', explanation: '内容匹配' },
+      ],
+    },
+  } : entry));
+  const page = await open();
+  await ready(page);
+  for (let n = 0; n < 5; n += 1) await page.keyboard.press('j');
+  assert.equal(await selectedId(page), 'k1');
+  const sleep = page.getByRole('checkbox', { name: /健康\/睡眠/ });
+  await sleep.waitFor();
+  assert((await page.locator('#detail').innerText()).includes('标题匹配'));
+  await sleep.check();
+  assert.equal(await page.locator('#detail [data-domain-picker]').inputValue(), 'health');
+  await page.getByRole('button', { name: '确认归类' }).click();
+  await page.getByText('已归类。').waitFor();
+  const put = writes.find((write) => write.path === '/v1/knowledge/k1/classifications');
+  assert.deepEqual(put?.body, { primary_domain_id: 'health', node_ids: ['n1'] });
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
 test('type keys, deferred view and newest-first order change the list', async () => {
   const page = await open();
   await ready(page);

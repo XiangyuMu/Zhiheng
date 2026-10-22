@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
+from zhiheng.classification.suggestions import request_suggestions_after_indexing
 from zhiheng.core.config import Settings
 from zhiheng.core.ids import new_id, sha256_text
 from zhiheng.db.session import is_transient_database_error, session_scope
@@ -474,6 +475,13 @@ class KnowledgeJobRepository:
             error_class=None,
             error_message=json.dumps(_completion_metadata(result), sort_keys=True),
         )
+        knowledge_object_id = job.payload.get("knowledge_object_id") or (
+            job.payload.get("aggregate_id")
+            if job.payload.get("aggregate_type") == "knowledge_object"
+            else None
+        )
+        if job.job_type == KNOWLEDGE_INDEX_JOB_TYPE and knowledge_object_id:
+            request_suggestions_after_indexing(session, str(knowledge_object_id))
         return True
 
     def mark_unsupported(
