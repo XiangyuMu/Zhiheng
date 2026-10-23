@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -412,3 +414,116 @@ def test_knowledge_privacy_erase_removes_sensitive_plaintext_metadata(
     ):
         assert sensitive_value not in serialized_values
     assert retained_values["request_hash"] == request_hash
+
+
+def _add_pdf_with_parse_manifest(session: Session, root: Path) -> tuple[str, list[Path]]:
+    """Add a PDF item as published since 5ffdf79: its text reference is the attempt manifest."""
+    pdf = root / "evidence" / "erase.pdf"
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    pdf.write_bytes(b"%PDF-1.7 synthetic erase")
+    manifest = root / "pdf-attempts" / "erase-task" / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"blocks": [ERASE_TEXT]}))
+    params = {
+        "pdf_uri": pdf.as_uri(),
+        "pdf_sha": hashlib.sha256(pdf.read_bytes()).hexdigest(),
+        "pdf_size": pdf.stat().st_size,
+        "manifest_uri": manifest.as_uri(),
+        "manifest_sha": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        "body_sha": hashlib.sha256(ERASE_TEXT.encode()).hexdigest(),
+    }
+    for statement in (
+        "INSERT INTO evidence_objects (id, object_uri, sha256, media_type, byte_size, "
+        "source_kind, status) VALUES ('pdf-evidence', :pdf_uri, :pdf_sha, 'application/pdf', "
+        ":pdf_size, 'upload', 'active')",
+        "INSERT INTO pdf_tasks (id, evidence_object_id, options_hash, idempotency_key, state) "
+        "VALUES ('erase-task', 'pdf-evidence', 'options', 'erase-task', 'parsed')",
+        "INSERT INTO pdf_parse_attempts (id, task_id, evidence_object_id, backend, attempt_no, "
+        "status, manifest_uri, manifest_sha256) VALUES ('erase-attempt', 'erase-task', "
+        "'pdf-evidence', 'mineru', 1, 'succeeded', :manifest_uri, :manifest_sha)",
+        "INSERT INTO content_versions (id, evidence_object_id, version_no, processor_name, "
+        "processor_version, text_artifact_uri, content_sha256, status) VALUES ('pdf-content', "
+        "'pdf-evidence', 1, 'pdf-parser', 'manifest-v1', :manifest_uri, :body_sha, 'active')",
+        "INSERT INTO knowledge_objects (id, primary_domain_id, title, object_kind, "
+        "lifecycle_status, visibility_scope, sensitivity_level) VALUES ('pdf-object', "
+        "'privacy.erase', 'pdf erase', 'document', 'formal_current', 'formal', 'private')",
+        "INSERT INTO knowledge_versions (id, knowledge_object_id, version_no, "
+        "content_version_id, markdown_uri, source_quality) VALUES ('pdf-version', "
+        "'pdf-object', 1, 'pdf-content', NULL, 'parser')",
+        "UPDATE knowledge_objects SET current_version_id = 'pdf-version' WHERE id = 'pdf-object'",
+    ):
+        session.execute(text(statement), params)
+    return "pdf-object", [pdf, manifest]
+
+
+def test_privacy_erase_removes_pdf_and_its_parse_attempt_manifest(tmp_path: Path) -> None:
+    session_factory = _session_factory(tmp_path / "zhiheng.db")
+    service = PrivacyEraseService(ExternalEraseJournal(tmp_path / "erase.jsonl", JOURNAL_SECRET))
+
+    with session_scope(session_factory) as session:
+        knowledge_object_id, paths = _add_pdf_with_parse_manifest(
+            session, tmp_path / "knowledge-object-store"
+        )
+        request_id = _request_erase(session, service, knowledge_object_id)
+        service.execute_knowledge_erase(
+            session, request_id=request_id, knowledge_object_id=knowledge_object_id
+        )
+        physical_statuses = session.execute(
+            text("SELECT artifact_kind, status FROM privacy_physical_erases ORDER BY artifact_kind")
+        ).all()
+        request_status = session.execute(
+            text("SELECT status FROM privacy_erase_requests WHERE id = :request_id"),
+            {"request_id": request_id},
+        ).scalar_one()
+
+    assert all(not path.exists() for path in paths)
+    assert [tuple(row) for row in physical_statuses] == [
+        ("content_artifact", "completed"),
+        ("evidence_object", "completed"),
+    ]
+    assert request_status == "completed"
+
+
+def test_privacy_erase_still_refuses_tampered_pdf_parse_attempt_manifest(tmp_path: Path) -> None:
+    session_factory = _session_factory(tmp_path / "zhiheng.db")
+    service = PrivacyEraseService(ExternalEraseJournal(tmp_path / "erase.jsonl", JOURNAL_SECRET))
+
+    with (
+        pytest.raises(ValueError, match="hash mismatch"),
+        session_scope(session_factory) as session,
+    ):
+        knowledge_object_id, paths = _add_pdf_with_parse_manifest(
+            session, tmp_path / "knowledge-object-store"
+        )
+        paths[1].write_text("{}")
+        request_id = _request_erase(session, service, knowledge_object_id)
+        service.execute_knowledge_erase(
+            session, request_id=request_id, knowledge_object_id=knowledge_object_id
+        )
+
+    assert paths[1].read_text() == "{}"
+
+
+def test_external_journal_replay_removes_pdf_parse_attempt_manifest(tmp_path: Path) -> None:
+    session_factory = _session_factory(tmp_path / "zhiheng.db")
+    journal = ExternalEraseJournal(tmp_path / "erase.jsonl", JOURNAL_SECRET)
+
+    with session_scope(session_factory) as session:
+        knowledge_object_id, paths = _add_pdf_with_parse_manifest(
+            session, tmp_path / "knowledge-object-store"
+        )
+
+    journal.append_intent(
+        request_id="external-request",
+        target_type="knowledge_object",
+        target_id=knowledge_object_id,
+    )
+    with session_scope(session_factory) as session:
+        replayed = PrivacyEraseService(journal).replay_external_journal(session)
+        request_status = session.execute(
+            text("SELECT status FROM privacy_erase_requests WHERE id = 'external-request'")
+        ).scalar_one()
+
+    assert replayed == 1
+    assert all(not path.exists() for path in paths)
+    assert request_status == "completed"

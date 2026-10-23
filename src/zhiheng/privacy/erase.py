@@ -329,7 +329,15 @@ class PrivacyEraseService:
                 UNION
                 SELECT 'content_artifact' AS artifact_kind,
                        cv.text_artifact_uri AS object_uri,
-                       cv.content_sha256 AS expected_sha256,
+                       -- A PDF text reference is its parse-attempt manifest, not the body.
+                       CASE WHEN cv.processor_name = 'pdf-parser' THEN COALESCE(
+                         (SELECT a.manifest_sha256 FROM pdf_parse_attempts a
+                          WHERE a.evidence_object_id = cv.evidence_object_id
+                            AND a.manifest_uri = cv.text_artifact_uri
+                            AND a.manifest_sha256 <> ''
+                          ORDER BY a.attempt_no DESC LIMIT 1),
+                         cv.content_sha256)
+                       ELSE cv.content_sha256 END AS expected_sha256,
                        NULL AS expected_byte_size
                 FROM knowledge_versions kv
                 JOIN content_versions cv ON cv.id = kv.content_version_id
