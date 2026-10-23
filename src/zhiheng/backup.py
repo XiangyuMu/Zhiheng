@@ -65,7 +65,7 @@ def stage_backup(database: Path, object_root: Path, destination: Path) -> None:
             if _file_digest(path) != artifact.sha256 or path.stat().st_size != artifact.byte_size:
                 raise ValueError("artifact changed while staging backup")
         payload = {
-            "format_version": 3,
+            "format_version": 4,
             "original_object_root": str(object_root.resolve()),
             "database_sha256": _file_digest(snapshot),
             "artifacts": [asdict(item) for item in manifest],
@@ -103,9 +103,9 @@ def verify_backup_bundle(bundle: Path) -> tuple[BackupArtifact, ...]:
         base_fields | {"provider_secret_recovery", "unmaterialized_text_versions"},
     ):
         raise ValueError("unsupported backup manifest schema")
-    if type(payload["format_version"]) is not int or payload["format_version"] not in {1, 2, 3}:
+    if type(payload["format_version"]) is not int or payload["format_version"] not in {1, 2, 3, 4}:
         raise ValueError("unsupported backup format version")
-    if (payload["format_version"] == 3) != ("unmaterialized_text_versions" in payload):
+    if (payload["format_version"] >= 3) != ("unmaterialized_text_versions" in payload):
         raise ValueError("unsupported backup manifest schema")
     if (
         not isinstance(payload["original_object_root"], str)
@@ -314,20 +314,7 @@ def collect_unmaterialized_text_versions(snapshot: Path) -> tuple[str, ...]:
     return tuple(str(row[0]) for row in rows)
 
 
-def collect_artifact_manifest(snapshot: Path, object_root: Path) -> tuple[BackupArtifact, ...]:
-    """Read references from a completed snapshot, then verify files outside SQLite.
-
-    Caller must supply a private, completed SQLite backup, never the live DB.
-    Soft-deleted and candidate objects remain recoverable; privacy-erased ones do not.
-    Missing or corrupt referenced artifacts abort collection instead of producing
-    a deceptively successful partial backup. A PDF content version references its
-    parse-attempt manifest, whose digest is the attempt's, not the extracted body's.
-    """
-    root = object_root.resolve()
-    connection = sqlite3.connect(f"{snapshot.resolve().as_uri()}?mode=ro", uri=True)
-    try:
-        references = connection.execute(
-            """
+_ARTIFACT_REFERENCES = """
             SELECT eo.object_uri, eo.sha256, eo.byte_size
             FROM knowledge_versions kv
             JOIN knowledge_objects ko ON ko.id = kv.knowledge_object_id
@@ -356,7 +343,59 @@ def collect_artifact_manifest(snapshot: Path, object_root: Path) -> tuple[Backup
             FROM knowledge_versions kv
             JOIN knowledge_objects ko ON ko.id = kv.knowledge_object_id
             WHERE ko.lifecycle_status <> 'privacy_erased' AND kv.markdown_uri IS NOT NULL
-            """
+"""
+
+# Erase unlinks every local manifest, page render and image of an item's parse
+# attempts, whether or not a text reference links to it (format 4 onwards).
+_PDF_ATTEMPT_ARTIFACT_REFERENCES = """
+            UNION
+            SELECT a.manifest_uri, NULLIF(a.manifest_sha256, ''), NULL
+            FROM knowledge_versions kv
+            JOIN knowledge_objects ko ON ko.id = kv.knowledge_object_id
+            JOIN content_versions cv ON cv.id = kv.content_version_id
+            JOIN pdf_parse_attempts a ON a.evidence_object_id = cv.evidence_object_id
+            WHERE ko.lifecycle_status <> 'privacy_erased' AND cv.status <> 'privacy_erased'
+              AND a.manifest_uri GLOB 'file:*'
+            UNION
+            SELECT p.render_uri, p.render_sha256, NULL
+            FROM knowledge_versions kv
+            JOIN knowledge_objects ko ON ko.id = kv.knowledge_object_id
+            JOIN content_versions cv ON cv.id = kv.content_version_id
+            JOIN pdf_parse_attempts a ON a.evidence_object_id = cv.evidence_object_id
+            JOIN pdf_pages p ON p.attempt_id = a.id
+            WHERE ko.lifecycle_status <> 'privacy_erased' AND cv.status <> 'privacy_erased'
+              AND p.render_uri GLOB 'file:*'
+            UNION
+            SELECT i.artifact_uri, i.sha256, NULL
+            FROM knowledge_versions kv
+            JOIN knowledge_objects ko ON ko.id = kv.knowledge_object_id
+            JOIN content_versions cv ON cv.id = kv.content_version_id
+            JOIN pdf_parse_attempts a ON a.evidence_object_id = cv.evidence_object_id
+            JOIN pdf_images i ON i.attempt_id = a.id
+            WHERE ko.lifecycle_status <> 'privacy_erased' AND cv.status <> 'privacy_erased'
+              AND i.artifact_uri GLOB 'file:*'
+"""
+
+
+def collect_artifact_manifest(
+    snapshot: Path, object_root: Path, *, pdf_attempt_artifacts: bool = True
+) -> tuple[BackupArtifact, ...]:
+    """Read references from a completed snapshot, then verify files outside SQLite.
+
+    Caller must supply a private, completed SQLite backup, never the live DB.
+    Soft-deleted and candidate objects remain recoverable; privacy-erased ones do not.
+    Missing or corrupt referenced artifacts abort collection instead of producing
+    a deceptively successful partial backup. A PDF content version references its
+    parse-attempt manifest, whose digest is the attempt's, not the extracted body's.
+    Every local PDF attempt artifact privacy erase would unlink is included too;
+    pass pdf_attempt_artifacts=False to check a format 3 bundle, which predates them.
+    """
+    root = object_root.resolve()
+    connection = sqlite3.connect(f"{snapshot.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        references = connection.execute(
+            _ARTIFACT_REFERENCES
+            + (_PDF_ATTEMPT_ARTIFACT_REFERENCES if pdf_attempt_artifacts else "")
         ).fetchall()
     finally:
         connection.close()

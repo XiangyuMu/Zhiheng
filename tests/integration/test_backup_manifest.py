@@ -22,7 +22,7 @@ from zhiheng.knowledge import KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import LocalKnowledgeObjectStore
 from zhiheng.knowledge.service import KnowledgeIngestionService
 from zhiheng.privacy.erase_journal import ExternalEraseJournal
-from zhiheng.restore import prepare_restored_bundle
+from zhiheng.restore import prepare_restored_bundle, relocate_object_references
 
 
 def _snapshot(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -206,7 +206,7 @@ def test_staged_bundle_contains_verified_private_bytes(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
     stage_backup(snapshot, root, bundle)
     manifest = json.loads((bundle / "manifest.json").read_text())
-    assert manifest["format_version"] == 3
+    assert manifest["format_version"] == 4
     assert manifest["unmaterialized_text_versions"] == []
     assert manifest["provider_secret_recovery"] == {
         "encrypted_records_in_database": False,
@@ -231,7 +231,7 @@ def test_provider_secret_records_are_verified_and_preserved_in_backup(tmp_path: 
 
     stage_backup(snapshot, root, bundle)
     manifest = json.loads((bundle / "manifest.json").read_text())
-    assert manifest["format_version"] == 3
+    assert manifest["format_version"] == 4
     assert manifest["provider_secret_recovery"]["encrypted_records_in_database"] is True
     assert len(verify_backup_bundle(bundle)) == 3
 
@@ -445,7 +445,7 @@ def test_backup_records_legacy_pdf_text_that_was_never_materialized(tmp_path: Pa
     bundle = tmp_path / "bundle"
     stage_backup(snapshot, root, bundle)
     manifest = json.loads((bundle / "manifest.json").read_text())
-    assert manifest["format_version"] == 3
+    assert manifest["format_version"] == 4
     assert manifest["unmaterialized_text_versions"] == [legacy]
     assert (bundle / "objects" / "evidence" / "legacy.pdf").read_bytes() == b"%PDF-1.7 legacy"
     assert len(verify_backup_bundle(bundle)) == 4
@@ -518,3 +518,188 @@ def test_restore_prepares_bundle_with_legacy_and_current_pdfs(tmp_path: Path) ->
         assert connection.execute(
             "SELECT text_artifact_uri FROM content_versions WHERE id=?", (legacy,)
         ).fetchone() == ("",)
+
+
+def _add_unlinked_attempt(
+    snapshot: Path, root: Path, name: str, *, render: bool = False, image: bool = False
+) -> dict[str, Path]:
+    """Record a later parse attempt for a PDF whose text reference does not link to it."""
+    attempt_root = root / "pdf-attempts" / f"{name}-later"
+    attempt_root.mkdir(parents=True)
+    files = {"manifest": attempt_root / "manifest.json"}
+    files["manifest"].write_text(json.dumps({"blocks": [f"{name} later attempt"]}))
+    if render:
+        files["render"] = attempt_root / "page-1.png"
+        files["render"].write_bytes(f"render {name}".encode())
+    if image:
+        files["image"] = attempt_root / "image-1.png"
+        files["image"].write_bytes(f"image {name}".encode())
+
+    def digest(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    with sqlite3.connect(snapshot) as connection:
+        connection.execute(
+            "INSERT INTO pdf_tasks (id, evidence_object_id, options_hash, idempotency_key, "
+            "state) VALUES (?, ?, 'options-later', ?, 'parsed')",
+            (f"{name}-later-task", f"{name}-evidence", f"{name}-later-task"),
+        )
+        connection.execute(
+            "INSERT INTO pdf_parse_attempts (id, task_id, evidence_object_id, backend, "
+            "attempt_no, status, manifest_uri, manifest_sha256) "
+            "VALUES (?, ?, ?, 'mineru', 1, 'succeeded', ?, ?)",
+            (
+                f"{name}-later-attempt",
+                f"{name}-later-task",
+                f"{name}-evidence",
+                files["manifest"].as_uri(),
+                digest(files["manifest"]),
+            ),
+        )
+        connection.execute(
+            "INSERT INTO pdf_pages (id, attempt_id, page_no, page_width, page_height, "
+            "crop_box_json, render_uri, render_sha256) VALUES (?, ?, 1, 612, 792, '[]', ?, ?)",
+            (
+                f"{name}-later-page",
+                f"{name}-later-attempt",
+                files["render"].as_uri() if render else None,
+                digest(files["render"]) if render else None,
+            ),
+        )
+        if image:
+            connection.execute(
+                "INSERT INTO pdf_images (id, attempt_id, page_id, artifact_uri, sha256, "
+                "media_type, bbox_json) VALUES (?, ?, ?, ?, ?, 'image/png', '[]')",
+                (
+                    f"{name}-later-image",
+                    f"{name}-later-attempt",
+                    f"{name}-later-page",
+                    files["image"].as_uri(),
+                    digest(files["image"]),
+                ),
+            )
+    return files
+
+
+def test_backup_includes_parse_attempt_manifest_no_text_reference_links_to(
+    tmp_path: Path,
+) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_pdf(snapshot, root, "legacy", manifest=False)
+    files = _add_unlinked_attempt(snapshot, root, "legacy")
+    bundle = tmp_path / "bundle"
+    stage_backup(snapshot, root, bundle)
+    assert (
+        bundle / "objects" / "pdf-attempts" / "legacy-later" / "manifest.json"
+    ).read_bytes() == (files["manifest"].read_bytes())
+
+
+def test_backup_includes_pdf_page_renders_and_images_by_their_digests(tmp_path: Path) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_pdf(snapshot, root, "legacy", manifest=False)
+    files = _add_unlinked_attempt(snapshot, root, "legacy", render=True, image=True)
+    bundle = tmp_path / "bundle"
+    stage_backup(snapshot, root, bundle)
+    staged = bundle / "objects" / "pdf-attempts" / "legacy-later"
+    assert (staged / "page-1.png").read_bytes() == b"render legacy"
+    assert (staged / "image-1.png").read_bytes() == b"image legacy"
+
+    files["image"].write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="hash"):
+        stage_backup(snapshot, root, tmp_path / "tampered-image")
+    files["image"].write_bytes(b"image legacy")
+    files["render"].write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="hash"):
+        stage_backup(snapshot, root, tmp_path / "tampered-render")
+
+
+def test_backup_skips_pdf_artifacts_that_are_not_local_files(tmp_path: Path) -> None:
+    # MinerU images are recorded as artifact:// references, which erase never unlinks.
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_pdf(snapshot, root, "legacy", manifest=False)
+    files = _add_unlinked_attempt(snapshot, root, "legacy", image=True)
+    with sqlite3.connect(snapshot) as connection:
+        connection.execute("UPDATE pdf_images SET artifact_uri='artifact://mineru/image-1.png'")
+    files["image"].unlink()
+    bundle = tmp_path / "bundle"
+    stage_backup(snapshot, root, bundle)
+    assert not (bundle / "objects" / "pdf-attempts" / "legacy-later" / "image-1.png").exists()
+
+
+def test_restore_relocates_pdf_attempt_artifacts_no_text_reference_links_to(
+    tmp_path: Path,
+) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_pdf(snapshot, root, "legacy", manifest=False)
+    _add_unlinked_attempt(snapshot, root, "legacy", render=True, image=True)
+    bundle = tmp_path / "bundle"
+    stage_backup(snapshot, root, bundle)
+    journal = ExternalEraseJournal(tmp_path / "independent-journal.jsonl", "synthetic-secret")
+    journal.path.touch()
+    survivors = prepare_restored_bundle(bundle, journal, project_root=Path.cwd())
+    staged = (bundle / "objects" / "pdf-attempts" / "legacy-later").resolve()
+    assert {item.relative_path for item in survivors} >= {
+        "pdf-attempts/legacy-later/manifest.json",
+        "pdf-attempts/legacy-later/page-1.png",
+        "pdf-attempts/legacy-later/image-1.png",
+    }
+    with sqlite3.connect(bundle / "database.sqlite") as connection:
+        assert connection.execute(
+            "SELECT a.manifest_uri, p.render_uri, i.artifact_uri FROM pdf_parse_attempts a "
+            "JOIN pdf_pages p ON p.attempt_id = a.id JOIN pdf_images i ON i.attempt_id = a.id "
+            "WHERE a.id = 'legacy-later-attempt'"
+        ).fetchone() == (
+            (staged / "manifest.json").as_uri(),
+            (staged / "page-1.png").as_uri(),
+            (staged / "image-1.png").as_uri(),
+        )
+
+
+@pytest.mark.parametrize("column", ["manifest_uri", "render_uri", "artifact_uri"])
+def test_pdf_attempt_artifacts_outside_the_object_root_are_refused(
+    tmp_path: Path, column: str
+) -> None:
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_pdf(snapshot, root, "legacy", manifest=False)
+    _add_unlinked_attempt(snapshot, root, "legacy", render=True, image=True)
+    outside = tmp_path / "elsewhere" / "artifact.bin"
+    outside.parent.mkdir()
+    outside.write_bytes(b"outside")
+    table = {"manifest_uri": "pdf_parse_attempts", "render_uri": "pdf_pages"}.get(
+        column, "pdf_images"
+    )
+    with sqlite3.connect(snapshot) as connection:
+        connection.execute(f"UPDATE {table} SET {column}=?", (outside.as_uri(),))
+    with pytest.raises(ValueError, match="outside configured object root"):
+        stage_backup(snapshot, root, tmp_path / "bundle")
+    with pytest.raises(ValueError, match="escapes original object root"):
+        relocate_object_references(snapshot, root, tmp_path / "restored-objects")
+
+
+def test_restore_still_prepares_format_3_bundle_missing_unlinked_attempt_manifest(
+    tmp_path: Path,
+) -> None:
+    # Format 3 bundles never carried attempt artifacts that no text reference linked to.
+    snapshot, root, _ = _snapshot(tmp_path)
+    _add_pdf(snapshot, root, "legacy", manifest=False)
+    _add_unlinked_attempt(snapshot, root, "legacy")
+    bundle = tmp_path / "bundle"
+    stage_backup(snapshot, root, bundle)
+    unlinked = "pdf-attempts/legacy-later/manifest.json"
+    (bundle / "objects" / unlinked).unlink()
+    (bundle / "objects" / unlinked).parent.rmdir()
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["format_version"] = 3
+    manifest["artifacts"] = [
+        item for item in manifest["artifacts"] if item["relative_path"] != unlinked
+    ]
+    manifest_path.write_text(json.dumps(manifest))
+    journal = ExternalEraseJournal(tmp_path / "independent-journal.jsonl", "synthetic-secret")
+    journal.path.touch()
+    survivors = prepare_restored_bundle(bundle, journal, project_root=Path.cwd())
+    assert unlinked not in {item.relative_path for item in survivors}
+    with sqlite3.connect(bundle / "database.sqlite") as connection:
+        assert connection.execute(
+            "SELECT manifest_uri FROM pdf_parse_attempts WHERE id='legacy-later-attempt'"
+        ).fetchone() == ((bundle / "objects" / unlinked).resolve().as_uri(),)
