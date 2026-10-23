@@ -88,6 +88,9 @@ def relocate_object_references(database: Path, original_root: Path, new_root: Pa
                     f"SELECT id, {column} FROM {table} WHERE {column} IS NOT NULL"
                 ).fetchall()
                 for row_id, uri in rows:
+                    if column == "text_artifact_uri" and uri == "":
+                        # Legacy PDF text was never materialized; backup lists it.
+                        continue
                     parsed = urlparse(uri)
                     if parsed.scheme != "file" or parsed.netloc or parsed.query or parsed.fragment:
                         raise ValueError("restored artifact reference must be a local file URI")
@@ -98,6 +101,12 @@ def relocate_object_references(database: Path, original_root: Path, new_root: Pa
                     connection.execute(
                         f"UPDATE {table} SET {column} = ? WHERE id = ?", (replacement, row_id)
                     )
+                    if column == "text_artifact_uri":
+                        # A PDF text reference is its parse-attempt manifest; keep them linked.
+                        connection.execute(
+                            "UPDATE pdf_parse_attempts SET manifest_uri = ? WHERE manifest_uri = ?",
+                            (replacement, uri),
+                        )
     finally:
         connection.commit()
         connection.close()
