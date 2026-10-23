@@ -343,6 +343,28 @@ class PrivacyEraseService:
                 JOIN content_versions cv ON cv.id = kv.content_version_id
                 WHERE kv.knowledge_object_id = :knowledge_object_id
                 UNION
+                SELECT 'content_artifact', a.manifest_uri, a.manifest_sha256, NULL
+                FROM knowledge_versions kv
+                JOIN content_versions cv ON cv.id = kv.content_version_id
+                JOIN pdf_parse_attempts a ON a.evidence_object_id = cv.evidence_object_id
+                WHERE kv.knowledge_object_id = :knowledge_object_id
+                  AND a.manifest_uri IS NOT NULL
+                UNION
+                SELECT 'content_artifact', p.render_uri, p.render_sha256, NULL
+                FROM knowledge_versions kv
+                JOIN content_versions cv ON cv.id = kv.content_version_id
+                JOIN pdf_parse_attempts a ON a.evidence_object_id = cv.evidence_object_id
+                JOIN pdf_pages p ON p.attempt_id = a.id
+                WHERE kv.knowledge_object_id = :knowledge_object_id
+                  AND p.render_uri IS NOT NULL
+                UNION
+                SELECT 'content_artifact', i.artifact_uri, i.sha256, NULL
+                FROM knowledge_versions kv
+                JOIN content_versions cv ON cv.id = kv.content_version_id
+                JOIN pdf_parse_attempts a ON a.evidence_object_id = cv.evidence_object_id
+                JOIN pdf_images i ON i.attempt_id = a.id
+                WHERE kv.knowledge_object_id = :knowledge_object_id
+                UNION
                 SELECT 'knowledge_markdown' AS artifact_kind,
                        kv.markdown_uri AS object_uri,
                        cv.content_sha256 AS expected_sha256,
@@ -455,6 +477,23 @@ class PrivacyEraseService:
             ),
             {"knowledge_object_id": knowledge_object_id},
         )
+        # Every parse attempt of the item's PDF keeps its own copy of the document text.
+        pdf_attempts = """
+            SELECT a.id
+            FROM knowledge_versions kv
+            JOIN content_versions cv ON cv.id = kv.content_version_id
+            JOIN pdf_parse_attempts a ON a.evidence_object_id = cv.evidence_object_id
+            WHERE kv.knowledge_object_id = :knowledge_object_id
+        """
+        for statement in (
+            f"UPDATE evidence_blocks SET text = NULL WHERE attempt_id IN ({pdf_attempts})",
+            f"UPDATE pdf_tables SET linear_text = '' WHERE attempt_id IN ({pdf_attempts})",
+            "UPDATE pdf_table_cells SET text = '' WHERE table_id IN ("
+            f"SELECT id FROM pdf_tables WHERE attempt_id IN ({pdf_attempts}))",
+            "UPDATE pdf_images SET caption = NULL, description = NULL "
+            f"WHERE attempt_id IN ({pdf_attempts})",
+        ):
+            session.execute(text(statement), {"knowledge_object_id": knowledge_object_id})
         session.execute(
             text(
                 """
@@ -735,6 +774,23 @@ class PrivacyEraseService:
                   SELECT kv.knowledge_object_id, kv.markdown_uri AS object_uri
                   FROM knowledge_versions kv
                   WHERE kv.markdown_uri IS NOT NULL
+                  UNION ALL
+                  SELECT kv.knowledge_object_id, a.manifest_uri AS object_uri
+                  FROM knowledge_versions kv
+                  JOIN content_versions cv ON cv.id = kv.content_version_id
+                  JOIN pdf_parse_attempts a ON a.evidence_object_id = cv.evidence_object_id
+                  UNION ALL
+                  SELECT kv.knowledge_object_id, p.render_uri AS object_uri
+                  FROM knowledge_versions kv
+                  JOIN content_versions cv ON cv.id = kv.content_version_id
+                  JOIN pdf_parse_attempts a ON a.evidence_object_id = cv.evidence_object_id
+                  JOIN pdf_pages p ON p.attempt_id = a.id
+                  UNION ALL
+                  SELECT kv.knowledge_object_id, i.artifact_uri AS object_uri
+                  FROM knowledge_versions kv
+                  JOIN content_versions cv ON cv.id = kv.content_version_id
+                  JOIN pdf_parse_attempts a ON a.evidence_object_id = cv.evidence_object_id
+                  JOIN pdf_images i ON i.attempt_id = a.id
                 ) refs
                 JOIN knowledge_objects ko ON ko.id = refs.knowledge_object_id
                 WHERE refs.object_uri = :object_uri

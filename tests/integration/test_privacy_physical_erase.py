@@ -417,21 +417,25 @@ def test_knowledge_privacy_erase_removes_sensitive_plaintext_metadata(
 
 
 def _add_pdf_with_parse_manifest(session: Session, root: Path) -> tuple[str, list[Path]]:
-    """Add a PDF item as published since 5ffdf79: its text reference is the attempt manifest."""
-    pdf = root / "evidence" / "erase.pdf"
-    pdf.parent.mkdir(parents=True, exist_ok=True)
-    pdf.write_bytes(b"%PDF-1.7 synthetic erase")
-    manifest = root / "pdf-attempts" / "erase-task" / "manifest.json"
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text(json.dumps({"blocks": [ERASE_TEXT]}))
-    params = {
-        "pdf_uri": pdf.as_uri(),
-        "pdf_sha": hashlib.sha256(pdf.read_bytes()).hexdigest(),
-        "pdf_size": pdf.stat().st_size,
-        "manifest_uri": manifest.as_uri(),
-        "manifest_sha": hashlib.sha256(manifest.read_bytes()).hexdigest(),
-        "body_sha": hashlib.sha256(ERASE_TEXT.encode()).hexdigest(),
+    """Add a PDF item as published since 5ffdf79: its text reference is the attempt manifest.
+
+    A superseded attempt and the normalized page, block, table and image rows that
+    PdfRepository.persist_manifest writes carry the document text too.
+    """
+    files = {
+        "pdf": (root / "evidence" / "erase.pdf", b"%PDF-1.7 synthetic erase"),
+        "manifest": (root / "manifests" / "current.bin", json.dumps([ERASE_TEXT]).encode()),
+        "older": (root / "manifests" / "older.bin", json.dumps([ERASE_TEXT, 1]).encode()),
+        "render": (root / "renders" / "page-1.png", b"synthetic page render"),
+        "image": (root / "images" / "figure-1.png", b"synthetic figure"),
     }
+    params: dict[str, object] = {"body_sha": hashlib.sha256(ERASE_TEXT.encode()).hexdigest()}
+    for name, (path, body) in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+        params[f"{name}_uri"] = path.as_uri()
+        params[f"{name}_sha"] = hashlib.sha256(body).hexdigest()
+    params["pdf_size"] = len(files["pdf"][1])
     for statement in (
         "INSERT INTO evidence_objects (id, object_uri, sha256, media_type, byte_size, "
         "source_kind, status) VALUES ('pdf-evidence', :pdf_uri, :pdf_sha, 'application/pdf', "
@@ -439,8 +443,30 @@ def _add_pdf_with_parse_manifest(session: Session, root: Path) -> tuple[str, lis
         "INSERT INTO pdf_tasks (id, evidence_object_id, options_hash, idempotency_key, state) "
         "VALUES ('erase-task', 'pdf-evidence', 'options', 'erase-task', 'parsed')",
         "INSERT INTO pdf_parse_attempts (id, task_id, evidence_object_id, backend, attempt_no, "
+        "status, manifest_uri, manifest_sha256) VALUES ('older-attempt', 'erase-task', "
+        "'pdf-evidence', 'deepdoc', 1, 'partial', :older_uri, :older_sha)",
+        "INSERT INTO pdf_parse_attempts (id, task_id, evidence_object_id, backend, attempt_no, "
         "status, manifest_uri, manifest_sha256) VALUES ('erase-attempt', 'erase-task', "
-        "'pdf-evidence', 'mineru', 1, 'succeeded', :manifest_uri, :manifest_sha)",
+        "'pdf-evidence', 'mineru', 2, 'succeeded', :manifest_uri, :manifest_sha)",
+        "INSERT INTO pdf_pages (id, attempt_id, page_no, page_width, page_height, "
+        "crop_box_json, render_uri, render_sha256) VALUES ('erase-page', 'erase-attempt', 1, "
+        "100, 100, '[0, 0, 100, 100]', :render_uri, :render_sha)",
+        "INSERT INTO pdf_pages (id, attempt_id, page_no, page_width, page_height, "
+        "crop_box_json) VALUES ('older-page', 'older-attempt', 1, 100, 100, '[0, 0, 100, 100]')",
+        "INSERT INTO evidence_blocks (id, attempt_id, page_id, block_key, region_type, "
+        "reading_order, bbox_json, transform_version, text) VALUES ('erase-block', "
+        "'erase-attempt', 'erase-page', 'b1', 'table', 1, '[0, 0, 1, 1]', 'v1', :text)",
+        "INSERT INTO evidence_blocks (id, attempt_id, page_id, block_key, region_type, "
+        "reading_order, bbox_json, transform_version, text) VALUES ('older-block', "
+        "'older-attempt', 'older-page', 'b1', 'text', 1, '[0, 0, 1, 1]', 'v1', :text)",
+        "INSERT INTO pdf_tables (id, attempt_id, block_id, page_id, row_count, column_count, "
+        "linear_text, structure_sha256) VALUES ('erase-table', 'erase-attempt', 'erase-block', "
+        "'erase-page', 1, 1, :text, 'structure')",
+        "INSERT INTO pdf_table_cells (id, table_id, row_no, column_no, bbox_json, text, "
+        "text_sha256) VALUES ('erase-cell', 'erase-table', 0, 0, '[0, 0, 1, 1]', :text, 'hash')",
+        "INSERT INTO pdf_images (id, attempt_id, page_id, artifact_uri, sha256, media_type, "
+        "bbox_json, caption, description) VALUES ('erase-image', 'erase-attempt', 'erase-page', "
+        ":image_uri, :image_sha, 'image/png', '[0, 0, 1, 1]', :text, :text)",
         "INSERT INTO content_versions (id, evidence_object_id, version_no, processor_name, "
         "processor_version, text_artifact_uri, content_sha256, status) VALUES ('pdf-content', "
         "'pdf-evidence', 1, 'pdf-parser', 'manifest-v1', :manifest_uri, :body_sha, 'active')",
@@ -452,8 +478,23 @@ def _add_pdf_with_parse_manifest(session: Session, root: Path) -> tuple[str, lis
         "'pdf-object', 1, 'pdf-content', NULL, 'parser')",
         "UPDATE knowledge_objects SET current_version_id = 'pdf-version' WHERE id = 'pdf-object'",
     ):
-        session.execute(text(statement), params)
-    return "pdf-object", [pdf, manifest]
+        session.execute(text(statement), {**params, "text": ERASE_TEXT})
+    return "pdf-object", [path for path, _ in files.values()]
+
+
+def _retained_pdf_text(session: Session) -> list[object]:
+    return [
+        value
+        for statement in (
+            "SELECT text FROM evidence_blocks",
+            "SELECT linear_text FROM pdf_tables",
+            "SELECT text FROM pdf_table_cells",
+            "SELECT caption FROM pdf_images",
+            "SELECT description FROM pdf_images",
+        )
+        for value in session.execute(text(statement)).scalars()
+        if value
+    ]
 
 
 def test_privacy_erase_removes_pdf_and_its_parse_attempt_manifest(tmp_path: Path) -> None:
@@ -476,11 +517,14 @@ def test_privacy_erase_removes_pdf_and_its_parse_attempt_manifest(tmp_path: Path
             {"request_id": request_id},
         ).scalar_one()
 
+        retained_text = _retained_pdf_text(session)
+
     assert all(not path.exists() for path in paths)
-    assert [tuple(row) for row in physical_statuses] == [
-        ("content_artifact", "completed"),
+    assert sorted(tuple(row) for row in physical_statuses) == [
+        *[("content_artifact", "completed")] * 4,
         ("evidence_object", "completed"),
     ]
+    assert retained_text == []
     assert request_status == "completed"
 
 
@@ -523,7 +567,50 @@ def test_external_journal_replay_removes_pdf_parse_attempt_manifest(tmp_path: Pa
         request_status = session.execute(
             text("SELECT status FROM privacy_erase_requests WHERE id = 'external-request'")
         ).scalar_one()
+        retained_text = _retained_pdf_text(session)
 
     assert replayed == 1
     assert all(not path.exists() for path in paths)
+    assert retained_text == []
     assert request_status == "completed"
+
+
+def test_privacy_erase_refuses_pdf_image_shared_with_another_item(tmp_path: Path) -> None:
+    session_factory = _session_factory(tmp_path / "zhiheng.db")
+    root = tmp_path / "knowledge-object-store"
+    service = PrivacyEraseService(ExternalEraseJournal(tmp_path / "erase.jsonl", JOURNAL_SECRET))
+    artifacts = LocalKnowledgeObjectStore(root).write_text_artifacts(ERASE_TEXT)
+
+    with (
+        pytest.raises(ValueError, match="shared by another knowledge item"),
+        session_scope(session_factory) as session,
+    ):
+        knowledge_object_id, paths = _add_pdf_with_parse_manifest(session, root)
+        other_id = _ingest(session, artifacts, title="other")
+        other_evidence = session.execute(
+            text(
+                "SELECT cv.evidence_object_id FROM knowledge_versions kv "
+                "JOIN content_versions cv ON cv.id = kv.content_version_id "
+                "WHERE kv.knowledge_object_id = :id"
+            ),
+            {"id": other_id},
+        ).scalar_one()
+        for statement in (
+            "INSERT INTO pdf_tasks (id, evidence_object_id, options_hash, idempotency_key, "
+            "state) VALUES ('other-task', :evidence, 'options', 'other-task', 'parsed')",
+            "INSERT INTO pdf_parse_attempts (id, task_id, evidence_object_id, backend, "
+            "attempt_no, status) VALUES ('other-attempt', 'other-task', :evidence, 'mineru', 1, "
+            "'succeeded')",
+            "INSERT INTO pdf_pages (id, attempt_id, page_no, page_width, page_height, "
+            "crop_box_json) VALUES ('other-page', 'other-attempt', 1, 100, 100, '[0, 0, 1, 1]')",
+            "INSERT INTO pdf_images (id, attempt_id, page_id, artifact_uri, sha256, media_type, "
+            "bbox_json) SELECT 'other-image', 'other-attempt', 'other-page', artifact_uri, "
+            "sha256, media_type, bbox_json FROM pdf_images WHERE id = 'erase-image'",
+        ):
+            session.execute(text(statement), {"evidence": other_evidence})
+        request_id = _request_erase(session, service, knowledge_object_id)
+        service.execute_knowledge_erase(
+            session, request_id=request_id, knowledge_object_id=knowledge_object_id
+        )
+
+    assert all(path.exists() for path in paths)
