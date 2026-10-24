@@ -215,7 +215,11 @@ class KnowledgeJobRepository:
                     FROM jobs
                     WHERE id = :job_id
                       AND job_type = :job_type
-                      AND json_extract(payload_json, '$.knowledge_object_id') = :knowledge_object_id
+                      AND (
+                        json_extract(payload_json, '$.knowledge_object_id') = :knowledge_object_id
+                        -- Jobs created before knowledge_object_id existed carry aggregate_id.
+                        OR json_extract(payload_json, '$.aggregate_id') = :knowledge_object_id
+                      )
                     """
                 ),
                 {
