@@ -26,7 +26,7 @@ const stopNames = {
 const processingNames = {
   pending: "等待处理", accepted: "已接收，等待处理", processing: "正在处理资料", queued: "等待处理",
   ready: "已可检索", searchable: "已可检索", completed: "处理完成", retrying: "正在重试",
-  parsed: "解析完成", succeeded: "处理完成", partial: "部分完成，尚不可检索",
+  parsed: "解析完成", succeeded: "处理完成", partial: "部分完成，尚不可检索", deleted: "已删除", dismissed: "已移除",
   retryable_failed: "处理失败，可以重试", failed: "处理失败", dead: "处理失败", dead_letter: "处理失败，可以重试",
   parse_failed: "解析失败，可以重试", unsupported: "当前部署未声明所需的部署能力", cancelled: "处理已取消",
 };
@@ -721,6 +721,11 @@ async function pollProcessing(id) {
       }
       Object.assign(entry, { etag: current.etag, retryable: current.retryable });
       const status = current.public_status || current.status;
+      if (status === "deleted") {
+        state.processing.delete(id);
+        renderProcessing();
+        return;
+      }
       entry.ready = status === "succeeded" && current.searchable === true;
       entry.label = entry.ready ? "已可检索" : processingNames[status] || "资料处理中";
       if (["failed", "unsupported", "partial", "dead_letter", "dead", "cancelled", "parse_failed"].includes(status)) {
@@ -777,6 +782,10 @@ function renderProcessing() {
     if (canRetry && entry.terminal) actions.append(action("重试", (event) => retryImportTask(id, entry, event.currentTarget), "secondary small"));
     if (entry.terminal) actions.append(action("补充资料", () => openDialog("import-dialog"), "secondary small"));
     if (entry.kind === "pdf" && entry.terminal) actions.append(action("查看详情", () => loadPdfDetail(entry), "quiet small"));
+    // A failed PDF that never became knowledge has nothing in the library to delete.
+    if (entry.kind === "pdf" && entry.terminal && ["failed", "dead", "dead_letter", "unsupported", "partial"].includes(entry.state)) {
+      actions.append(action("移除", (event) => dismissPdfTask(id, event.currentTarget), "quiet small"));
+    }
     // Once a durable terminal state is rendered, recovery actions remain
     // usable even if the final status response is still unwinding its poll.
     actions.querySelectorAll("button").forEach((button) => { button.disabled = Boolean(entry.polling && !entry.terminal); });
@@ -796,6 +805,29 @@ function pdfStats(entry) {
   const parts = [`页 ${parsed}/${total || "?"}`, `表格 ${Number(entry.table_count || 0)}`, `图片 ${Number(entry.image_count || 0)}`];
   if (entry.backend) parts.push(`引擎 ${entry.backend}`);
   return node("small", parts.join(" · "), "processing-stats");
+}
+async function dismissPdfTask(id, button) {
+  await busy(button, "移除中…", async () => {
+    try {
+      await fetchJson(`/v1/knowledge/pdf-imports/${encodeURIComponent(id)}/dismiss`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": readCookie("zhiheng_csrf"),
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: "{}",
+      });
+    } catch (error) {
+      if (error.status === 409) {
+        showToast("这份资料已进入资料库，请在资料库中删除。");
+        return;
+      }
+      throw error;
+    }
+    state.processing.delete(id);
+    renderProcessing();
+  });
 }
 async function retryImportTask(id, entry, button) {
   await busy(button, "重试中…", async () => {
@@ -904,7 +936,8 @@ async function loadPersistentImportTasks() {
   try {
     const response = await fetchJson('/v1/knowledge/import-tasks?limit=50');
     for (const task of response.items || []) {
-      if (["succeeded", "ready"].includes(task.status)) continue;
+      // A deleted item's import is no longer pending work: it lives in 回收站.
+      if (["succeeded", "ready", "deleted", "dismissed"].includes(task.status)) continue;
       const id = task.source_id || task.task_id;
       const entry = {
         title: task.title || task.source_id || "导入任务",
