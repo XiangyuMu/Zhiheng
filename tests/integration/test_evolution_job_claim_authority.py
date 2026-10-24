@@ -264,27 +264,33 @@ def test_second_worker_does_not_reexecute_jobs_queued_behind_a_slow_job(tmp_path
         assert attempts == ["completed"] * 3
 
 
-def _wait_past_lease_unless_renewed(factory: sessionmaker[Session], job: ClaimedJob) -> None:
-    """Stand in for a job that runs right up to the end of its lease.
+def _run_past_original_lease(factory: sessionmaker[Session], job: ClaimedJob) -> None:
+    """Stand in for a job that runs past the end of its lease.
 
-    The lease is moved to expire within a second, then the job keeps running until
-    either the lease lapses or a heartbeat pushes it well into the future.
+    The lease is moved to expire within two seconds, then the job keeps running
+    until that original deadline has passed, by which time the lease has either
+    lapsed or been pushed well into the future by a heartbeat.
+
+    SQLite timestamps have whole-second resolution, so ``+2 seconds`` leaves between
+    one and two seconds of lease. ``+1 second`` would leave anywhere down to zero,
+    and a lease set just before a second boundary would lapse before the first
+    heartbeat could renew it.
     """
     with factory.begin() as session:
         session.execute(
-            text("UPDATE jobs SET lease_expires_at=datetime('now','+1 second') WHERE id=:id"),
+            text("UPDATE jobs SET lease_expires_at=datetime('now','+2 seconds') WHERE id=:id"),
             {"id": job.id},
         )
-    deadline = time.monotonic() + 3
+        original_deadline = session.execute(
+            text("SELECT lease_expires_at FROM jobs WHERE id=:id"), {"id": job.id}
+        ).scalar_one()
+    deadline = time.monotonic() + 4
     while time.monotonic() < deadline:
         with factory() as session:
-            renewed = session.execute(
-                text(
-                    "SELECT lease_expires_at > datetime('now','+60 seconds') FROM jobs WHERE id=:id"
-                ),
-                {"id": job.id},
+            past_original_deadline = session.execute(
+                text("SELECT CURRENT_TIMESTAMP >= :original"), {"original": original_deadline}
             ).scalar_one()
-        if renewed:
+        if past_original_deadline:
             return
         time.sleep(0.05)
 
@@ -306,7 +312,7 @@ def test_job_running_past_its_lease_is_not_reclaimed_mid_run(
     other_completed: list[int] = []
 
     def long_running_job(running: ClaimedJob) -> None:
-        _wait_past_lease_unless_renewed(factory, running)
+        _run_past_original_lease(factory, running)
         other_completed.append(process_jobs_once(factory, other_executor, worker_id="worker-b"))
 
     executor = _SlowFirstExecutor(settings, during_first_job=long_running_job)
