@@ -4,13 +4,13 @@
 
 本地模型是可选能力。运行 `docker compose --profile local-model up -d` 时，Ollama 与 API 共享网络命名空间，因此 API 仍只通过安全策略允许的 `http://127.0.0.1:11434` 访问模型；未启用 profile 时不会启动或下载本地模型。
 
-`scripts/backup_restic.py` 对 SQLite 在线快照及被引用的 evidence/Markdown 文件生成私有暂存包，校验每个文件的摘要和大小后调用 restic 加密备份，输出完整 snapshot ID。候选和软删除资料仍需可恢复；隐私擦除资料不进入新清单。缺失、损坏、越界路径和未列入清单的文件会阻止备份或恢复。返回码非零（包括 restic 的部分备份返回码 3）不视为成功。
+`scripts/backup_restic.py` 对 SQLite 在线快照及被引用的 evidence/Markdown 文件生成私有暂存包，校验每个文件的摘要和大小后调用 restic 加密备份，输出完整 snapshot ID。候选和软删除资料仍需可恢复；隐私擦除资料不进入新清单。自格式 4 起，隐私擦除会删除的本地 PDF 解析产物（每次解析尝试的清单、页面渲染和图片，无论是否被文本引用关联）也按其摘要进入清单；`artifact://` 等非本地引用不备份。缺失、损坏、越界路径和未列入清单的文件会阻止备份或恢复。返回码非零（包括 restic 的部分备份返回码 3）不视为成功。
 
 运行前明确配置 `ZHIHENG_DATABASE_PATH`、`ZHIHENG_KNOWLEDGE_OBJECT_STORE_PATH`、`RESTIC_REPOSITORY`，并通过私有环境或密码文件配置 `RESTIC_PASSWORD` / `RESTIC_PASSWORD_FILE`。仓库初始化由部署操作单独完成，脚本不会自动初始化、修改保留策略或删除快照。
 
 备份/恢复脚本默认从 `PATH` 调用 `restic`。CI 会显式安装 restic、打印 `restic version`，并通过 `ZHIHENG_RESTIC_BINARY` 固定测试使用的二进制，避免恢复保护用例被环境缺失静默跳过。本地如果需要使用非 PATH 中的二进制，可设置例如 `ZHIHENG_RESTIC_BINARY=/opt/restic/0.19.1/restic`；该值只属于运行环境，不应写入产品代码或提交包含个人路径的配置。
 
-`src/zhiheng/restore.py` 的恢复准备阶段只操作隔离目录：验证完整清单、迁移数据库、将原绝对路径重定位到暂存对象目录、重放最新独立擦除账本并压实数据库。此阶段不安装服务数据库。已用真实 restic 0.19.1 和合成数据验证加密备份、恢复、`check`，并验证旧备份恢复准备不会复活后续擦除的字节，也不会误删现有源目录。
+`src/zhiheng/restore.py` 的恢复准备阶段只操作隔离目录：验证完整清单、迁移数据库、将原绝对路径（含 PDF 解析尝试的清单、页面渲染和图片）重定位到暂存对象目录、拒绝越出原对象根的引用、重放最新独立擦除账本并压实数据库。此阶段不安装服务数据库。格式 3 备份仍可恢复：其中未被文本引用关联的 PDF 解析产物没有字节，恢复后其引用指向新对象目录中不存在的文件，隐私擦除会跳过它们。已用真实 restic 0.19.1 和合成数据验证加密备份、恢复、`check`，并验证旧备份恢复准备不会复活后续擦除的字节，也不会误删现有源目录。
 
 完整安装入口是 `scripts/restore_restic.py`。除备份配置外，必须设置完整 64 位十六进制 `ZHIHENG_RESTIC_SNAPSHOT_ID`、目标数据库/对象目录以及最新独立 `ZHIHENG_ERASE_JOURNAL_PATH` 和 `ZHIHENG_SECRET_KEY`。入口持有独占数据库维护锁和共享账本锁，恢复到私有暂存目录后先重放擦除，再以不可覆盖的方式安装存活文件，重定位数据库引用，并再次针对目标目录重放擦除，最后压实、校验、原子替换数据库。已有内容冲突、符号链接越界、错误目标根目录或 SQLite sidecar 都会阻止安装。
 

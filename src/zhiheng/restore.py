@@ -68,7 +68,10 @@ def prepare_restored_bundle(
     finally:
         connection.commit()
         connection.close()
-    return collect_artifact_manifest(database, root)
+    # Format 3 bundles carry only attempt artifacts a text reference links to.
+    return collect_artifact_manifest(
+        database, root, pdf_attempt_artifacts=manifest["format_version"] >= 4
+    )
 
 
 def relocate_object_references(database: Path, original_root: Path, new_root: Path) -> None:
@@ -83,6 +86,9 @@ def relocate_object_references(database: Path, original_root: Path, new_root: Pa
                 ("content_versions", "text_artifact_uri"),
                 ("knowledge_versions", "markdown_uri"),
                 ("privacy_physical_erases", "object_uri"),
+                ("pdf_parse_attempts", "manifest_uri"),
+                ("pdf_pages", "render_uri"),
+                ("pdf_images", "artifact_uri"),
             ):
                 rows = connection.execute(
                     f"SELECT id, {column} FROM {table} WHERE {column} IS NOT NULL"
@@ -90,6 +96,9 @@ def relocate_object_references(database: Path, original_root: Path, new_root: Pa
                 for row_id, uri in rows:
                     if column == "text_artifact_uri" and uri == "":
                         # Legacy PDF text was never materialized; backup lists it.
+                        continue
+                    if table.startswith("pdf_") and not uri.startswith("file:"):
+                        # Parser references such as artifact:// are never local bytes.
                         continue
                     parsed = urlparse(uri)
                     if parsed.scheme != "file" or parsed.netloc or parsed.query or parsed.fragment:
@@ -101,12 +110,6 @@ def relocate_object_references(database: Path, original_root: Path, new_root: Pa
                     connection.execute(
                         f"UPDATE {table} SET {column} = ? WHERE id = ?", (replacement, row_id)
                     )
-                    if column == "text_artifact_uri":
-                        # A PDF text reference is its parse-attempt manifest; keep them linked.
-                        connection.execute(
-                            "UPDATE pdf_parse_attempts SET manifest_uri = ? WHERE manifest_uri = ?",
-                            (replacement, uri),
-                        )
     finally:
         connection.commit()
         connection.close()
