@@ -33,6 +33,7 @@ const processingNames = {
 const batchStatusNames = {
   queued: "排队中", processing: "处理中", succeeded: "已完成", partial: "部分完成",
   failed: "失败", dead_letter: "已进入死信", cancelled: "已取消", duplicate: "重复内容",
+  deleted: "已完成，资料已删除", dismissed: "已移除",
 };
 const importStageNames = {
   queued: "排队中", fetch: "抓取网页", parse: "解析", ocr: "OCR 识别", clean: "清洗",
@@ -857,7 +858,7 @@ function batchProgress(batch) {
   if (Number.isFinite(Number(batch.progress))) return Number(batch.progress);
   const items = batch.items || [];
   if (!items.length) return 0;
-  return Math.round(items.reduce((sum, item) => sum + (item.progress ?? (["succeeded", "duplicate"].includes(item.status) ? 100 : 0)), 0) / items.length);
+  return Math.round(items.reduce((sum, item) => sum + (item.progress ?? (["succeeded", "duplicate", "deleted", "dismissed"].includes(item.status) ? 100 : 0)), 0) / items.length);
 }
 function renderBatchList() {
   const container = $("batch-list");

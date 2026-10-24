@@ -380,8 +380,9 @@ def list_import_batches(
                 SELECT b.id,b.status,b.source_type,b.revision,b.created_at,b.updated_at,
                        b.completed_at,
                        count(i.id) AS item_count,
-                       sum(CASE WHEN i.status='succeeded' THEN 1 ELSE 0 END) AS succeeded_count,
-                       sum(CASE WHEN i.status IN ('failed','dead_letter')
+                       sum(CASE WHEN i.status IN ('succeeded','deleted')
+                                THEN 1 ELSE 0 END) AS succeeded_count,
+                       sum(CASE WHEN i.status IN ('failed','dead_letter','dismissed')
                                 THEN 1 ELSE 0 END) AS failed_count
                        ,sum(CASE WHEN i.status='unsupported'
                                  THEN 1 ELSE 0 END) AS unsupported_count

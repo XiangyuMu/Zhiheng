@@ -55,6 +55,10 @@ _TERMINAL_BATCH_STATES = {
     "unsupported",
     "cancelled",
     "duplicate",
+    # The import finished and its knowledge was deleted later (or erased).
+    "deleted",
+    # The user removed a failed PDF import that never produced knowledge.
+    "dismissed",
 }
 
 
@@ -144,6 +148,13 @@ def _project_batch_item(session: Session, item: dict[str, Any]) -> dict[str, Any
                      WHERE ij.job_type='knowledge.index'
                        AND json_extract(ij.payload_json,'$.task_id')=t.id
                      ORDER BY ij.updated_at DESC, ij.id DESC LIMIT 1) AS index_job_status,
+                   (SELECT ko.lifecycle_status FROM knowledge_objects ko
+                     WHERE ko.id = (
+                       SELECT json_extract(ij.payload_json,'$.knowledge_object_id') FROM jobs ij
+                        WHERE ij.job_type='knowledge.index'
+                          AND json_extract(ij.payload_json,'$.task_id')=t.id
+                        ORDER BY ij.updated_at DESC, ij.id DESC LIMIT 1)
+                   ) AS index_lifecycle_status,
                    EXISTS (
                      SELECT 1 FROM knowledge_objects ko
                      WHERE ko.id = (
@@ -248,14 +259,17 @@ def _project_batch_item(session: Session, item: dict[str, Any]) -> dict[str, Any
         "index" if status in {"failed", "dead_letter"} else status
     )
     retryable = bool(payload.get("retryable", status in {"failed", "dead_letter"}))
+    failed = status in {"failed", "dead_letter", "unsupported"}
     return {
         "status": status,
         "stage": stage,
         "progress_completed": 1 if status == "succeeded" else 0,
         "progress_total": 1,
-        "error_stage": stage if code or job["error_message"] else None,
+        "error_stage": stage if failed and (code or job["error_message"]) else None,
         "error_summary": (
-            _redact(str(job["error_message"] or code)) if code or job["error_message"] else None
+            _redact(str(job["error_message"] or code))
+            if failed and (code or job["error_message"])
+            else None
         ),
         "error_diagnostic_id": (
             str(payload.get("diagnostic_id")) if payload.get("diagnostic_id") else None
@@ -273,6 +287,8 @@ def _project_batch_item(session: Session, item: dict[str, Any]) -> dict[str, Any
 def _pdf_public_status(row: Any) -> str:
     job_status = str(row["job_status"]) if row["job_status"] else None
     source_status = str(row["state"]) if row["state"] else None
+    if source_status == "dismissed":
+        return "dismissed"
     if job_status == "processing":
         return "processing"
     if job_status == "unsupported":
@@ -287,6 +303,10 @@ def _pdf_public_status(row: Any) -> str:
         # Parsing is not formal retrieval qualification. The indexing job must
         # publish a knowledge object and serving pointer before success.
         index_status = str(row["index_job_status"] or "")
+        if index_status == "completed" and (
+            row["index_lifecycle_status"] in DELETED_LIFECYCLE_STATUSES
+        ):
+            return "deleted"
         if index_status == "dead":
             return "dead_letter"
         if index_status in {"failed", "unsupported"}:
@@ -305,11 +325,16 @@ def _pdf_stage(status: str) -> str:
         "succeeded": "index",
         "failed": "parse",
         "dead_letter": "parse",
+        "deleted": "index",
+        "dismissed": "parse",
     }.get(status, status)
 
 
 def _error_fields(row: Any, status: str) -> dict[str, Any]:
-    if status not in {"failed", "dead_letter", "unsupported"} and not row["error_message"]:
+    # A completed attempt records its result in error_message; only failures carry errors.
+    if status not in {"failed", "dead_letter", "unsupported"} and not (
+        status == "partial" and row["error_message"]
+    ):
         return {
             "error_stage": None,
             "error_summary": None,
@@ -352,7 +377,8 @@ def _recompute_batch(session: Session, batch_id: str) -> int:
     )
     if not rows:
         return 0
-    statuses = [str(status) for status in rows]
+    # A deleted item's import completed before it was deleted.
+    statuses = ["succeeded" if str(status) == "deleted" else str(status) for status in rows]
     if all(status == "succeeded" for status in statuses):
         aggregate = "succeeded"
     elif all(status in _TERMINAL_BATCH_STATES for status in statuses):
