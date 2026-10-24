@@ -17,6 +17,7 @@ class ImportPublicStatus(StrEnum):
     UNSUPPORTED = "unsupported"
     PARSE_FAILED = "parse_failed"
     AWAITING_CONFIRMATION = "awaiting_confirmation"
+    DELETED = "deleted"
 
 
 class JobStatus(StrEnum):
@@ -34,6 +35,11 @@ class KnowledgeLifecycleStatus(StrEnum):
     CANDIDATE = "candidate"
     SOFT_DELETED = "soft_deleted"
     PRIVACY_ERASED = "privacy_erased"
+
+
+DELETED_LIFECYCLE_STATUSES = frozenset(
+    {KnowledgeLifecycleStatus.SOFT_DELETED.value, KnowledgeLifecycleStatus.PRIVACY_ERASED.value}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +87,15 @@ def project_import_status(
             searchable=False,
             failure=failure,
         )
+    if lifecycle_status in DELETED_LIFECYCLE_STATUSES:
+        # The item is in the trash or erased: its import is no longer pending work.
+        return KnowledgeStatusProjection(
+            public_status=ImportPublicStatus.DELETED,
+            job_status=_job_status(job_status),
+            knowledge_lifecycle_status=lifecycle_status,
+            searchable=False,
+            failure=None,
+        )
     if (
         failure is not None and _is_unsupported_failure(failure.code)
     ) or job_status == JobStatus.UNSUPPORTED.value:
@@ -114,10 +129,14 @@ def failure_from_row(
     error_message: str | None,
     payload: dict[str, Any] | None = None,
     job_status: str | None = None,
+    attempt_status: str | None = None,
 ) -> KnowledgeFailure | None:
-    if not error_class and not error_message and not payload:
-        return None
+    if attempt_status == JobStatus.SUCCEEDED.value:
+        # A completed attempt records its result in error_message; it is not an error.
+        error_class = error_message = None
     payload = payload or {}
+    if not error_class and not error_message and not payload.get("failure_code"):
+        return None
     code = str(payload.get("failure_code") or "").strip()
     stage = str(payload.get("failure_stage") or "").strip()
     if not code:

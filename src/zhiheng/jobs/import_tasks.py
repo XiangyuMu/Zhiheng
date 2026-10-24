@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import new_id
 from zhiheng.jobs.knowledge_contract import (
+    DELETED_LIFECYCLE_STATUSES,
+    ImportPublicStatus,
     KnowledgeFailure,
     failure_from_row,
     project_import_status,
@@ -497,6 +499,7 @@ def list_import_tasks(
               ) AS progress_total,
               ja.error_class AS error_class,
               ja.error_message AS error_message,
+              ja.status AS attempt_status,
               COALESCE(ij.payload_json, j.payload_json) AS payload_json,
               ko.lifecycle_status AS lifecycle_status,
               CASE WHEN ko.id IS NOT NULL AND {formal_searchable_sql("ko")} THEN 1 ELSE 0 END
@@ -563,6 +566,7 @@ def list_import_tasks(
               1 AS progress_total,
               ja.error_class AS error_class,
               ja.error_message AS error_message,
+              ja.status AS attempt_status,
               j.payload_json AS payload_json,
               ko.lifecycle_status AS lifecycle_status,
               CASE WHEN ko.id IS NOT NULL AND {formal_searchable_sql("ko")} THEN 1 ELSE 0 END
@@ -594,17 +598,28 @@ def list_import_tasks(
             error_message=str(row["error_message"]) if row["error_message"] else None,
             payload=payload,
             job_status=str(row["job_status"]) if row["job_status"] else None,
+            attempt_status=str(row["attempt_status"]) if row["attempt_status"] else None,
         )
         source_status = str(row["source_status"]) if row["source_status"] else None
         job_status = str(row["job_status"]) if row["job_status"] else source_status
+        lifecycle_status = str(row["lifecycle_status"]) if row["lifecycle_status"] else None
+        deleted = lifecycle_status in DELETED_LIFECYCLE_STATUSES
+        if deleted or source_status == "dismissed":
+            failure = None
         if str(row["task_type"]) == "pdf":
-            public_status = _pdf_status(source_status, job_status, bool(row["searchable"]), failure)
+            if deleted:
+                public_status = ImportPublicStatus.DELETED.value
+            elif source_status == "dismissed":
+                # The user removed a failed import that never produced knowledge.
+                public_status = "dismissed"
+            else:
+                public_status = _pdf_status(
+                    source_status, job_status, bool(row["searchable"]), failure
+                )
         else:
             public_status = project_import_status(
                 job_status=job_status,
-                lifecycle_status=(
-                    str(row["lifecycle_status"]) if row["lifecycle_status"] else None
-                ),
+                lifecycle_status=lifecycle_status,
                 searchable=bool(row["searchable"]),
                 failure=failure,
             ).public_status.value

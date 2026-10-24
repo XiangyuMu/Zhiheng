@@ -682,6 +682,47 @@ def retry_pdf_task(
     return {"task_id": task_id, "state": "queued"}
 
 
+@router.post("/v1/knowledge/pdf-imports/{task_id}/dismiss")
+def dismiss_pdf_task(
+    task_id: str,
+    session_factory: SessionFactoryDep,
+    _user_id: AuthDep,
+    _idempotency_key: WriteDep,
+) -> dict[str, Any]:
+    """Hide a failed PDF import that never produced knowledge from pending work.
+
+    Items that became knowledge are deleted from the library instead; the
+    evidence file stays until privacy erase removes it.
+    """
+    with session_scope(session_factory) as session:
+        row = session.execute(
+            text(
+                """
+                SELECT t.state,
+                       EXISTS (
+                         SELECT 1 FROM content_versions cv
+                         JOIN knowledge_versions kv ON kv.content_version_id = cv.id
+                         WHERE cv.evidence_object_id = t.evidence_object_id
+                       ) AS has_knowledge
+                FROM pdf_tasks t WHERE t.id = :id
+                """
+            ),
+            {"id": task_id},
+        ).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="PDF task not found")
+        if str(row[0]) not in {"failed", "partial", "dead", "unsupported"} or row[1]:
+            raise HTTPException(status_code=409, detail="PDF task cannot be dismissed")
+        session.execute(
+            text(
+                "UPDATE pdf_tasks SET state = 'dismissed', updated_at = CURRENT_TIMESTAMP"
+                " WHERE id = :id"
+            ),
+            {"id": task_id},
+        )
+    return {"task_id": task_id, "state": "dismissed"}
+
+
 @router.post("/v1/knowledge/imports/preview")
 def preview_import(
     request: AdapterPreviewRequest,
@@ -1183,7 +1224,8 @@ def _latest_index_failure_summaries(
             session.execute(
                 text(
                     """
-                    SELECT j.status, j.payload_json, ja.error_class, ja.error_message
+                    SELECT j.status, j.payload_json, ja.error_class, ja.error_message,
+                           ja.status AS attempt_status
                     FROM jobs j
                     LEFT JOIN job_attempts ja ON ja.job_id = j.id
                      AND ja.started_at = (
@@ -1209,6 +1251,7 @@ def _latest_index_failure_summaries(
                 error_message=str(row["error_message"]) if row["error_message"] else None,
                 payload=_json_result(row["payload_json"]),
                 job_status=str(row["status"]),
+                attempt_status=str(row["attempt_status"]) if row["attempt_status"] else None,
             )
             if row is not None and row["error_message"]
             else None
@@ -1542,6 +1585,7 @@ def knowledge_processing_status(
                   j.payload_json,
                   ja.error_class,
                   ja.error_message,
+                  ja.status AS attempt_status,
                   ko.lifecycle_status,
                   CASE WHEN j.status = 'completed' AND (
                     {formal_searchable_sql("ko")}
@@ -1579,6 +1623,7 @@ def knowledge_processing_status(
                       oe.payload_json,
                       NULL AS error_class,
                       NULL AS error_message,
+                      NULL AS attempt_status,
                       ko.lifecycle_status,
                       0 AS searchable
                     FROM outbox_events oe
@@ -1617,6 +1662,7 @@ def knowledge_processing_status(
         error_message=str(row["error_message"]) if row["error_message"] else None,
         payload=payload,
         job_status=str(row["status"]),
+        attempt_status=str(row["attempt_status"]) if row["attempt_status"] else None,
     )
     projection = project_import_status(
         job_status=str(row["status"]),

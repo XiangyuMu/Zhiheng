@@ -37,6 +37,10 @@ test('only succeeded with searchable removes task and refreshes library', async 
   assert.equal(result.reloads, 1); assert.equal(result.retained, false);
 });
 
+test('a deleted item leaves the panel without refreshing the library', async () => {
+  const result = await run([{ public_status: 'deleted', searchable: false }]);
+  assert.equal(result.calls, 1); assert.equal(result.reloads, 0); assert.equal(result.retained, false);
+});
 for (const state of ['unsupported', 'failed', 'partial']) test('PDF ' + state + ' stops polling without refreshing searchable library', async () => {
   const result = await run([{ state, searchable: true, error_code: 'fixture_pdf_failure' }], true);
   assert.equal(result.calls, 1);
@@ -54,4 +58,27 @@ test('PDF continues observing automatic retries until qualified completion', asy
   assert.equal(result.calls, 4);
   assert.equal(result.reloads, 1);
   assert.equal(result.entry.polling, false);
+});
+
+const dismissing = source.slice(source.indexOf('async function dismissPdfTask(id, button)'), source.indexOf('async function retryImportTask(id, entry, button)'));
+async function dismiss(response) {
+  const calls = [], toasts = [];
+  const context = { state: { processing: new Map([['pdf-task', { kind: 'pdf', terminal: true, state: 'failed' }]]) },
+    busy: async (_button, _text, work) => work(), readCookie: () => 'csrf', crypto: { randomUUID: () => 'key' },
+    fetchJson: async (url, options) => { calls.push({ url, method: options.method }); if (response instanceof Error) throw response; return response; },
+    showToast: (text) => toasts.push(text), renderProcessing: () => {},
+  };
+  vm.createContext(context);
+  await vm.runInContext(dismissing + '\ndismissPdfTask("pdf-task", {})', context);
+  return { calls, toasts, retained: context.state.processing.has('pdf-task') };
+}
+test('移除 dismisses a failed PDF that never became knowledge', async () => {
+  const result = await dismiss({ task_id: 'pdf-task', state: 'dismissed' });
+  assert.deepEqual(result.calls, [{ url: '/v1/knowledge/pdf-imports/pdf-task/dismiss', method: 'POST' }]);
+  assert.equal(result.retained, false);
+});
+test('移除 of a PDF already in the library keeps it and points to the library', async () => {
+  const result = await dismiss(Object.assign(new Error(), { status: 409 }));
+  assert.equal(result.retained, true);
+  assert.match(result.toasts[0], /资料库中删除/);
 });
