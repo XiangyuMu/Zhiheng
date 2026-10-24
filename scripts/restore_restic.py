@@ -235,7 +235,13 @@ def _run_restic_restore(binary: str, snapshot_id: str, target: Path) -> None:
 
 
 def _single_restored_bundle(root: Path) -> Path:
-    manifests = list(root.rglob("manifest.json"))
+    # PDF parse-attempt manifests under objects/ share the name; the bundle's
+    # own manifest is the one beside its database.
+    manifests = [
+        manifest
+        for manifest in root.rglob("manifest.json")
+        if (manifest.parent / "database.sqlite").is_file()
+    ]
     if len(manifests) != 1:
         raise RuntimeError("restic snapshot must contain exactly one Zhiheng backup manifest")
     return manifests[0].parent

@@ -1331,3 +1331,27 @@ def test_restore_signal_reaps_restic_and_transport_children(
             if process.poll() is None:
                 process.kill()
             process.wait()
+
+
+def test_restored_bundle_is_found_beside_pdf_attempt_manifests(tmp_path: Path) -> None:
+    # Backups include PDF parse-attempt manifests under objects/ (#95), which are
+    # also named manifest.json; only the bundle's own manifest identifies it.
+    bundle = tmp_path / "restored" / "bundle"
+    attempt = bundle / "objects" / "pdf-attempts" / "task" / "attempt"
+    attempt.mkdir(parents=True)
+    (bundle / "database.sqlite").write_bytes(b"")
+    (bundle / "manifest.json").write_text("{}", encoding="utf-8")
+    (attempt / "manifest.json").write_text("{}", encoding="utf-8")
+
+    assert restore_restic._single_restored_bundle(tmp_path / "restored") == bundle
+
+
+def test_restore_refuses_a_snapshot_with_two_bundles(tmp_path: Path) -> None:
+    for name in ("one", "two"):
+        bundle = tmp_path / "restored" / name
+        bundle.mkdir(parents=True)
+        (bundle / "database.sqlite").write_bytes(b"")
+        (bundle / "manifest.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="exactly one Zhiheng backup manifest"):
+        restore_restic._single_restored_bundle(tmp_path / "restored")
