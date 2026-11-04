@@ -349,6 +349,7 @@ class MemoryExtractionJobExecutor:
                 owner_user_id=str(row["owner_user_id"]),
                 query=str(row["query"]),
                 answer=answer,
+                citations=list(response.get("citations") or []),
             )
             return created
 

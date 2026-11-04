@@ -110,6 +110,15 @@
   const premiseText = (premises) => (premises || [])
     .map((premise) => `${premise.confirmed ? "已确认" : "假设"}：${premise.text || "未命名前提"}`)
     .join("\n") || "无";
+  // ADR 0012: assistant output is neither a personal statement nor evidence.
+  const ORIGIN_LABELS = {
+    user_statement: "个人陈述",
+    assistant_output: "助手输出（不是依据，请逐条核对）",
+  };
+  const materialRefText = (refs) => (refs || [])
+    .map((ref) => [ref.page_no != null ? `第 ${ref.page_no} 页` : null, ref.section_path || "正文",
+      ref.offset_start != null ? `字符 ${ref.offset_start}–${ref.offset_end}` : null].filter(Boolean).join(" · "))
+    .join("\n");
   const sourceText = (source) => (typeof source === "string" ? source : source?.text || source?.body || "无");
   const valueText = (value) => {
     if (value === null || value === undefined) return "无";
@@ -439,11 +448,13 @@
       ]);
       const parts = [definitions([
         ["结论", entry.claim],
+        ...(ORIGIN_LABELS[entry.origin] ? [["出自", ORIGIN_LABELS[entry.origin]]] : []),
         ["前提", premiseText(entry.premises)],
         ["依据", (entry.evidence || []).map((e) => e.text || e.quote || e.excerpt || JSON.stringify(e)).join("\n") || entry.excerpt],
         ["分类", entry.classification?.primary_domain_id || entry.domain_id],
         ["关系", (entry.relations || []).map((r) => `${r.kind}：${r.explanation || r.right_claim || r.right_id}`).join("\n") || "暂无与已有知识的关系建议"],
         ["原文来源", sourceText(entry.source)],
+        ...(entry.material_refs?.length ? [["关联原文", materialRefText(entry.material_refs)]] : []),
       ])];
       if (tax) parts.push(classificationEditor(item, entry, tax));
       const revise = node("button", "修订", "secondary small");

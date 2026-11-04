@@ -1187,6 +1187,10 @@ async function loadKnowledgeDetail(id) {
     const sourceUrl = detail.source_metadata?.url || detail.source_metadata?.canonical_url;
     $("detail-source").textContent = sourceUrl ? `网页来源：${sourceUrl}` : "";
     $("detail-source").hidden = !sourceUrl;
+    // ADR 0012: knowledge resting only on assistant reasoning says so, never as external evidence.
+    const basis = { assistant_reasoning: "依据：仅为助手推理，不是外部依据", user_statement: "依据：个人陈述" }[detail.source_metadata?.evidence_basis];
+    $("detail-basis").textContent = basis || "";
+    $("detail-basis").hidden = !basis;
     $("detail-refresh-web").hidden = !sourceUrl;
     $("detail-text").textContent = detail.text || "暂无可显示的原文。";
     const favorite = Boolean(detail.is_favorite);
