@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
@@ -46,6 +47,7 @@ def _turn(
             text("UPDATE answer_history SET response_json=:r WHERE id=:id"),
             {"r": json.dumps({**response, "answer": answer}), "id": history_id},
         )
+    assert isinstance(client.app, FastAPI)
     assert process_worker_once(client.app.state.settings, worker_id="provenance-worker") >= 1
     return dict(response)
 
