@@ -14,7 +14,11 @@ from zhiheng.conclusions import (
     get_extraction_review_result,
     list_extraction_review_results,
 )
-from zhiheng.conclusions.extraction import resolve_extraction_supplement
+from zhiheng.conclusions.extraction import (
+    ASSISTANT_OUTPUT,
+    USER_STATEMENT,
+    resolve_extraction_supplement,
+)
 from zhiheng.core.config import Settings
 from zhiheng.knowledge import KnowledgeRepository, KnowledgeUserAuthority, TextEvidenceInput
 from zhiheng.knowledge.object_store import knowledge_object_store_for_settings
@@ -73,6 +77,8 @@ def formalize_conclusion(
             "related_domain_ids": item.get("classification", {}).get("related_domain_ids", []),
             "relation_kind": relation_kind,
             "related_entry_id": related_entry_id,
+            "material_refs": item.get("material_refs", []),
+            **_evidence_basis(item),
         },
     )
     knowledge = KnowledgeRepository()
@@ -120,6 +126,15 @@ def formalize_conclusion(
         )
     repo.attach_knowledge(session, user, entry_id, stored.knowledge_object_id)
     return stored.knowledge_object_id
+
+
+def _evidence_basis(item: dict[str, Any]) -> dict[str, str]:
+    """What the formal knowledge rests on; assistant output is never external evidence."""
+    basis = {
+        ASSISTANT_OUTPUT: "assistant_reasoning",
+        USER_STATEMENT: "user_statement",
+    }.get(str(item.get("origin")))
+    return {"evidence_basis": basis} if basis else {}
 
 
 class SourcePayload(BaseModel):

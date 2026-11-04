@@ -23,6 +23,28 @@ class ExtractedConclusion:
     evidence: list[dict[str, Any]]
     start_offset: int
     end_offset: int
+    origin: str
+
+
+USER_STATEMENT = "user_statement"
+ASSISTANT_OUTPUT = "assistant_output"
+_ASSISTANT_PREFIX = "\n助手："
+
+
+def conversation_source_text(query: str, answer: str) -> str:
+    """The persisted turn: the user's words, then the assistant's after a fixed marker."""
+    source = query.strip()
+    if answer.strip():
+        source = f"{source}{_ASSISTANT_PREFIX}{answer.strip()}"
+    return source
+
+
+def _origin_at(query: str, answer: str, offset: int) -> str:
+    """Who said the text at `offset` of the persisted turn (ADR 0012)."""
+    if not answer.strip():
+        return USER_STATEMENT
+    assistant_start = len(query.strip()) + len(_ASSISTANT_PREFIX)
+    return ASSISTANT_OUTPUT if offset >= assistant_start else USER_STATEMENT
 
 
 class HeuristicConversationConclusionExtractor:
@@ -78,9 +100,7 @@ class HeuristicConversationConclusionExtractor:
     _CLAIM_CONTENT_BLOCKLIST = ("不要记录", "不要当真", "不是我的结论")
 
     def extract(self, *, query: str, answer: str) -> list[ExtractedConclusion]:
-        source = query.strip()
-        if answer.strip():
-            source = f"{source}\n助手：{answer.strip()}"
+        source = conversation_source_text(query, answer)
         matches = sorted(self._candidate_matches(source), key=lambda item: item.claim_start)
         found: list[ExtractedConclusion] = []
         seen: set[str] = set()
@@ -96,6 +116,7 @@ class HeuristicConversationConclusionExtractor:
                 for text in candidate.inline_premises
                 if _clean_clause(text)
             ]
+            origin = _origin_at(query, answer, candidate.claim_start)
             item_premises.extend(
                 {"text": _clean_clause(match.group(1)), "confirmed": False}
                 for match in premise_by_candidate.get(candidate_index, ())
@@ -113,21 +134,21 @@ class HeuristicConversationConclusionExtractor:
                                 candidate.excerpt_start : candidate.excerpt_end
                             ].strip(),
                             "source": "conversation",
+                            "origin": origin,
                             "start_offset": candidate.claim_start,
                             "end_offset": candidate.claim_end,
                         }
                     ],
                     start_offset=candidate.claim_start,
                     end_offset=candidate.claim_end,
+                    origin=origin,
                 )
             )
         return found
 
     def unrecognized_review_items(self, *, query: str, answer: str) -> list[dict[str, Any]]:
         """Return explicitly marked expressions rejected by safety filters."""
-        source = query.strip()
-        if answer.strip():
-            source = f"{source}\n助手：{answer.strip()}"
+        source = conversation_source_text(query, answer)
         candidates = self._candidate_matches(source, filter_negative=False)
         extracted_claims = {item.claim for item in self.extract(query=query, answer=answer)}
         items: list[dict[str, Any]] = []
@@ -302,12 +323,12 @@ class ConversationConclusionDraftService:
         owner_user_id: str,
         query: str,
         answer: str,
+        citations: list[dict[str, Any]] | None = None,
     ) -> int:
         extracted = self.extractor.extract(query=query, answer=answer)
+        material_refs = _material_refs(citations or [])
         review_items = self.extractor.unrecognized_review_items(query=query, answer=answer)
-        source_text = query.strip()
-        if answer.strip():
-            source_text = f"{source_text}\n助手：{answer.strip()}"
+        source_text = conversation_source_text(query, answer)
         source = self.repository.persist_source(
             session,
             owner_user_id,
@@ -325,6 +346,7 @@ class ConversationConclusionDraftService:
                 {
                     "title": f"对话结论：{item.claim[:80]}",
                     "claim": item.claim,
+                    "origin": item.origin,
                     "domain_id": item.domain_id,
                     "premises": item.premises,
                     "excerpt": item.excerpt,
@@ -338,6 +360,7 @@ class ConversationConclusionDraftService:
                         }
                         for evidence in item.evidence
                     ],
+                    "material_refs": material_refs,
                 },
                 f"conclusion-draft:{history_id}:{index}:{claim_hash}",
             )
@@ -366,9 +389,7 @@ class ConversationConclusionDraftService:
         failure_code: str,
         failure_reason: str,
     ) -> None:
-        source_text = query.strip()
-        if answer.strip():
-            source_text = f"{source_text}\n助手：{answer.strip()}"
+        source_text = conversation_source_text(query, answer)
         if not source_text:
             source_text = "原始对话不可用。"
         source = self.repository.persist_source(
@@ -510,6 +531,28 @@ class ConversationConclusionDraftService:
                     "reason": str(item["reason"])[:1000],
                 },
             )
+
+
+_MATERIAL_REF_FIELDS = (
+    "source_type",
+    "source_id",
+    "source_version_id",
+    "content_version_id",
+    "offset_start",
+    "offset_end",
+    "page_no",
+    "section_path",
+    "quote_hash",
+)
+
+
+def _material_refs(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Where in the originals the discussed turn pointed; the originals stay untouched."""
+    return [
+        {field: citation.get(field) for field in _MATERIAL_REF_FIELDS}
+        for citation in citations
+        if isinstance(citation, dict) and citation.get("source_id")
+    ]
 
 
 def _run_result(session: Session, run_id: str) -> tuple[Any, ...] | None:

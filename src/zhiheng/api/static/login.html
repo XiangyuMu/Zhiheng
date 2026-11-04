@@ -5,22 +5,24 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>登录知衡</title>
     <style>
+      /* Self-contained: the shared stylesheets need a session, this page does not. */
       :root {
         color-scheme: light;
-        --ink: #20242c;
-        --muted: #606775;
-        --paper: #f7f8fa;
+        --ink: #1d1d1f;
+        --muted: #6e6e73;
+        --tertiary: #86868b;
+        --paper: #f5f5f7;
         --panel: #ffffff;
-        --line: #e5e8ed;
-        --accent: #315fc4;
-        --danger: #a6413b;
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
+        --line: rgb(0 0 0 / 14%);
+        --accent: #0071e3;
+        --accent-hover: #0077ed;
+        --danger: #c4291c;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro SC", "PingFang SC", "Helvetica Neue", "Segoe UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
       }
-
       * {
         box-sizing: border-box;
       }
-
       body {
         min-height: 100vh;
         margin: 0;
@@ -28,172 +30,186 @@
         color: var(--ink);
         font-size: 15px;
       }
-
       main {
         min-height: 100vh;
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+        grid-template-columns: minmax(0, 1fr) minmax(340px, 400px);
         align-items: center;
-        gap: 48px;
+        gap: 72px;
         width: min(1040px, calc(100% - 40px));
         margin: 0 auto;
         padding: 48px 0;
       }
-
       .brand-panel {
-        max-width: 560px;
+        max-width: 540px;
       }
-
       .brand {
         display: inline-flex;
         gap: 10px;
         align-items: center;
-        margin-bottom: 44px;
+        margin-bottom: 40px;
         color: var(--ink);
         text-decoration: none;
       }
-
       .brand-mark {
         display: inline-grid;
-        width: 36px;
-        height: 36px;
+        width: 32px;
+        height: 32px;
         place-items: center;
         border-radius: 8px;
         background: var(--ink);
         color: #fff;
-        font-weight: 700;
+        font-weight: 600;
       }
-
       .brand strong,
       .brand small {
         display: block;
       }
-
-      .brand small {
-        color: var(--muted);
-        font-size: 0.82rem;
+      .brand strong {
+        font-weight: 600;
+        letter-spacing: 0.02em;
       }
-
+      .brand small {
+        color: var(--tertiary);
+        font-size: 0.75rem;
+      }
       h1,
       h2,
       p {
         margin-top: 0;
       }
-
       .brand-panel h1 {
         max-width: 12em;
-        margin-bottom: 16px;
-        font-size: 2.45rem;
-        line-height: 1.14;
+        margin-bottom: 18px;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", sans-serif;
+        font-size: 2.75rem;
+        font-weight: 600;
+        line-height: 1.15;
+        letter-spacing: -0.03em;
       }
-
       .brand-panel p {
         max-width: 42em;
         color: var(--muted);
-        line-height: 1.75;
+        font-size: 1.0625rem;
+        line-height: 1.65;
       }
-
       .trust-list {
         display: grid;
-        gap: 12px;
-        margin-top: 28px;
+        gap: 2px;
+        margin-top: 32px;
       }
-
       .trust-item {
-        padding-left: 14px;
-        border-left: 3px solid var(--accent);
-        color: var(--muted);
+        position: relative;
+        margin: 0;
+        padding: 8px 0 8px 26px;
+        color: var(--ink);
+        font-size: 0.9375rem !important;
       }
-
+      .trust-item::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 13px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: rgb(0 113 227 / 10%) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4.5 8.2l2.2 2.2 4.6-4.8' stroke='%230071e3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 16px no-repeat;
+      }
       .login-card {
-        border: 1px solid var(--line);
-        border-radius: 12px;
+        border: 0;
+        border-radius: 22px;
         background: var(--panel);
-        padding: 28px;
-        box-shadow: 0 20px 70px rgb(32 36 44 / 10%);
+        padding: 36px 32px 28px;
+        box-shadow: 0 4px 24px rgb(0 0 0 / 6%), 0 0 0 0.5px rgb(0 0 0 / 5%);
       }
-
       .eyebrow {
         margin-bottom: 6px;
-        color: var(--accent);
-        font-size: 0.78rem;
-        font-weight: 700;
+        color: var(--tertiary);
+        font-size: 0.8125rem;
+        font-weight: 500;
       }
-
       .login-card h2 {
-        margin-bottom: 8px;
-        font-size: 1.55rem;
+        margin-bottom: 6px;
+        font-size: 1.75rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
       }
-
       #subtitle {
-        margin-bottom: 22px;
+        margin-bottom: 24px;
         color: var(--muted);
       }
-
       label {
         display: grid;
-        gap: 7px;
-        margin: 16px 0;
-        color: var(--muted);
-        font-weight: 700;
+        gap: 6px;
+        margin: 14px 0;
+        color: var(--ink);
+        font-size: 0.8125rem;
+        font-weight: 500;
       }
-
       input {
         width: 100%;
         min-height: 44px;
         border: 1px solid var(--line);
-        border-radius: 8px;
+        border-radius: 10px;
         background: #fff;
         color: var(--ink);
         font: inherit;
-        padding: 0 12px;
+        font-size: 1rem;
+        padding: 0 14px;
+        transition: border-color 160ms ease, box-shadow 160ms ease;
       }
-
-      input:focus-visible,
-      button:focus-visible {
+      input:focus-visible {
         outline: none;
-        box-shadow: 0 0 0 3px rgb(49 95 196 / 22%);
+        border-color: var(--accent);
+        box-shadow: 0 0 0 4px rgb(0 113 227 / 15%);
       }
-
+      button:focus-visible {
+        outline: 3px solid rgb(0 113 227 / 45%);
+        outline-offset: 2px;
+      }
       button {
         width: 100%;
-        min-height: 44px;
-        margin-top: 10px;
-        border: 1px solid transparent;
-        border-radius: 8px;
+        min-height: 46px;
+        margin-top: 14px;
+        border: 0;
+        border-radius: 980px;
         background: var(--accent);
         color: #fff;
         cursor: pointer;
         font: inherit;
-        font-weight: 700;
+        font-size: 1rem;
+        font-weight: 500;
+        transition: background-color 160ms ease;
       }
-
+      button:hover:not(:disabled) {
+        background: var(--accent-hover);
+      }
       button:disabled {
-        cursor: not-allowed;
-        opacity: 0.62;
+        cursor: default;
+        opacity: 0.4;
       }
-
       #error {
         min-height: 1.5em;
         margin: 14px 0 0;
         color: var(--danger);
+        font-size: 0.875rem;
       }
-
       @media (max-width: 760px) {
         main {
           min-height: auto;
           grid-template-columns: 1fr;
-          gap: 28px;
-          width: min(100% - 28px, 520px);
+          gap: 32px;
+          width: min(100% - 32px, 520px);
           padding: 28px 0;
         }
-
         .brand {
           margin-bottom: 28px;
         }
-
         .brand-panel h1 {
           font-size: 2rem;
+        }
+        .login-card {
+          padding: 28px 20px 22px;
         }
       }
     </style>
