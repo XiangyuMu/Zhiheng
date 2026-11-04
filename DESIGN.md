@@ -11,7 +11,7 @@
 ## Brand
 - Personality: quiet, precise, scholarly, approachable.
 - Trust signals: source title and excerpt, explicit answer limitations, reversible operations, distinguish user context from evidence.
-- Avoid: decorative glass, gradients, oversized headings, fake charts, fabricated demo data, raw IDs as primary labels.
+- Avoid: decorative glass, gradients, heavy bold text, boxes around everything, fake charts, fabricated demo data, raw IDs as primary labels.
 
 ## Product goals
 - Goals: get from a research question to a verifiable source; browse/import material without losing a question; make gaps legible.
@@ -47,16 +47,18 @@
 - Tradeoff: hash screens reuse the existing authenticated static routes and preserve backend boundaries.
 
 ## Visual language
-- Color: warm white canvas `#f7f8fa`, white surface, ink `#20242c`, muted `#606775`, lines `#e5e8ed`, blue accent `#315fc4`, pale blue selection; amber for evidence gaps, red for destructive states.
-- Typography: system SF/PingFang sans stack, 15px base; readable answer 16px/1.9; page title 28–32px, supporting section title 18–20px. Use a restrained serif only for the research welcome headline if needed.
-- Spacing/layout rhythm: 4px base; 8/12/16/24/32/48px. Sidebar 224px, main maximum 1160px, answer text maximum about 72 characters per line.
-- Shape/radius/elevation: 8px inputs, 12px cards, 16px dialogs; thin dividers; subtle shadows only for elevated overlays.
-- Motion: 120–180ms feedback; respect prefers-reduced-motion.
-- Imagery/iconography: simple line/typographic symbols, no generated images necessary for an evidence workspace.
+- Direction (2026-11-04 refresh): minimal and Apple-like — quiet neutrals, one blue accent, hairlines and soft depth instead of boxes. Tokens live in `design-tokens.css`; never hardcode colors in page CSS.
+- Color: canvas `#f5f5f7`, white surfaces, sidebar `#fbfbfd`, ink `#1d1d1f`, secondary `#6e6e73`, tertiary `#86868b`, hairlines `rgb(0 0 0 / 8%)`, accent `#0071e3`; tinted fills (`--kb-fill`) for secondary controls; amber for evidence gaps, red for destructive states, each with a soft tint.
+- Typography: system SF/PingFang stack, 15px base, weights 400/500/600 only (no 700). Display headings tight (-0.02 to -0.03em); research headline 32–48px, page title 32px, answer text 17px/1.85.
+- Spacing/layout rhythm: 4px base; 8/12/16/24/32/48px. Sidebar 224px, main maximum 1120px, answer column 760px.
+- Shape/elevation: pill buttons (one filled primary per area, tinted secondary, text-style quiet); 10px inputs, 18px cards, 22px dialogs/composer. Cards are borderless with a near-invisible shadow; nested items use hairline separators. Segmented controls for mode/tab switches.
+- Translucency: only the sticky top bar, dialog backdrop and toast use blur — functional layering, never decoration. No gradients.
+- Motion: 120–260ms ease for feedback, sheet and reader entry; respect prefers-reduced-motion.
+- Iconography: 1.6px-stroke line icons on a 24px grid (SF Symbols spirit) as inline SVG; no Unicode glyphs as icons.
 
 ## Components
 - Extend existing vanilla HTML/CSS/JS; preserve API clients and DOM IDs where practical.
-- Shared authenticated design tokens and shell live in `knowledge-agent.css`; secondary styles import this through `/knowledge-agent.css` then scope page-specific additions.
+- Shared design tokens live in `design-tokens.css`; the authenticated shell and components live in `knowledge-agent.css`; secondary styles import this through `/knowledge-agent.css` then scope page-specific additions.
 - Shared shell classes: `workspace`, `sidebar`, `brand`, `brand-mark`, `nav-group`, `nav-label`, `nav-link`, `nav-icon`, `sidebar-footer`, `workspace-body`, `topbar`, `topbar-path`, `page-content`, `page-heading`, `eyebrow`, `panel`, `button`, `secondary`, `badge`, `muted`, `empty-state`, `toolbar`, `toast`.
 - Every workspace page mounts the one shared sidebar: `<aside class="sidebar" data-app-sidebar data-current="<key>">` followed by `<script src="/app-shell.js"></script>`; never hand-copy nav links. The shell sets `aria-current=page` on the current link and recounts the badge after every `/v1/` write (or a `zhiheng:pending-changed` window event), across tabs. The sidebar becomes horizontal compact navigation at ≤900px, ADR 0008's main collapse breakpoint.
 - Variants: primary/secondary/quiet/danger buttons; neutral/success/warning badges; loading/empty/error lists; source reader; upload form.

@@ -8,20 +8,38 @@
   const PENDING_CHANGED = "zhiheng:pending-changed";
   const GROUPS = [
     { label: "工作空间", aria: "工作空间", links: [
-      { key: "research", href: "/knowledge-agent#research", icon: "◌", label: "研究问答" },
-      { key: "library", href: "/knowledge-agent#library", icon: "▤", label: "资料库", countId: "library-nav-count" },
-      { key: "pending", href: "/review-center", icon: "✓", label: "待处理", countId: "pending-nav-count" },
+      { key: "research", href: "/knowledge-agent#research", icon: "research", label: "研究问答" },
+      { key: "library", href: "/knowledge-agent#library", icon: "library", label: "资料库", countId: "library-nav-count" },
+      { key: "pending", href: "/review-center", icon: "pending", label: "待处理", countId: "pending-nav-count" },
     ] },
     { label: "更多工具", aria: "工具", links: [
-      { key: "decisions", href: "/knowledge-agent#decisions", icon: "⇄", label: "方案比较" },
-      { key: "memory", href: "/memory-center", icon: "◎", label: "个人上下文" },
-      { key: "taxonomy", href: "/taxonomy-center", icon: "▦", label: "分类中心" },
+      { key: "decisions", href: "/knowledge-agent#decisions", icon: "decisions", label: "方案比较" },
+      { key: "memory", href: "/memory-center", icon: "memory", label: "个人上下文" },
+      { key: "taxonomy", href: "/taxonomy-center", icon: "taxonomy", label: "分类中心" },
     ] },
   ];
   const FOOTER = [
-    { key: "settings", href: "/knowledge-agent#settings", icon: "⚙", label: "设置" },
-    { key: "evolution", href: "/evolution-center", icon: "↗", label: "系统改进" },
+    { key: "settings", href: "/knowledge-agent#settings", icon: "settings", label: "设置" },
+    { key: "evolution", href: "/evolution-center", icon: "evolution", label: "系统改进" },
   ];
+
+  // Line icons in the SF Symbols spirit: 24px grid, 1.6 stroke, inherit currentColor.
+  const ICON_PATHS = {
+    research: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
+    library: '<path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H10l2 2h6.5A1.5 1.5 0 0 1 20 7.5v11a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5z"/>',
+    pending: '<path d="M4 13.5V18a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4.5"/><path d="M4 13.5l2.4-7.2A2 2 0 0 1 8.3 5h7.4a2 2 0 0 1 1.9 1.3l2.4 7.2H15a3 3 0 0 1-6 0z"/>',
+    decisions: '<path d="M7 4v16M7 4L4 7M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3"/>',
+    memory: '<circle cx="12" cy="8.5" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>',
+    taxonomy: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/>',
+    evolution: '<path d="M4 17l5.5-5.5 4 4L20 9"/><path d="M15 9h5v5"/>',
+  };
+  function icon(name) {
+    const span = el("span", { class: "nav-icon", "aria-hidden": "true" });
+    // Constant markup from ICON_PATHS only; no user data reaches innerHTML.
+    span.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS[name]}</svg>`;
+    return span;
+  }
 
   function el(tag, attributes = {}, children = []) {
     const node = document.createElement(tag);
@@ -32,7 +50,7 @@
 
   function navLink(link, current) {
     const anchor = el("a", { class: "nav-link", href: link.href, "data-nav": link.key }, [
-      el("span", { class: "nav-icon", "aria-hidden": "true" }, [link.icon]),
+      icon(link.icon),
       el("span", { class: "nav-label-text" }, [link.label]),
     ]);
     if (link.key === current) anchor.setAttribute("aria-current", "page");

@@ -2,10 +2,10 @@
 @import url('/knowledge-agent.css');
 
 :root {
-  --system-blue: #315fc4;
-  --system-green: #28745e;
-  --system-amber: #9b6a18;
-  --system-red: #a6413b;
+  --system-blue: var(--kb-accent);
+  --system-green: var(--kb-success);
+  --system-amber: var(--kb-warning);
+  --system-red: var(--kb-error);
 }
 
 .page-heading {
@@ -25,6 +25,7 @@
 .management-grid {
   display: grid;
   gap: 16px;
+  margin-bottom: 16px;
 }
 
 .metrics {
@@ -37,8 +38,9 @@
 
 .metric {
   min-height: 96px;
-  border: 1px solid var(--line, #e5e8ed);
-  border-radius: 8px;
+  border: 0;
+  box-shadow: var(--kb-shadow-card);
+  border-radius: var(--kb-radius-lg);
   background: #fff;
   padding: 16px;
 }
@@ -78,10 +80,10 @@ article h2,
   min-height: 26px;
   padding: 0 9px;
   border-radius: 999px;
-  background: #eef1f5;
+  background: var(--kb-fill);
   color: var(--muted, #606775);
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -96,7 +98,7 @@ article h2,
   width: 100%;
   padding: 13px;
   border: 1px solid var(--line, #e5e8ed);
-  border-radius: 8px;
+  border-radius: var(--kb-radius-md);
   background: #fff;
   color: var(--ink, #20242c);
   text-align: left;
@@ -104,8 +106,8 @@ article h2,
 
 .item:hover,
 .item:focus-visible {
-  border-color: rgb(49 95 196 / 45%);
-  background: #f8faff;
+  border-color: rgb(0 113 227 / 45%);
+  background: var(--accent-soft);
 }
 
 .item strong {
@@ -124,7 +126,7 @@ article h2,
   display: block;
   height: 6px;
   border-radius: 999px;
-  background: #d8dee8;
+  background: var(--kb-fill-strong);
 }
 
 .stage i.on {
@@ -160,16 +162,16 @@ article h2,
   place-items: center;
   padding: 20px;
   border: 1px dashed var(--line, #e5e8ed);
-  border-radius: 8px;
-  background: #fafbfc;
+  border-radius: var(--kb-radius-md);
+  background: var(--kb-surface-muted);
   color: var(--muted, #606775);
   text-align: center;
 }
 
 .error-state {
   gap: 10px;
-  border-color: rgb(166 65 59 / 34%);
-  background: rgb(166 65 59 / 6%);
+  border-color: rgb(196 41 28 / 30%);
+  background: var(--kb-error-soft);
   color: var(--system-red);
 }
 
@@ -211,7 +213,7 @@ article h2,
 .technical-detail {
   margin-top: 16px;
   border: 1px solid var(--line, #e5e8ed);
-  border-radius: 8px;
+  border-radius: var(--kb-radius-md);
   background: #fff;
 }
 
@@ -219,7 +221,7 @@ article h2,
   cursor: pointer;
   padding: 12px 14px;
   color: var(--muted, #606775);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .technical-detail pre {
@@ -228,7 +230,7 @@ article h2,
   overflow: auto;
   padding: 14px;
   border-top: 1px solid var(--line, #e5e8ed);
-  background: #f6f7f9;
+  background: var(--kb-surface-muted);
   color: var(--ink, #20242c);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.86rem;

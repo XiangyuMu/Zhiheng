@@ -29,7 +29,7 @@
             <textarea id="question" rows="3" required maxlength="4000" placeholder="想找回什么材料，或核对哪个结论？"></textarea>
             <div class="composer-footer">
               <span class="muted composer-note">只使用授权证据 · <button id="new-conversation" type="button" class="link-button">新建会话</button></span>
-              <div class="composer-actions"><label class="sr-only" for="intent">回答方式</label><select id="intent"><option value="">自动选择</option><option value="complex_synthesis">跨资料综合</option><option value="decision">分析方案</option></select><button type="submit" class="button">提问 <span aria-hidden="true">↑</span></button></div>
+              <div class="composer-actions"><label class="sr-only" for="intent">回答方式</label><select id="intent"><option value="">自动选择</option><option value="complex_synthesis">跨资料综合</option><option value="decision">分析方案</option></select><button type="submit" class="button">提问</button></div>
             </div>
           </form>
           <p id="question-error" class="inline-error" role="alert" hidden></p>
@@ -37,9 +37,9 @@
           <div id="research-start" class="research-start">
             <p class="section-label">从一个具体问题开始</p>
             <div class="starter-grid">
-              <button type="button" class="starter" data-prompt="我读过的材料中，哪些讨论了"><span aria-hidden="true">⌕</span><strong>找回材料</strong><small>从模糊印象找到原始出处</small></button>
-              <button type="button" class="starter" data-prompt="请核对以下结论是否有资料支持："><span aria-hidden="true">✓</span><strong>核对结论</strong><small>区分有据可查与尚待确认</small></button>
-              <button type="button" class="starter" data-prompt="请比较已有资料中关于以下问题的观点："><span aria-hidden="true">⇄</span><strong>梳理观点</strong><small>看看不同资料如何回答</small></button>
+              <button type="button" class="starter" data-prompt="我读过的材料中，哪些讨论了"><span aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg></span><strong>找回材料</strong><small>从模糊印象找到原始出处</small></button>
+              <button type="button" class="starter" data-prompt="请核对以下结论是否有资料支持："><span aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.2l2.4 2.4 4.6-5"/></svg></span><strong>核对结论</strong><small>区分有据可查与尚待确认</small></button>
+              <button type="button" class="starter" data-prompt="请比较已有资料中关于以下问题的观点："><span aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M7 4L4 7M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3"/></svg></span><strong>梳理观点</strong><small>看看不同资料如何回答</small></button>
             </div>
           </div>
           <section id="answer-result" class="answer-result" aria-labelledby="route" hidden>
@@ -59,9 +59,9 @@
         </section>
 
         <section id="screen-library" data-screen="library" aria-labelledby="library-title" hidden>
-          <div class="page-heading"><div><p class="eyebrow">你的研究积累</p><h1 id="library-title">资料库</h1><p class="lead">保存、找回，然后回到原文。</p></div><button type="button" class="button" data-open-import>＋ 添加资料</button></div>
+          <div class="page-heading"><div><p class="eyebrow">你的研究积累</p><h1 id="library-title">资料库</h1><p class="lead">保存、找回，然后回到原文。</p></div></div>
           <div class="library-toolbar">
-            <label class="search-field"><span aria-hidden="true">⌕</span><span class="sr-only">搜索资料</span><input type="search" id="library-search" placeholder="搜索标题、正文、摘要、来源 URL" /></label>
+            <label class="search-field"><span aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg></span><span class="sr-only">搜索资料</span><input type="search" id="library-search" placeholder="搜索标题、正文、摘要、来源 URL" /></label>
             <button id="load-knowledge" type="button" class="secondary">刷新</button>
           </div>
           <div class="library-filters" role="group" aria-label="资料筛选">
@@ -124,7 +124,7 @@
             <label>目标与约束<span class="field-help">时间、资源、成功标准，每行一个。</span><textarea id="decision-constraints" rows="3" placeholder="例如：两周内完成首轮验证"></textarea></label>
             <div class="section-heading"><p class="muted">仅提供分析，不执行外部动作。</p><button type="submit" class="button">比较方案</button></div>
             <p id="decision-error" class="inline-error" role="alert" hidden></p>
-          </form><aside class="decision-note"><span class="note-symbol" aria-hidden="true">⇄</span><h2>先说清楚，<br />什么对你重要。</h2><p>分析会使用已有资料。证据不足的部分会单独标明，不应当作已经验证的结论。</p></aside></div>
+          </form><aside class="decision-note"><span class="note-symbol" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M7 4L4 7M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3"/></svg></span><h2>先说清楚，<br />什么对你重要。</h2><p>分析会使用已有资料。证据不足的部分会单独标明，不应当作已经验证的结论。</p></aside></div>
           <section id="decision-result" class="panel decision-result" hidden><div id="decision-output"></div><button id="save-decision" type="button" class="secondary" hidden>保存本次分析</button></section>
         </section>
 

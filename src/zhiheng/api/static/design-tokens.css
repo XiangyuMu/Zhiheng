@@ -1,28 +1,48 @@
-/* Shared knowledge-base design tokens and component states. */
+/* Shared knowledge-base design tokens and component states.
+   Quiet, Apple-like system: neutral canvas, white grouped surfaces, one blue accent,
+   hairline separators instead of boxes, soft elevation only where something floats. */
 :root {
-  --kb-canvas: #f7f8fa;
+  --kb-canvas: #f5f5f7;
   --kb-surface: #ffffff;
-  --kb-surface-muted: #f1f3f6;
-  --kb-text: #20242c;
-  --kb-text-muted: #606775;
-  --kb-border: #e5e8ed;
-  --kb-accent: #315fc4;
-  --kb-accent-soft: #edf2fc;
-  --kb-accent-strong: #2b54a1;
-  --kb-focus-ring: #6b91e0;
-  --kb-success: #28745e;
-  --kb-warning: #9b6a18;
-  --kb-error: #af3434;
+  --kb-surface-muted: #f5f5f7;
+  --kb-fill: rgb(120 120 128 / 12%);
+  --kb-fill-strong: rgb(120 120 128 / 20%);
+  --kb-text: #1d1d1f;
+  --kb-text-muted: #6e6e73;
+  --kb-text-tertiary: #86868b;
+  --kb-border: rgb(0 0 0 / 8%);
+  --kb-border-strong: rgb(0 0 0 / 14%);
+  --kb-accent: #0071e3;
+  --kb-accent-hover: #0077ed;
+  --kb-accent-soft: rgb(0 113 227 / 9%);
+  --kb-accent-strong: #0066cc;
+  --kb-focus-ring: rgb(0 113 227 / 45%);
+  --kb-success: #1d7a47;
+  --kb-success-soft: rgb(52 199 89 / 12%);
+  --kb-warning: #8a5a00;
+  --kb-warning-soft: rgb(255 159 10 / 12%);
+  --kb-error: #c4291c;
+  --kb-error-soft: rgb(255 59 48 / 9%);
   --kb-space-1: 4px;
   --kb-space-2: 8px;
   --kb-space-3: 12px;
   --kb-space-4: 16px;
   --kb-space-5: 24px;
-  --kb-radius-sm: 6px;
-  --kb-radius-md: 8px;
-  --kb-radius-lg: 12px;
+  --kb-space-6: 32px;
+  --kb-space-7: 48px;
+  --kb-radius-sm: 8px;
+  --kb-radius-md: 10px;
+  --kb-radius-lg: 18px;
+  --kb-radius-xl: 22px;
+  --kb-radius-pill: 980px;
   --kb-control-height: 40px;
-  --kb-shadow: 0 12px 36px #20242c09;
+  --kb-shadow-card: 0 1px 2px rgb(0 0 0 / 4%), 0 0 0 0.5px rgb(0 0 0 / 5%);
+  --kb-shadow-raised: 0 4px 16px rgb(0 0 0 / 6%), 0 0 0 0.5px rgb(0 0 0 / 5%);
+  --kb-shadow: 0 24px 64px rgb(0 0 0 / 16%), 0 0 0 0.5px rgb(0 0 0 / 6%);
+  --kb-ease: cubic-bezier(.25, .1, .25, 1);
+  --kb-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro SC", "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+  --kb-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro SC", "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+  --kb-font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
 }
 
 .kb-status { display: inline-flex; align-items: center; gap: var(--kb-space-2); }
@@ -30,14 +50,14 @@
 .kb-status[data-state="warning"] { color: var(--kb-warning); }
 .kb-status[data-state="error"] { color: var(--kb-error); }
 .kb-loading { color: var(--kb-text-muted); }
-.kb-empty { padding: var(--kb-space-5); color: var(--kb-text-muted); text-align: center; border: 1px dashed var(--kb-border); border-radius: var(--kb-radius-md); }
-.kb-error { padding: var(--kb-space-3) var(--kb-space-4); color: var(--kb-error); background: #fdf0ef; border-radius: var(--kb-radius-md); }
-.kb-disabled, [aria-disabled="true"] { cursor: not-allowed; opacity: .6; }
+.kb-empty { padding: var(--kb-space-6) var(--kb-space-5); color: var(--kb-text-muted); text-align: center; background: var(--kb-surface-muted); border-radius: var(--kb-radius-lg); }
+.kb-error { padding: var(--kb-space-3) var(--kb-space-4); color: var(--kb-error); background: var(--kb-error-soft); border-radius: var(--kb-radius-md); }
+.kb-disabled, [aria-disabled="true"] { cursor: not-allowed; opacity: .45; }
 .kb-table-scroll { max-width: 100%; overflow-x: auto; }
 .kb-table-scroll table { min-width: 620px; }
-.kb-dialog { border: 1px solid var(--kb-border); border-radius: var(--kb-radius-lg); box-shadow: var(--kb-shadow); }
-.kb-dialog::backdrop { background: rgb(32 36 44 / 38%); }
-:where(button, input, select, textarea, a):focus-visible { outline: 3px solid var(--kb-focus-ring); outline-offset: 3px; }
+.kb-dialog { border: 0; border-radius: var(--kb-radius-xl); box-shadow: var(--kb-shadow); }
+.kb-dialog::backdrop { background: rgb(0 0 0 / 28%); }
+:where(button, input, select, textarea, a, summary):focus-visible { outline: 3px solid var(--kb-focus-ring); outline-offset: 2px; }
 @media (max-width: 900px) {
   .kb-form-grid { grid-template-columns: 1fr !important; }
   .kb-dialog { width: min(94vw, 640px); }
