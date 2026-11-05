@@ -40,6 +40,7 @@ const responses = {
     answer: "资料记录了检索笔记；另外按通用知识补充一点。",
     claims: [
       { text: "资料记录了检索笔记。", citation_ids: [citation.citation_id], kind: "cited" },
+      { text: "你刚才说只关心中文资料。", citation_ids: [], kind: "current_conversation" },
       { text: "向量召回适合语义相近的问题。", citation_ids: [], kind: "general_knowledge" },
     ],
     citations: [citation],
@@ -94,7 +95,7 @@ const responses = {
     evidence.insufficient = empty;
 
     const mixed = await ask("mixed", "资料和通用知识都涉及的问题");
-    assert.deepEqual(mixed.claims.map((claim) => claim.label), ["正式知识", "通用知识"]);
+    assert.deepEqual(mixed.claims.map((claim) => claim.label), ["正式知识", "当前对话", "通用知识"]);
     assert(!mixed.answer.startsWith(notice), mixed.answer);
     assert.equal(await page.locator("#citations li").count(), 1);
     await page.screenshot({ path: path.join(output, "mixed-claim-sources.png"), fullPage: true });
@@ -105,6 +106,7 @@ const responses = {
       "an answer with nothing relevant in the knowledge base opens by saying so",
       "uncited claims are labelled as general knowledge",
       "cited claims are labelled with their source beside general knowledge",
+      "claims from the current conversation are labelled as such",
     ], evidence, browserErrors }, null, 2));
   } catch (error) {
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "failed", evidence,

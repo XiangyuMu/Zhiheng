@@ -183,8 +183,7 @@ function renderAnswer(response, query) {
   $("research-start").hidden = true;
   $("asked-question").textContent = query;
   const claims = response.claims || [];
-  const generalOnly = claims.length > 0 && claims.every((claim) => claim.kind === "general_knowledge");
-  $("route").textContent = response.citations?.length ? "基于你的资料" : generalOnly ? "基于通用知识" : "还需要更多依据";
+  $("route").textContent = response.citations?.length ? "基于你的资料" : uncitedRoute(claims) || "还需要更多依据";
   $("stop-reason").textContent = stopNames[response.stop_reason] || "请核对证据";
   $("answer").textContent = response.answer || "现有资料还不足以回答这个问题。";
   const issues = [...(response.conflicts || []), ...(response.insufficiencies || [])];
@@ -203,8 +202,17 @@ function renderAnswer(response, query) {
   if (state.contextPrompts.length) openContextPrompt(state.contextPrompts[0]);
 }
 
-function claimSourceLabel(claim, citationsById) {
-  if (claim.kind === "general_knowledge") return "通用知识";
+// Claims of these kinds carry no citations; each names where it came from.
+const uncitedClaimSources = {
+  current_conversation: { label: "当前对话", badge: "badge" },
+  general_knowledge: { label: "通用知识", badge: "badge warning" },
+};
+function uncitedRoute(claims) {
+  const kinds = new Set(claims.map((claim) => claim.kind));
+  if (!claims.length || [...kinds].some((kind) => !uncitedClaimSources[kind])) return "";
+  return `基于${Object.keys(uncitedClaimSources).filter((kind) => kinds.has(kind)).map((kind) => uncitedClaimSources[kind].label).join("和")}`;
+}
+function citedClaimLabel(claim, citationsById) {
   const sources = new Set((claim.citation_ids || []).map((id) => citationsById.get(id)?.source_type === "event_memory" ? "个人记忆" : "正式知识"));
   return ["正式知识", "个人记忆"].filter((label) => sources.has(label)).join(" · ") || "正式知识";
 }
@@ -212,9 +220,9 @@ function renderClaims(claims, citations) {
   const citationsById = new Map(citations.map((citation) => [citation.citation_id, citation]));
   $("claims-section").hidden = !claims.length;
   $("answer-claims").replaceChildren(...claims.map((claim) => {
-    const label = claimSourceLabel(claim, citationsById);
-    const item = node("li", undefined, claim.kind === "general_knowledge" ? "claim general-knowledge" : "claim");
-    item.append(node("span", label, "badge"), node("span", claim.text));
+    const uncited = uncitedClaimSources[claim.kind];
+    const item = node("li");
+    item.append(node("span", uncited ? uncited.label : citedClaimLabel(claim, citationsById), uncited ? uncited.badge : "badge"), node("span", claim.text));
     return item;
   }));
 }

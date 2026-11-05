@@ -1394,9 +1394,11 @@ class EvidenceBoundAnswerModel:
             else ()
         )
         if not citations:
+            # The answer service opens this with the knowledge-base notice.
             return GeneratedAnswer(
-                answer="知识库中没有足够的已授权证据支撑回答。",
+                answer="当前为证据摘录模式，未调用回答模型，没有通用知识补充。",
                 claims=(),
+                answerability="insufficient",
                 insufficiencies=("知识库中没有足够的已授权证据支撑回答。",),
             )
         authorized_items = getattr(manifest, "chu" + "nks")

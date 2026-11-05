@@ -875,3 +875,43 @@ def test_gateway_negative_existence_guard_keeps_general_knowledge_claims() -> No
     guarded = _guard_negative_existence_response("这些材料是否给出作者的银行账户号码？", result)
     assert guarded.answerability == "insufficient"
     assert [claim.text for claim in guarded.claims] == ["银行账户通常不公开"]
+
+
+def test_gateway_answer_parser_accepts_current_conversation_claims_with_context() -> None:
+    citation = _citation_for(_chunk())
+    result = _parse_generated_answer(
+        _answer_json(
+            answerability="insufficient",
+            claims=[
+                {"text": "你刚才说预算有限", "citation_ids": [], "kind": "current_conversation"}
+            ],
+        ),
+        citations=(citation,),
+        memory_context=None,
+        max_output_tokens=None,
+        has_conversation_context=True,
+    )
+    assert [claim.kind for claim in result.claims] == ["current_conversation"]
+
+
+@pytest.mark.parametrize(
+    ("citation_ids", "has_conversation_context"),
+    [([], False), (["CITATION"], True)],
+)
+def test_gateway_answer_parser_rejects_unbacked_current_conversation_claims(
+    citation_ids: list[str], has_conversation_context: bool
+) -> None:
+    citation = _citation_for(_chunk())
+    claim = {
+        "text": "你刚才说预算有限",
+        "citation_ids": [citation.citation_id for _ in citation_ids],
+        "kind": "current_conversation",
+    }
+    with pytest.raises(ValueError):
+        _parse_generated_answer(
+            _answer_json(answerability="supported", claims=[claim]),
+            citations=(citation,),
+            memory_context=None,
+            max_output_tokens=None,
+            has_conversation_context=has_conversation_context,
+        )

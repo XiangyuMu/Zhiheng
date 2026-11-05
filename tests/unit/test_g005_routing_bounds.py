@@ -97,7 +97,10 @@ class _Model:
         self.max_output_tokens_seen.append(max_output_tokens)
         return GeneratedAnswer(
             answer=self.answer,
-            claims=(AnswerClaim("正式知识库证据", (citations[0].citation_id,)),),
+            claims=(
+                (AnswerClaim("正式知识库证据", (citations[0].citation_id,)),) if citations else ()
+            ),
+            answerability="supported" if citations else "insufficient",
             output_tokens=self.output_tokens,
         )
 

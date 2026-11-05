@@ -49,7 +49,8 @@ class _AnswerJsonTransport:
                 response_hash=sha256_text(payload.text),
             )
         prompt = json.loads(payload.text)
-        citation_id = prompt["KNOWLEDGE_EVIDENCE"][0]["citation_ids"][0]
+        evidence = prompt["KNOWLEDGE_EVIDENCE"]
+        citation_id = evidence[0]["citation_ids"][0] if evidence else None
         memory_ref_ids = [
             entry["provenance"]["memory_ref_id"]
             for entry in prompt["USER_CONFIRMED_CONTEXT"]["entries"]
@@ -64,7 +65,7 @@ class _AnswerJsonTransport:
             "output_tokens": 8,
             "personalization_refs": memory_ref_ids,
         }
-        if self.evidence_insufficient:
+        if self.evidence_insufficient or citation_id is None:
             response.update(
                 answer="材料未提供答案，证据不足。",
                 answerability="insufficient",
@@ -227,6 +228,37 @@ def test_answer_api_labels_general_knowledge_when_knowledge_base_has_nothing_rel
     assert payload["claims"] == [
         {
             "text": "检索系统通常结合关键词和向量召回。",
+            "citation_ids": [],
+            "kind": "general_knowledge",
+        }
+    ]
+    assert payload["citations"] == []
+
+
+def test_answer_api_with_an_empty_knowledge_base_still_answers_from_general_knowledge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "secret-value")
+    client, session_factory, transport = _gateway_client(tmp_path, external_models_enabled=True)
+    transport.general_knowledge_claims = ["一般而言，全文检索依赖倒排索引。"]
+    csrf = _login(client)
+    with session_scope(session_factory) as session:
+        _insert_provider(session)
+
+    response = client.post(
+        "/v1/answers",
+        json={"query": "全文检索如何工作"},
+        headers=_headers(csrf, "answer-gateway-empty-knowledge-base"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert json.loads(transport.calls[0])["KNOWLEDGE_EVIDENCE"] == []
+    assert payload["answer"].startswith("知识库中没有与这个问题相关的内容。")
+    assert payload["claims"] == [
+        {
+            "text": "一般而言，全文检索依赖倒排索引。",
             "citation_ids": [],
             "kind": "general_knowledge",
         }

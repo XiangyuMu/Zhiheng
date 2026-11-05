@@ -185,6 +185,18 @@ class BoundedAgenticRagService:
                 context_chunks=len(result.manifest.chunks),
                 wall_clock_ms=0,
             )
+            if not result.manifest.chunks:
+                return self._answer_without_evidence(
+                    session,
+                    query=query,
+                    route=route,
+                    usage=usage,
+                    stop_reason=StopReason.COMPLETED,
+                    release_context=release_context,
+                    retrieval_run_ids=(result.run_id,),
+                    memory_context=memory_context,
+                    conversation_context=conversation_context,
+                )
             citations = _citations_for_manifest(result.manifest)
             return self._answer_from_manifest(
                 session,
@@ -294,6 +306,18 @@ class BoundedAgenticRagService:
                     break
             if not round_added:
                 stop_reason = StopReason.NO_NEW_AUTHORIZED_EVIDENCE
+                if not evidence:
+                    return self._answer_without_evidence(
+                        session,
+                        query=query,
+                        route=route,
+                        usage=_with_elapsed(usage, started),
+                        stop_reason=stop_reason,
+                        release_context=release_context,
+                        retrieval_run_ids=tuple(retrieval_run_ids),
+                        memory_context=memory_context,
+                        conversation_context=conversation_context,
+                    )
                 return self._final_evidence_only(
                     session,
                     manifest=_combined_manifest(
@@ -317,13 +341,16 @@ class BoundedAgenticRagService:
             limit=self._budget.max_context_chunks,
         )
         if combined_manifest is None:
-            return _evidence_only(
-                manifest=None,
+            return self._answer_without_evidence(
+                session,
+                query=query,
                 route=route,
                 usage=_with_elapsed(usage, started),
                 stop_reason=stop_reason,
                 release_context=release_context,
                 retrieval_run_ids=tuple(retrieval_run_ids),
+                memory_context=memory_context,
+                conversation_context=conversation_context,
             )
         return self._answer_from_manifest(
             session,
@@ -337,6 +364,41 @@ class BoundedAgenticRagService:
             memory_context=memory_context,
             conversation_context=conversation_context,
         )
+
+    def _answer_without_evidence(
+        self,
+        session: Session,
+        *,
+        query: str,
+        route: QueryRoute,
+        usage: BudgetUsage,
+        stop_reason: StopReason,
+        release_context: ReleaseContext | None,
+        retrieval_run_ids: tuple[str, ...],
+        memory_context: MemoryContextSnapshot | None,
+        conversation_context: Sequence[Mapping[str, str]] | None,
+    ) -> AnswerEnvelope:
+        """Answer from general knowledge when nothing in the knowledge base matched.
+
+        The model sees no evidence, so it can only make uncited general-knowledge
+        claims.  A completed answer takes the caller's stop reason, so the agentic
+        route still reports to learning that retrieval found nothing.
+        """
+        envelope = self._answer_from_manifest(
+            session,
+            query=query,
+            manifest=RetrievalAuthorizer().seal_manifest(query_hash=sha256_text(query), chunks=()),
+            citations=(),
+            usage=usage,
+            route=route,
+            release_context=release_context,
+            retrieval_run_ids=retrieval_run_ids,
+            memory_context=memory_context,
+            conversation_context=conversation_context,
+        )
+        if envelope.stop_reason is StopReason.COMPLETED:
+            envelope = replace(envelope, stop_reason=stop_reason)
+        return replace(envelope, answer=_with_empty_notice(envelope.answer))
 
     def answer_from_manifest(
         self,
@@ -552,7 +614,12 @@ class BoundedAgenticRagService:
                 retrieval_run_ids=retrieval_run_ids,
             )
         allowed_citation_ids = {citation.citation_id for citation in citations}
-        if any(not claim.citations_valid(allowed_citation_ids) for claim in generated.claims):
+        if any(
+            not claim.citations_valid(
+                allowed_citation_ids, has_conversation_context=bool(conversation_context)
+            )
+            for claim in generated.claims
+        ):
             return self._final_evidence_only(
                 session,
                 manifest=manifest,
@@ -593,16 +660,13 @@ class BoundedAgenticRagService:
         # query/answer phrases.
         insufficient = generated.answerability == "insufficient"
         published_claims = (
-            tuple(claim for claim in generated.claims if claim.kind == "general_knowledge")
+            tuple(claim for claim in generated.claims if not claim.cites_evidence)
             if insufficient
             else generated.claims
         )
         cited_ids = {key for claim in published_claims for key in claim.citation_ids}
-        answer = generated.answer
-        if insufficient and not answer.startswith(KNOWLEDGE_BASE_EMPTY_NOTICE):
-            answer = KNOWLEDGE_BASE_EMPTY_NOTICE + answer
         return AnswerEnvelope(
-            answer=answer,
+            answer=_with_empty_notice(generated.answer) if insufficient else generated.answer,
             claims=published_claims,
             citations=tuple(
                 citation for citation in citations if citation.citation_id in cited_ids
@@ -622,6 +686,12 @@ class BoundedAgenticRagService:
             model_provider_id=generated.model_provider_id,
             model_id=generated.model_id,
         )
+
+
+def _with_empty_notice(answer: str) -> str:
+    if answer.startswith(KNOWLEDGE_BASE_EMPTY_NOTICE):
+        return answer
+    return KNOWLEDGE_BASE_EMPTY_NOTICE + answer
 
 
 def _combined_manifest(
