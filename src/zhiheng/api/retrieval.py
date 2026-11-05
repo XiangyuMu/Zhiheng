@@ -51,7 +51,7 @@ from zhiheng.query import (
     StructuredLookupResult,
 )
 from zhiheng.query.conflicts import explicit_constraint_conflicts
-from zhiheng.query.contracts import AnswerEnvelope, PersonalizationRef
+from zhiheng.query.contracts import AnswerEnvelope, ClaimKind, PersonalizationRef
 from zhiheng.query.conversations import ConversationRepository
 from zhiheng.retrieval import (
     Citation,
@@ -105,6 +105,7 @@ class ClaimPayload(BaseModel):
 
     text: str
     citation_ids: list[str]
+    kind: ClaimKind = "cited"
 
 
 class CitationPayload(BaseModel):
@@ -1334,7 +1335,7 @@ def _validate_replayed_personalization_refs(
 
 
 def _claim_payload(claim: AnswerClaim) -> ClaimPayload:
-    return ClaimPayload(text=claim.text, citation_ids=list(claim.citation_ids))
+    return ClaimPayload(text=claim.text, citation_ids=list(claim.citation_ids), kind=claim.kind)
 
 
 def _citation_payload(citation: Citation) -> CitationPayload:
@@ -1393,9 +1394,11 @@ class EvidenceBoundAnswerModel:
             else ()
         )
         if not citations:
+            # The answer service opens this with the knowledge-base notice.
             return GeneratedAnswer(
-                answer="知识库中没有足够的已授权证据支撑回答。",
+                answer="当前为证据摘录模式，未调用回答模型，没有通用知识补充。",
                 claims=(),
+                answerability="insufficient",
                 insufficiencies=("知识库中没有足够的已授权证据支撑回答。",),
             )
         authorized_items = getattr(manifest, "chu" + "nks")

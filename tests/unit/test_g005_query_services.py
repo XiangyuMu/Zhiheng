@@ -139,6 +139,8 @@ class _Model:
         insufficiencies: tuple[str, ...] = (),
         answerability: Literal["supported", "mixed", "insufficient"] = "supported",
         include_claims: bool = True,
+        extra_claims: tuple[AnswerClaim, ...] = (),
+        general_claims_cite_evidence: bool = False,
         output_tokens: int = 7,
     ) -> None:
         self.citation_id = citation_id
@@ -147,6 +149,8 @@ class _Model:
         self.insufficiencies = insufficiencies
         self.answerability = answerability
         self.include_claims = include_claims
+        self.extra_claims = extra_claims
+        self.general_claims_cite_evidence = general_claims_cite_evidence
         self.output_tokens = output_tokens
         self.calls = 0
         self.manifests: list[AuthorizedContextManifest] = []
@@ -172,14 +176,20 @@ class _Model:
         self.conversation_context_seen.append(conversation_context)
         if self.fail is not None:
             raise self.fail
-        citation_id = self.citation_id or citations[0].citation_id
+        citation_id = self.citation_id or (citations[0].citation_id if citations else "")
+        extra_claims = (
+            tuple(replace(claim, citation_ids=(citation_id,)) for claim in self.extra_claims)
+            if self.general_claims_cite_evidence
+            else self.extra_claims
+        )
         return GeneratedAnswer(
             answer=self.answer,
             claims=(
                 (AnswerClaim(text="正式知识库证据", citation_ids=(citation_id,)),)
-                if self.include_claims
+                if self.include_claims and citation_id
                 else ()
-            ),
+            )
+            + extra_claims,
             insufficiencies=self.insufficiencies,
             answerability=self.answerability,
             output_tokens=self.output_tokens,
@@ -600,6 +610,176 @@ def test_partial_insufficiency_keeps_supported_claims_and_citations() -> None:
     assert answer.claims
     assert answer.citations
     assert answer.insufficiencies == ("另一部分没有授权证据支持。",)
+
+
+def _general(text: str = "通用常识") -> AnswerClaim:
+    return AnswerClaim(text=text, citation_ids=(), kind="general_knowledge")
+
+
+def _hybrid_service(model: _Model) -> BoundedAgenticRagService:
+    return BoundedAgenticRagService(
+        structured_lookup=_Lookup(),
+        hybrid_retrieval=_Hybrid([_manifest()]),
+        evidence_verifier=_Verifier(),
+        model_gateway=model,
+    )
+
+
+def test_insufficient_answer_opens_with_knowledge_base_notice_and_keeps_general_knowledge() -> None:
+    model = _Model(
+        answer="一般来说可以这样理解。",
+        answerability="insufficient",
+        extra_claims=(_general(),),
+    )
+
+    answer = _hybrid_service(model).answer(
+        QuerySessionStub(),  # type: ignore[arg-type]
+        "query",
+        route=QueryRoute.HYBRID,
+    )
+
+    assert answer.stop_reason is StopReason.COMPLETED
+    assert answer.answer == "知识库中没有与这个问题相关的内容。一般来说可以这样理解。"
+    assert answer.claims == (_general(),)
+    assert answer.citations == ()
+
+
+def test_insufficient_answer_does_not_repeat_knowledge_base_notice() -> None:
+    model = _Model(
+        answer="知识库中没有与这个问题相关的内容。以下是通用知识。",
+        answerability="insufficient",
+        include_claims=False,
+    )
+
+    answer = _hybrid_service(model).answer(
+        QuerySessionStub(),  # type: ignore[arg-type]
+        "query",
+        route=QueryRoute.HYBRID,
+    )
+
+    assert answer.answer == "知识库中没有与这个问题相关的内容。以下是通用知识。"
+
+
+def test_mixed_answer_publishes_general_knowledge_beside_cited_claims() -> None:
+    model = _Model(answerability="mixed", extra_claims=(_general(),))
+
+    answer = _hybrid_service(model).answer(
+        QuerySessionStub(),  # type: ignore[arg-type]
+        "query",
+        route=QueryRoute.HYBRID,
+    )
+
+    assert answer.stop_reason is StopReason.COMPLETED
+    assert [claim.kind for claim in answer.claims] == ["cited", "general_knowledge"]
+    assert {citation.citation_id for citation in answer.citations} == set(
+        answer.claims[0].citation_ids
+    )
+    assert not answer.answer.startswith("知识库中没有")
+
+
+def test_general_knowledge_claim_with_citations_fails_citation_validation() -> None:
+    model = _Model(include_claims=False, general_claims_cite_evidence=True)
+    model.extra_claims = (_general("伪装成通用知识"),)
+
+    answer = _hybrid_service(model).answer(
+        QuerySessionStub(),  # type: ignore[arg-type]
+        "query",
+        route=QueryRoute.HYBRID,
+    )
+
+    assert answer.stop_reason is StopReason.CITATION_VALIDATION_FAILED
+    assert answer.claims == ()
+
+
+def test_current_conversation_claims_need_conversation_context() -> None:
+    claim = AnswerClaim(text="你刚才说预算有限", citation_ids=(), kind="current_conversation")
+
+    with_context = _hybrid_service(_Model(extra_claims=(claim,))).answer(
+        QuerySessionStub(),  # type: ignore[arg-type]
+        "query",
+        route=QueryRoute.HYBRID,
+        conversation_context=({"query": "预算多少", "answer": "你说预算有限"},),
+    )
+    without_context = _hybrid_service(_Model(extra_claims=(claim,))).answer(
+        QuerySessionStub(),  # type: ignore[arg-type]
+        "query",
+        route=QueryRoute.HYBRID,
+    )
+
+    assert with_context.stop_reason is StopReason.COMPLETED
+    assert [item.kind for item in with_context.claims] == ["cited", "current_conversation"]
+    assert without_context.stop_reason is StopReason.CITATION_VALIDATION_FAILED
+
+
+def test_insufficient_answer_keeps_current_conversation_claims() -> None:
+    claim = AnswerClaim(text="你刚才说预算有限", citation_ids=(), kind="current_conversation")
+    model = _Model(answerability="insufficient", extra_claims=(claim, _general()))
+
+    answer = _hybrid_service(model).answer(
+        QuerySessionStub(),  # type: ignore[arg-type]
+        "query",
+        route=QueryRoute.HYBRID,
+        conversation_context=({"query": "预算多少", "answer": "你说预算有限"},),
+    )
+
+    assert answer.claims == (claim, _general())
+    assert answer.citations == ()
+
+
+def _empty_retrieval_service(model: _Model) -> BoundedAgenticRagService:
+    return BoundedAgenticRagService(
+        structured_lookup=_Lookup(),
+        hybrid_retrieval=_Hybrid(
+            [RetrievalAuthorizer().seal_manifest(query_hash="query-hash", chunks=[])]
+        ),
+        evidence_verifier=_Verifier(),
+        model_gateway=model,
+    )
+
+
+@pytest.mark.parametrize(
+    ("route", "stop_reason"),
+    [
+        (QueryRoute.HYBRID, StopReason.COMPLETED),
+        (QueryRoute.AGENTIC, StopReason.NO_NEW_AUTHORIZED_EVIDENCE),
+    ],
+)
+def test_empty_retrieval_answers_from_general_knowledge_behind_the_notice(
+    route: QueryRoute, stop_reason: StopReason
+) -> None:
+    model = _Model(
+        answer="一般来说可以这样理解。",
+        answerability="insufficient",
+        extra_claims=(_general(),),
+    )
+
+    answer = _empty_retrieval_service(model).answer(
+        QuerySessionStub(),  # type: ignore[arg-type]
+        "知识库里没有的问题",
+        route=route,
+    )
+
+    assert model.calls == 1
+    assert model.manifests[0].chunks == ()
+    assert answer.stop_reason is stop_reason
+    assert answer.answer == "知识库中没有与这个问题相关的内容。一般来说可以这样理解。"
+    assert answer.claims == (_general(),)
+    assert answer.citations == ()
+
+
+@pytest.mark.parametrize("route", [QueryRoute.HYBRID, QueryRoute.AGENTIC])
+def test_empty_retrieval_says_so_when_the_model_cannot_answer(route: QueryRoute) -> None:
+    service = _empty_retrieval_service(_Model(fail=PermissionError("external models disabled")))
+
+    answer = service.answer(
+        QuerySessionStub(),  # type: ignore[arg-type]
+        "知识库里没有的问题",
+        route=route,
+    )
+
+    assert answer.stop_reason is StopReason.PRIVACY_DENIED
+    assert answer.answer.startswith("知识库中没有与这个问题相关的内容。")
+    assert answer.claims == ()
 
 
 def test_agentic_service_exposes_no_external_action_ports() -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, get_args, runtime_checkable
 
 from sqlalchemy.orm import Session
 
@@ -33,6 +33,13 @@ class StopReason(StrEnum):
 
 
 Answerability = Literal["supported", "mixed", "insufficient"]
+# ``cited`` claims must cite evidence that took part in the answer.  The other
+# kinds carry no citations: ``current_conversation`` claims come from earlier
+# turns of this conversation, ``general_knowledge`` claims from the model's own
+# knowledge rather than the user's knowledge base.
+ClaimKind = Literal["cited", "current_conversation", "general_knowledge"]
+CLAIM_KINDS: frozenset[str] = frozenset(get_args(ClaimKind))
+KNOWLEDGE_BASE_EMPTY_NOTICE = "知识库中没有与这个问题相关的内容。"
 
 
 class InvalidModelOutputError(ValueError):
@@ -111,6 +118,24 @@ class AgenticBudget:
 class AnswerClaim:
     text: str
     citation_ids: tuple[str, ...]
+    kind: ClaimKind = "cited"
+
+    @property
+    def cites_evidence(self) -> bool:
+        return self.kind == "cited"
+
+    def citations_valid(
+        self, allowed_citation_ids: set[str], *, has_conversation_context: bool
+    ) -> bool:
+        """Cited claims cite only allowed evidence; other kinds cite nothing.
+
+        A current-conversation claim also needs a conversation to come from.
+        """
+        if self.kind == "current_conversation" and not has_conversation_context:
+            return False
+        if not self.cites_evidence:
+            return not self.citation_ids
+        return bool(self.citation_ids) and set(self.citation_ids).issubset(allowed_citation_ids)
 
 
 @dataclass(frozen=True)

@@ -81,6 +81,14 @@ ISSUE109_CHECKS = {
     "original": "the discussed material keeps its text, version and locations",
 }
 
+ISSUE110_CHECKS = {
+    "notice": "an answer with nothing relevant in the knowledge base opens by saying so",
+    "general": "uncited claims are labelled as general knowledge",
+    "sources": "cited claims are labelled with their source beside general knowledge",
+    "conversation": "claims from the current conversation are labelled as such",
+    "narrow": "claim labels fit a narrow viewport",
+}
+
 ISSUE10_CHECKS = {
     "review": (
         "browser review queue covers counts, recovery, stale-version retry, and "
@@ -174,6 +182,18 @@ ANSWER_FAILURE_CASES = {
     "transport_failure": ("model_failed", "provider_error", "failed"),
 }
 
+# Stages whose checks.json must list every scenario label of its issue.
+SCENARIO_CHECKS = {
+    "context_prompts_issue8": ISSUE8_CHECKS,
+    "pending_issue9": ISSUE9_CHECKS,
+    "issue109_provenance": ISSUE109_CHECKS,
+    "issue110_answer_sources": ISSUE110_CHECKS,
+    "issue10_matrix": ISSUE10_CHECKS,
+    "issue14_writes": ISSUE14_CHECKS,
+    "issue11_upgrade": ISSUE11_CHECKS,
+    "issue12_relations": ISSUE12_CHECKS,
+}
+
 EXPECTED_CHECKS = {
     "workspace_full": Path("workspace-full/checks.json"),
     "relations": Path("relations/checks.json"),
@@ -183,6 +203,7 @@ EXPECTED_CHECKS = {
     "context_prompts_issue8": Path("context-prompts-issue8/checks.json"),
     "pending_issue9": Path("pending-issue9/checks.json"),
     "issue109_provenance": Path("issue109-provenance/checks.json"),
+    "issue110_answer_sources": Path("issue110-answer-sources/checks.json"),
     "issue10_matrix": Path("issue10-matrix/checks.json"),
     "issue14_writes": Path("issue14-writes/checks.json"),
     "issue11_upgrade": Path("issue11-upgrade/checks.json"),
@@ -335,6 +356,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     "context_prompts_issue8",
                     "pending_issue9",
                     "issue109_provenance",
+                    "issue110_answer_sources",
                     "issue10_matrix",
                     "issue14_writes",
                     "issue11_upgrade",
@@ -526,67 +548,18 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         )
                         results[name] = result
                         continue
-                if name == "context_prompts_issue8":
-                    required_issue8 = list(ISSUE8_CHECKS.values())
-                    missing_issue8 = [
+                scenario_checks = SCENARIO_CHECKS.get(name)
+                if scenario_checks is not None:
+                    missing_scenarios = [
                         label
-                        for label in required_issue8
+                        for label in scenario_checks.values()
                         if not any(isinstance(item, str) and item == label for item in checks)
                     ]
-                    if missing_issue8:
-                        result["error"] = f"required checks missing: {missing_issue8}"
-                        results[name] = result
-                        continue
-                if name == "pending_issue9":
-                    missing_issue9 = [
-                        label
-                        for label in ISSUE9_CHECKS.values()
-                        if not any(isinstance(item, str) and item == label for item in checks)
-                    ]
-                    if missing_issue9:
-                        result["error"] = f"required checks missing: {missing_issue9}"
-                        results[name] = result
-                        continue
-                if name == "issue109_provenance":
-                    missing_issue109 = [
-                        label
-                        for label in ISSUE109_CHECKS.values()
-                        if not any(isinstance(item, str) and item == label for item in checks)
-                    ]
-                    if missing_issue109:
-                        result["error"] = f"required checks missing: {missing_issue109}"
-                        results[name] = result
-                        continue
-                if name == "issue10_matrix":
-                    missing_issue10 = [
-                        label
-                        for label in ISSUE10_CHECKS.values()
-                        if not any(isinstance(item, str) and item == label for item in checks)
-                    ]
-                    if missing_issue10:
-                        result["error"] = f"required checks missing: {missing_issue10}"
-                        results[name] = result
-                        continue
-                if name == "issue14_writes":
-                    missing_issue14 = [
-                        label
-                        for label in ISSUE14_CHECKS.values()
-                        if not any(isinstance(item, str) and item == label for item in checks)
-                    ]
-                    if missing_issue14:
-                        result["error"] = f"required checks missing: {missing_issue14}"
+                    if missing_scenarios:
+                        result["error"] = f"required checks missing: {missing_scenarios}"
                         results[name] = result
                         continue
                 if name == "issue11_upgrade":
-                    missing_issue11 = [
-                        label
-                        for label in ISSUE11_CHECKS.values()
-                        if not any(isinstance(item, str) and item == label for item in checks)
-                    ]
-                    if missing_issue11:
-                        result["error"] = f"required checks missing: {missing_issue11}"
-                        results[name] = result
-                        continue
                     required_evidence = {
                         "legacy_entry_id",
                         "legacy_source_id",
@@ -602,15 +575,6 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         results[name] = result
                         continue
                 if name == "issue12_relations":
-                    missing_issue12 = [
-                        label
-                        for label in ISSUE12_CHECKS.values()
-                        if not any(isinstance(item, str) and item == label for item in checks)
-                    ]
-                    if missing_issue12:
-                        result["error"] = f"required checks missing: {missing_issue12}"
-                        results[name] = result
-                        continue
                     evidence_payload = payload.get("evidence")
                     if not isinstance(evidence_payload, dict) or any(
                         not isinstance(evidence_payload.get(key), dict) or not evidence_payload[key]
@@ -748,6 +712,7 @@ def main() -> int:
             "node tests/e2e/check_context_prompts_issue8.cjs",
             "node tests/e2e/check_pending_issue9.cjs",
             "node tests/e2e/check_issue109_provenance.cjs",
+            "node tests/e2e/check_issue110_answer_sources.cjs",
             "node tests/e2e/check_issue10_matrix.cjs",
             "node tests/e2e/check_issue14_writes.cjs",
             "node tests/e2e/check_issue11_upgrade.cjs",
@@ -838,6 +803,7 @@ def main() -> int:
                 "and restart",
             ],
             "#109": list(ISSUE109_CHECKS.values()),
+            "#110": list(ISSUE110_CHECKS.values()),
             "#55": [
                 "browser answer failures use a local injected Provider boundary",
                 "invalid model output stops as invalid_model_output with audit metadata",
