@@ -326,6 +326,17 @@ function renderMemoryImpact(response) {
       explanation: ref.explanation || `使用已确认的 ${ref.state_key || "个人上下文"} 调整回答。`,
     }));
   list.replaceChildren();
+  const personalization = response.personalization;
+  if (personalization && !personalization.applied) {
+    const item = node("li", null, "memory-impact-item");
+    item.append(
+      node("strong", "未做个性化"),
+      node("span", `这个问题属于「${personalization.question_domain_name}」，按你的设置没有使用个人记忆。`),
+    );
+    list.append(item);
+    section.hidden = false;
+    return;
+  }
   if (!rows.length) {
     section.hidden = true;
     return;

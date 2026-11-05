@@ -34,6 +34,12 @@ from zhiheng.memory.context import (
     MemoryContextSnapshot,
 )
 from zhiheng.memory.personal_updates import PersonalUpdateService
+from zhiheng.memory.personalization import (
+    PersonalizationDecision,
+    PersonalizationReason,
+    PersonalizationSettings,
+    primary_domain_name,
+)
 from zhiheng.models import ModelGateway
 from zhiheng.models.configuration import defaults as model_defaults
 from zhiheng.models.configuration import embedding_route
@@ -198,6 +204,26 @@ class PersonalizationRefPayload(BaseModel):
     state_key: str
 
 
+class MatchedDomainPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    domain_id: str
+    domain_name: str | None
+    keywords: list[str]
+
+
+class PersonalizationDecisionPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_domain_id: str | None
+    question_domain_name: str | None
+    matched_keywords: list[str]
+    method: str
+    applied: bool
+    reason: PersonalizationReason
+    matched_domains: list[MatchedDomainPayload]
+
+
 class MemoryImpactPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -229,6 +255,10 @@ class AnswerResponse(BaseModel):
         exclude_if=lambda value: not value,
     )
     context_prompts: list[dict[str, Any]] = Field(default_factory=list)
+    personalization: PersonalizationDecisionPayload | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     answer_provider_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
     answer_model_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
     answer_audit_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
@@ -420,6 +450,15 @@ def answer_question(
                 detail="cached answer lacks current authority proof",
             )
         response = AnswerResponse.model_validate(replay["response"])
+        if (
+            response.personalization is not None
+            and response.personalization.applied
+            != PersonalizationSettings().decide(session, payload.query).applied
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="answer personalization setting changed; use a new idempotency key",
+            )
         current_proof = _answer_authority_digest(
             session, request.app, payload, response, user_id=user_id, replay=True
         )
@@ -585,6 +624,9 @@ def _contextual_prompts(
     user_id: str,
     result: AnswerEnvelope | StructuredLookupResult,
 ) -> list[dict[str, Any]]:
+    if not _personalized(result):
+        # Prompts about personal information would put it back into this answer.
+        return []
     service = PersonalUpdateService()
     prompts = service.context_prompts(
         session, query=query, owner_user_id=user_id, include_deferred=True
@@ -603,6 +645,12 @@ def _contextual_prompts(
             )
         )
     return prompts
+
+
+def _personalized(result: AnswerEnvelope | StructuredLookupResult) -> bool:
+    """False when the question's primary domain is excluded from personalization."""
+    decision = getattr(result, "personalization", None)
+    return decision is None or decision.applied
 
 
 def _needs_personal_context(query: str, result: AnswerEnvelope | StructuredLookupResult) -> bool:
@@ -1293,6 +1341,30 @@ def _answer_response(
         ],
         memory_context_digest=result.memory_context_digest,
         memory_impacts=[MemoryImpactPayload(**asdict(item)) for item in result.memory_impacts],
+        personalization=_personalization_payload(result.personalization),
+    )
+
+
+def _personalization_payload(
+    decision: PersonalizationDecision | None,
+) -> PersonalizationDecisionPayload | None:
+    if decision is None:
+        return None
+    return PersonalizationDecisionPayload(
+        question_domain_id=decision.question_domain_id,
+        question_domain_name=decision.question_domain_name,
+        matched_keywords=list(decision.matched_keywords),
+        method=decision.method,
+        applied=decision.applied,
+        reason=decision.reason,
+        matched_domains=[
+            MatchedDomainPayload(
+                domain_id=domain_id,
+                domain_name=primary_domain_name(domain_id),
+                keywords=list(keywords),
+            )
+            for domain_id, keywords in decision.matched_domains
+        ],
     )
 
 

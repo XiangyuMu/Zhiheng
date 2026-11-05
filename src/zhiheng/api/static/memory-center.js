@@ -8,6 +8,7 @@ const API = {
   rollback: (id) => `/v1/memory/items/${encodeURIComponent(id)}/rollback`,
   bulk: "/v1/memory/bulk",
   profilePreview: "/v1/memory/profile-preview",
+  personalization: "/v1/memory/personalization",
   timeline: "/v1/memory/timeline",
   renew: (id) => `/v1/memory/items/${encodeURIComponent(id)}/renew`,
   end: (id) => `/v1/memory/items/${encodeURIComponent(id)}/end`,
@@ -108,6 +109,10 @@ const els = {
   closeDialog: document.querySelector("#close-dialog"),
   cancelEdit: document.querySelector("#cancel-edit"),
   toast: document.querySelector("#toast"),
+  personalizationForm: document.querySelector("#personalization-form"),
+  personalizationDomains: document.querySelector("#personalization-domains"),
+  personalizationStatus: document.querySelector("#personalization-status"),
+  personalizationSave: document.querySelector("#personalization-save"),
   profilePreviewContent: document.querySelector("#profile-preview-content"),
   profilePreviewStatus: document.querySelector("#profile-preview-status"),
   profileTimeline: document.querySelector("#profile-timeline"),
@@ -127,6 +132,7 @@ function init() {
   bindEvents();
   updateViewChrome();
   loadAllViews();
+  loadPersonalization();
 }
 
 function bindEvents() {
@@ -158,6 +164,11 @@ function bindEvents() {
   els.editForm.addEventListener("submit", (event) => {
     event.preventDefault();
     submitEdit();
+  });
+
+  els.personalizationForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    savePersonalization();
   });
 
   els.closeDialog.addEventListener("click", closeDialog);
@@ -293,6 +304,59 @@ function renderTimeline(events, container) {
     if (event.value !== undefined) item.append(el("span", "timeline-value", stringifyValue(event.value)));
     container.append(item);
   });
+}
+
+async function loadPersonalization() {
+  try {
+    renderPersonalization(await fetchJson(API.personalization, { method: "GET" }));
+  } catch (error) {
+    els.personalizationStatus.textContent = `读取设置失败：${readableError(error)}`;
+  }
+}
+
+function renderPersonalization(settings) {
+  state.personalization = settings;
+  const legend = els.personalizationDomains.querySelector("legend");
+  els.personalizationDomains.replaceChildren(legend);
+  settings.domains.forEach((domain) => {
+    const label = el("label");
+    const input = el("input");
+    input.type = "checkbox";
+    input.name = "excluded_domain_ids";
+    input.value = domain.id;
+    input.checked = domain.excluded;
+    label.append(input, el("span", "", domain.name));
+    els.personalizationDomains.append(label);
+  });
+  const count = settings.excluded_domain_ids.length;
+  els.personalizationStatus.textContent = count
+    ? `${count} 个主领域不做个性化`
+    : "所有主领域都会使用个人记忆";
+  els.personalizationSave.disabled = false;
+}
+
+async function savePersonalization() {
+  const excluded = [...els.personalizationDomains.querySelectorAll("input:checked")].map(
+    (input) => input.value,
+  );
+  els.personalizationSave.disabled = true;
+  try {
+    const settings = await mutate(API.personalization, {
+      method: "PUT",
+      body: { excluded_domain_ids: excluded },
+      item: state.personalization,
+    });
+    renderPersonalization(settings);
+    showToast("个性化设置已保存。");
+  } catch (error) {
+    els.personalizationSave.disabled = false;
+    if (error.status === 412) {
+      showToast("设置已在别处修改，已重新读取。");
+      loadPersonalization();
+      return;
+    }
+    handleMutationError(error);
+  }
 }
 
 async function fetchJson(url, options = {}) {

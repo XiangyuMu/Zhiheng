@@ -76,6 +76,14 @@ ISSUE110_CHECKS = [
     "claim labels fit a narrow viewport",
 ]
 
+ISSUE111_CHECKS = [
+    "the memory center lists the fourteen primary domains for personalization",
+    "chosen domains are saved and survive a reload",
+    "chosen domains can be changed later",
+    "an answer in an excluded domain says personal memory was not used",
+    "personalization settings fit a narrow viewport",
+]
+
 ISSUE10_CHECKS = [
     (
         "browser review queue covers counts, recovery, stale-version retry, and "
@@ -188,6 +196,14 @@ def complete_issue109_checks() -> dict[str, object]:
 
 def complete_issue110_checks() -> dict[str, object]:
     return {"checks": ISSUE110_CHECKS, "browserErrors": [], "evidence": {"mixed": {"claims": []}}}
+
+
+def complete_issue111_checks() -> dict[str, object]:
+    return {
+        "checks": ISSUE111_CHECKS,
+        "browserErrors": [],
+        "evidence": {"settings": {"saved": ["medicine_health"]}},
+    }
 
 
 def complete_issue10_checks() -> dict[str, object]:
@@ -439,6 +455,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "pending-issue9/checks.json",
         "issue109-provenance/checks.json",
         "issue110-answer-sources/checks.json",
+        "issue111-personalization/checks.json",
         "issue10-matrix/checks.json",
         "issue14-writes/checks.json",
         "issue11-upgrade/checks.json",
@@ -462,6 +479,8 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             if relative == "issue109-provenance/checks.json"
             else complete_issue110_checks()
             if relative == "issue110-answer-sources/checks.json"
+            else complete_issue111_checks()
+            if relative == "issue111-personalization/checks.json"
             else complete_issue10_checks()
             if relative == "issue10-matrix/checks.json"
             else complete_issue14_checks()
@@ -792,6 +811,14 @@ def test_issue109_provenance_requires_every_scenario(tmp_path: Path) -> None:
     result = reporter().validate_checks(tmp_path)["issue109_provenance"]
     assert result["status"] == "failed"
     assert ISSUE109_CHECKS[3] in result["error"]
+
+
+def test_issue111_personalization_requires_every_scenario(tmp_path: Path) -> None:
+    partial = {**complete_issue111_checks(), "checks": ISSUE111_CHECKS[:-1]}
+    write_checks(tmp_path, "issue111-personalization/checks.json", partial)
+    result = reporter().validate_checks(tmp_path)["issue111_personalization"]
+    assert result["status"] == "failed"
+    assert ISSUE111_CHECKS[-1] in result["error"]
 
 
 def test_issue110_answer_sources_requires_every_scenario(tmp_path: Path) -> None:

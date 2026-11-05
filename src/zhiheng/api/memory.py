@@ -19,6 +19,7 @@ from zhiheng.core.config import Settings
 from zhiheng.core.ids import json_text, new_id, sha256_json
 from zhiheng.db.session import session_scope
 from zhiheng.memory import MemoryCandidateInput, MemoryRepository, MemoryValue
+from zhiheng.memory.personalization import PersonalizationSettings, personalization_etag
 from zhiheng.memory.repository import (
     OperationConflictError,
     StaleConfirmationError,
@@ -31,6 +32,7 @@ CSRF_COOKIE = "zhiheng_csrf"
 
 router = APIRouter()
 repository = MemoryRepository()
+personalization_settings = PersonalizationSettings()
 session_service = SessionService()
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -157,6 +159,12 @@ class BatchPayload(BaseModel):
 
 class ItemsResponse(BaseModel):
     items: list[dict[str, Any]]
+
+
+class PersonalizationSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    excluded_domain_ids: list[str] = Field(max_length=64)
 
 
 class MutationResponse(BaseModel):
@@ -328,6 +336,34 @@ def l0_context(session: SessionDep, _user_id: AuthDep) -> dict[str, dict[str, An
 @router.get("/v1/memory/context/l1")
 def l1_context(session: SessionDep, _user_id: AuthDep, prefix: str) -> dict[str, dict[str, Any]]:
     return repository.l1_context(session, prefix=prefix)
+
+
+@router.get("/v1/memory/personalization")
+def personalization(session: SessionDep, _user_id: AuthDep) -> dict[str, Any]:
+    return personalization_settings.payload(session)
+
+
+@router.put("/v1/memory/personalization")
+def update_personalization(
+    payload: PersonalizationSettingsPayload,
+    session: SessionDep,
+    mutation: MutationDep,
+) -> dict[str, Any]:
+    _idempotency_key, if_match = mutation
+    current = personalization_settings.excluded_domain_ids(session)
+    # Saving the setting that is already stored is a no-op, so a retried save succeeds.
+    if current == frozenset(payload.excluded_domain_ids):
+        return personalization_settings.payload(session)
+    if if_match != personalization_etag(current):
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail="personalization settings changed",
+        )
+    try:
+        personalization_settings.replace_excluded_domain_ids(session, payload.excluded_domain_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return personalization_settings.payload(session)
 
 
 @router.get("/v1/memory/profile-preview")

@@ -89,6 +89,14 @@ ISSUE110_CHECKS = {
     "narrow": "claim labels fit a narrow viewport",
 }
 
+ISSUE111_CHECKS = {
+    "domains": "the memory center lists the fourteen primary domains for personalization",
+    "saved": "chosen domains are saved and survive a reload",
+    "changed": "chosen domains can be changed later",
+    "answer": "an answer in an excluded domain says personal memory was not used",
+    "narrow": "personalization settings fit a narrow viewport",
+}
+
 ISSUE10_CHECKS = {
     "review": (
         "browser review queue covers counts, recovery, stale-version retry, and "
@@ -188,6 +196,7 @@ SCENARIO_CHECKS = {
     "pending_issue9": ISSUE9_CHECKS,
     "issue109_provenance": ISSUE109_CHECKS,
     "issue110_answer_sources": ISSUE110_CHECKS,
+    "issue111_personalization": ISSUE111_CHECKS,
     "issue10_matrix": ISSUE10_CHECKS,
     "issue14_writes": ISSUE14_CHECKS,
     "issue11_upgrade": ISSUE11_CHECKS,
@@ -204,6 +213,7 @@ EXPECTED_CHECKS = {
     "pending_issue9": Path("pending-issue9/checks.json"),
     "issue109_provenance": Path("issue109-provenance/checks.json"),
     "issue110_answer_sources": Path("issue110-answer-sources/checks.json"),
+    "issue111_personalization": Path("issue111-personalization/checks.json"),
     "issue10_matrix": Path("issue10-matrix/checks.json"),
     "issue14_writes": Path("issue14-writes/checks.json"),
     "issue11_upgrade": Path("issue11-upgrade/checks.json"),
@@ -357,6 +367,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     "pending_issue9",
                     "issue109_provenance",
                     "issue110_answer_sources",
+                    "issue111_personalization",
                     "issue10_matrix",
                     "issue14_writes",
                     "issue11_upgrade",
@@ -713,6 +724,7 @@ def main() -> int:
             "node tests/e2e/check_pending_issue9.cjs",
             "node tests/e2e/check_issue109_provenance.cjs",
             "node tests/e2e/check_issue110_answer_sources.cjs",
+            "node tests/e2e/check_issue111_personalization.cjs",
             "node tests/e2e/check_issue10_matrix.cjs",
             "node tests/e2e/check_issue14_writes.cjs",
             "node tests/e2e/check_issue11_upgrade.cjs",
@@ -804,6 +816,7 @@ def main() -> int:
             ],
             "#109": list(ISSUE109_CHECKS.values()),
             "#110": list(ISSUE110_CHECKS.values()),
+            "#111": list(ISSUE111_CHECKS.values()),
             "#55": [
                 "browser answer failures use a local injected Provider boundary",
                 "invalid model output stops as invalid_model_output with audit metadata",

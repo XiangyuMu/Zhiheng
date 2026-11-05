@@ -21,6 +21,7 @@ from zhiheng.evolution.releases import ReleaseContext, ReleaseController
 from zhiheng.evolution.trajectories import TrajectoryEnvelopeV1
 from zhiheng.evolution.trajectory_repository import TrajectoryRepository
 from zhiheng.memory.context import MemoryContextService
+from zhiheng.memory.personalization import PersonalizationSettings
 from zhiheng.query.agentic import BoundedAgenticRagService
 from zhiheng.query.contracts import (
     AnswerEnvelope,
@@ -48,6 +49,7 @@ class QueryAnswerService:
         deployment_secret: str | None = None,
         memory_context_service: MemoryContextService | None = None,
         learning_loop_service: object | None = None,
+        personalization_settings: PersonalizationSettings | None = None,
     ) -> None:
         self._router = router
         self._structured_lookup = structured_lookup
@@ -56,6 +58,7 @@ class QueryAnswerService:
         self._deployment_secret = deployment_secret
         self._memory_context_service = memory_context_service or MemoryContextService()
         self._learning_loop_service = learning_loop_service
+        self._personalization_settings = personalization_settings or PersonalizationSettings()
 
     def answer(
         self,
@@ -107,22 +110,30 @@ class QueryAnswerService:
                     release_degraded_reasons=release.degraded_reasons,
                 )
             else:
-                memory_context = self._memory_context_service.load(
-                    session,
-                    query_hash=query_hash,
-                    topic_prefix=memory_topic_prefix,
-                    query=query,
-                    intent=intent,
+                personalization = self._personalization_settings.decide(session, query)
+                memory_context = (
+                    self._memory_context_service.load(
+                        session,
+                        query_hash=query_hash,
+                        topic_prefix=memory_topic_prefix,
+                        query=query,
+                        intent=intent,
+                    )
+                    if personalization.applied
+                    else None
                 )
                 session.commit()
-                result = self._rag.answer(
-                    session,
-                    query,
-                    route=decision.route,
-                    release_context=release.context,
-                    behavior=release.behavior,
-                    memory_context=memory_context,
-                    conversation_context=conversation_context,
+                result = replace(
+                    self._rag.answer(
+                        session,
+                        query,
+                        route=decision.route,
+                        release_context=release.context,
+                        behavior=release.behavior,
+                        memory_context=memory_context,
+                        conversation_context=conversation_context,
+                    ),
+                    personalization=personalization,
                 )
         except Exception as exc:
             self._ingest_trajectory(
@@ -264,6 +275,18 @@ class QueryAnswerService:
                     "personalization_refs": [asdict(ref) for ref in result.personalization_refs]
                     if isinstance(result, AnswerEnvelope)
                     else [],
+                    # Matched keywords are query text, which trajectories never keep.
+                    "personalization": {
+                        "question_domain_id": result.personalization.question_domain_id,
+                        "matched_domain_ids": [
+                            domain_id for domain_id, _ in result.personalization.matched_domains
+                        ],
+                        "applied": result.personalization.applied,
+                        "reason": result.personalization.reason,
+                        "method": result.personalization.method,
+                    }
+                    if isinstance(result, AnswerEnvelope) and result.personalization is not None
+                    else None,
                     "release_degraded_reasons": list(release.degraded_reasons),
                     "behavior": {
                         "route_override": release.behavior.route_override.value
