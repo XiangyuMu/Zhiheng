@@ -74,6 +74,13 @@ ISSUE9_CHECKS = {
     "close": "closing review without an action does not approve the draft",
 }
 
+ISSUE109_CHECKS = {
+    "origin": "drafts from one turn show whether the user or the assistant said them",
+    "review": "an assistant-output draft is approved on its own and links the cited original",
+    "basis": "formal knowledge resting only on assistant reasoning says so in its detail",
+    "original": "the discussed material keeps its text, version and locations",
+}
+
 ISSUE10_CHECKS = {
     "review": (
         "browser review queue covers counts, recovery, stale-version retry, and "
@@ -175,6 +182,7 @@ EXPECTED_CHECKS = {
     "import_failures": Path("import-failures/checks.json"),
     "context_prompts_issue8": Path("context-prompts-issue8/checks.json"),
     "pending_issue9": Path("pending-issue9/checks.json"),
+    "issue109_provenance": Path("issue109-provenance/checks.json"),
     "issue10_matrix": Path("issue10-matrix/checks.json"),
     "issue14_writes": Path("issue14-writes/checks.json"),
     "issue11_upgrade": Path("issue11-upgrade/checks.json"),
@@ -326,6 +334,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     "qualification",
                     "context_prompts_issue8",
                     "pending_issue9",
+                    "issue109_provenance",
                     "issue10_matrix",
                     "issue14_writes",
                     "issue11_upgrade",
@@ -538,6 +547,16 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         result["error"] = f"required checks missing: {missing_issue9}"
                         results[name] = result
                         continue
+                if name == "issue109_provenance":
+                    missing_issue109 = [
+                        label
+                        for label in ISSUE109_CHECKS.values()
+                        if not any(isinstance(item, str) and item == label for item in checks)
+                    ]
+                    if missing_issue109:
+                        result["error"] = f"required checks missing: {missing_issue109}"
+                        results[name] = result
+                        continue
                 if name == "issue10_matrix":
                     missing_issue10 = [
                         label
@@ -728,6 +747,7 @@ def main() -> int:
             "node tests/e2e/check_qualification.cjs",
             "node tests/e2e/check_context_prompts_issue8.cjs",
             "node tests/e2e/check_pending_issue9.cjs",
+            "node tests/e2e/check_issue109_provenance.cjs",
             "node tests/e2e/check_issue10_matrix.cjs",
             "node tests/e2e/check_issue14_writes.cjs",
             "node tests/e2e/check_issue11_upgrade.cjs",
@@ -817,6 +837,7 @@ def main() -> int:
                 "Provider remains unavailable after tamper, then recovers after key re-entry "
                 "and restart",
             ],
+            "#109": list(ISSUE109_CHECKS.values()),
             "#55": [
                 "browser answer failures use a local injected Provider boundary",
                 "invalid model output stops as invalid_model_output with audit metadata",
