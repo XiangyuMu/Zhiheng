@@ -46,6 +46,23 @@
             </div>
           </section>
 
+          <section class="personalization-settings panel" aria-labelledby="personalization-title">
+            <div>
+              <p class="eyebrow">个性化范围</p>
+              <h2 id="personalization-title">不做个性化的主领域</h2>
+              <p>这些领域的问题回答时不使用任何个人记忆；你在其中说到的个人情况仍会照常被记住。</p>
+            </div>
+            <form class="personalization-form" id="personalization-form">
+              <fieldset class="personalization-domains" id="personalization-domains">
+                <legend class="sr-only">主领域</legend>
+              </fieldset>
+              <div class="personalization-actions">
+                <span class="muted" id="personalization-status" role="status">正在读取设置...</span>
+                <button type="submit" id="personalization-save" disabled>保存设置</button>
+              </div>
+            </form>
+          </section>
+
           <section class="toolbar" aria-label="记忆视图">
             <div class="tablist" role="tablist" aria-label="记忆分类">
               <button class="tab is-active" id="tab-candidates" role="tab" aria-selected="true" aria-controls="panel-candidates" data-view="candidates">

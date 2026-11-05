@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from zhiheng.evolution.releases import ReleaseContext
 from zhiheng.memory.context import MemoryContextSnapshot
+from zhiheng.memory.personalization import PersonalizationDecision
 from zhiheng.retrieval.contracts import (
     AuthorizedContextManifest,
     Citation,
@@ -178,6 +179,7 @@ class AnswerEnvelope:
     model_provider_id: str | None = None
     model_id: str | None = None
     model_safety_reason_code: str | None = None
+    personalization: PersonalizationDecision | None = None
 
 
 @dataclass(frozen=True)

@@ -139,7 +139,7 @@ def test_gateway_answer_model_uses_privacy_pipeline_and_strict_scope(
     assert result.claims[0].citation_ids == (citation.citation_id,)
     assert result.personalization_refs == (expected_ref,)
     payload = json.loads(transport.calls[0])
-    assert payload["prompt_version"] == "gateway-answer-model-v6"
+    assert payload["prompt_version"] == "gateway-answer-model-v7"
     assert (
         "Put unsupported or partially unsupported parts of the question in insufficiencies."
         in (payload["ASSUMPTIONS"])
@@ -147,6 +147,12 @@ def test_gateway_answer_model_uses_privacy_pipeline_and_strict_scope(
     assert (
         "Do not omit supported claims because another part of the question is unsupported."
         in (payload["ASSUMPTIONS"])
+    )
+    assert (
+        "Use USER_CONFIRMED_CONTEXT only to adjust advice, plans and applicability "
+        "conditions. It never changes whether a factual statement is true or false: the "
+        "same factual question gets the same factual judgment whatever the user's "
+        "personal information." in payload["ASSUMPTIONS"]
     )
     assert payload["user_query"] == "总结 [REDACTED_EMAIL_ADDRESS] 的论文"
     assert payload["KNOWLEDGE_EVIDENCE"][0]["text"] == (
