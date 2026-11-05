@@ -73,6 +73,7 @@ ISSUE110_CHECKS = [
     "uncited claims are labelled as general knowledge",
     "cited claims are labelled with their source beside general knowledge",
     "claims from the current conversation are labelled as such",
+    "claim labels fit a narrow viewport",
 ]
 
 ISSUE10_CHECKS = [
@@ -794,8 +795,8 @@ def test_issue109_provenance_requires_every_scenario(tmp_path: Path) -> None:
 
 
 def test_issue110_answer_sources_requires_every_scenario(tmp_path: Path) -> None:
-    partial = {**complete_issue110_checks(), "checks": ISSUE110_CHECKS[:3]}
+    partial = {**complete_issue110_checks(), "checks": ISSUE110_CHECKS[:-1]}
     write_checks(tmp_path, "issue110-answer-sources/checks.json", partial)
     result = reporter().validate_checks(tmp_path)["issue110_answer_sources"]
     assert result["status"] == "failed"
-    assert ISSUE110_CHECKS[3] in result["error"]
+    assert ISSUE110_CHECKS[-1] in result["error"]

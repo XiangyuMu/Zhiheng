@@ -86,6 +86,7 @@ ISSUE110_CHECKS = {
     "general": "uncited claims are labelled as general knowledge",
     "sources": "cited claims are labelled with their source beside general knowledge",
     "conversation": "claims from the current conversation are labelled as such",
+    "narrow": "claim labels fit a narrow viewport",
 }
 
 ISSUE10_CHECKS = {

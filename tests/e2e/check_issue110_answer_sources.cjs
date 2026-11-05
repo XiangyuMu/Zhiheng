@@ -41,7 +41,7 @@ const responses = {
     claims: [
       { text: "资料记录了检索笔记。", citation_ids: [citation.citation_id], kind: "cited" },
       { text: "你刚才说只关心中文资料。", citation_ids: [], kind: "current_conversation" },
-      { text: "向量召回适合语义相近的问题。", citation_ids: [], kind: "general_knowledge" },
+      { text: "向量召回适合语义相近的问题。<script>window.untrustedRan=true</script>", citation_ids: [], kind: "general_knowledge" },
     ],
     citations: [citation],
   }),
@@ -101,12 +101,18 @@ const responses = {
     await page.screenshot({ path: path.join(output, "mixed-claim-sources.png"), fullPage: true });
     evidence.mixed = mixed;
 
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
+      "claim labels must fit a narrow viewport");
+    await page.screenshot({ path: path.join(output, "mixed-claim-sources-mobile.png"), fullPage: true });
+
     assert.deepEqual(browserErrors, []);
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "passed", checks: [
       "an answer with nothing relevant in the knowledge base opens by saying so",
       "uncited claims are labelled as general knowledge",
       "cited claims are labelled with their source beside general knowledge",
       "claims from the current conversation are labelled as such",
+      "claim labels fit a narrow viewport",
     ], evidence, browserErrors }, null, 2));
   } catch (error) {
     fs.writeFileSync(path.join(output, "checks.json"), JSON.stringify({ status: "failed", evidence,

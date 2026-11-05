@@ -209,7 +209,9 @@ summary::marker { color: var(--kb-text-tertiary); }
 .processing-stats { margin-top: 2px; }
 .processing-failure { color: var(--danger) !important; }
 .claim-list li { display: flex; align-items: baseline; gap: 8px; }
+.claim-list { padding-left: 0; list-style: none; }
 .claim-list .badge { flex: none; }
+.claim-list li > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .badge.warning { color: var(--kb-warning); background: var(--kb-warning-soft); }
 .badge.readiness-failed { color: var(--danger); background: var(--kb-error-soft); }
 .processing-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
