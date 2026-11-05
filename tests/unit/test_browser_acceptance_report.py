@@ -68,6 +68,12 @@ ISSUE109_CHECKS = [
     "the discussed material keeps its text, version and locations",
 ]
 
+ISSUE110_CHECKS = [
+    "an answer with nothing relevant in the knowledge base opens by saying so",
+    "uncited claims are labelled as general knowledge",
+    "cited claims are labelled with their source beside general knowledge",
+]
+
 ISSUE10_CHECKS = [
     (
         "browser review queue covers counts, recovery, stale-version retry, and "
@@ -176,6 +182,10 @@ def complete_issue9_checks() -> dict[str, object]:
 
 def complete_issue109_checks() -> dict[str, object]:
     return {"checks": ISSUE109_CHECKS, "browserErrors": [], "evidence": {"drafts": ["draft-1"]}}
+
+
+def complete_issue110_checks() -> dict[str, object]:
+    return {"checks": ISSUE110_CHECKS, "browserErrors": [], "evidence": {"mixed": {"claims": []}}}
 
 
 def complete_issue10_checks() -> dict[str, object]:
@@ -426,6 +436,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "context-prompts-issue8/checks.json",
         "pending-issue9/checks.json",
         "issue109-provenance/checks.json",
+        "issue110-answer-sources/checks.json",
         "issue10-matrix/checks.json",
         "issue14-writes/checks.json",
         "issue11-upgrade/checks.json",
@@ -447,6 +458,8 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             if relative == "pending-issue9/checks.json"
             else complete_issue109_checks()
             if relative == "issue109-provenance/checks.json"
+            else complete_issue110_checks()
+            if relative == "issue110-answer-sources/checks.json"
             else complete_issue10_checks()
             if relative == "issue10-matrix/checks.json"
             else complete_issue14_checks()
@@ -777,3 +790,11 @@ def test_issue109_provenance_requires_every_scenario(tmp_path: Path) -> None:
     result = reporter().validate_checks(tmp_path)["issue109_provenance"]
     assert result["status"] == "failed"
     assert ISSUE109_CHECKS[3] in result["error"]
+
+
+def test_issue110_answer_sources_requires_every_scenario(tmp_path: Path) -> None:
+    partial = {**complete_issue110_checks(), "checks": ISSUE110_CHECKS[:2]}
+    write_checks(tmp_path, "issue110-answer-sources/checks.json", partial)
+    result = reporter().validate_checks(tmp_path)["issue110_answer_sources"]
+    assert result["status"] == "failed"
+    assert ISSUE110_CHECKS[2] in result["error"]

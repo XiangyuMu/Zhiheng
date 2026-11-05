@@ -12,6 +12,7 @@ from zhiheng.core.ids import sha256_text
 from zhiheng.evolution.releases import ReleaseContext
 from zhiheng.memory.context import MemoryContextService, MemoryContextSnapshot
 from zhiheng.query.contracts import (
+    KNOWLEDGE_BASE_EMPTY_NOTICE,
     AgenticBudget,
     AnswerEnvelope,
     AnswerModelPort,
@@ -551,10 +552,7 @@ class BoundedAgenticRagService:
                 retrieval_run_ids=retrieval_run_ids,
             )
         allowed_citation_ids = {citation.citation_id for citation in citations}
-        if any(
-            not claim.citation_ids or not set(claim.citation_ids).issubset(allowed_citation_ids)
-            for claim in generated.claims
-        ):
+        if any(not claim.citations_valid(allowed_citation_ids) for claim in generated.claims):
             return self._final_evidence_only(
                 session,
                 manifest=manifest,
@@ -593,11 +591,18 @@ class BoundedAgenticRagService:
         # the authorized evidence.  This keeps publication decisions based on
         # a typed protocol field rather than guessing from natural-language
         # query/answer phrases.
-        withhold_claims = generated.answerability == "insufficient"
-        published_claims = () if withhold_claims else generated.claims
+        insufficient = generated.answerability == "insufficient"
+        published_claims = (
+            tuple(claim for claim in generated.claims if claim.kind == "general_knowledge")
+            if insufficient
+            else generated.claims
+        )
         cited_ids = {key for claim in published_claims for key in claim.citation_ids}
+        answer = generated.answer
+        if insufficient and not answer.startswith(KNOWLEDGE_BASE_EMPTY_NOTICE):
+            answer = KNOWLEDGE_BASE_EMPTY_NOTICE + answer
         return AnswerEnvelope(
-            answer=generated.answer,
+            answer=answer,
             claims=published_claims,
             citations=tuple(
                 citation for citation in citations if citation.citation_id in cited_ids

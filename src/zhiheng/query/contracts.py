@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, get_args, runtime_checkable
 
 from sqlalchemy.orm import Session
 
@@ -33,6 +33,12 @@ class StopReason(StrEnum):
 
 
 Answerability = Literal["supported", "mixed", "insufficient"]
+# ``cited`` claims must cite evidence that took part in the answer;
+# ``general_knowledge`` claims carry no citations and are labelled as the
+# model's general knowledge rather than the user's knowledge base.
+ClaimKind = Literal["cited", "general_knowledge"]
+CLAIM_KINDS: frozenset[str] = frozenset(get_args(ClaimKind))
+KNOWLEDGE_BASE_EMPTY_NOTICE = "知识库中没有与这个问题相关的内容。"
 
 
 class InvalidModelOutputError(ValueError):
@@ -111,6 +117,13 @@ class AgenticBudget:
 class AnswerClaim:
     text: str
     citation_ids: tuple[str, ...]
+    kind: ClaimKind = "cited"
+
+    def citations_valid(self, allowed_citation_ids: set[str]) -> bool:
+        """General knowledge cites nothing; any other claim cites only allowed evidence."""
+        if self.kind == "general_knowledge":
+            return not self.citation_ids
+        return bool(self.citation_ids) and set(self.citation_ids).issubset(allowed_citation_ids)
 
 
 @dataclass(frozen=True)

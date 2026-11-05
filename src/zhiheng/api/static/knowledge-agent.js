@@ -182,7 +182,9 @@ function renderAnswer(response, query) {
   $("answer-result").hidden = false;
   $("research-start").hidden = true;
   $("asked-question").textContent = query;
-  $("route").textContent = response.citations?.length ? "基于你的资料" : "还需要更多依据";
+  const claims = response.claims || [];
+  const generalOnly = claims.length > 0 && claims.every((claim) => claim.kind === "general_knowledge");
+  $("route").textContent = response.citations?.length ? "基于你的资料" : generalOnly ? "基于通用知识" : "还需要更多依据";
   $("stop-reason").textContent = stopNames[response.stop_reason] || "请核对证据";
   $("answer").textContent = response.answer || "现有资料还不足以回答这个问题。";
   const issues = [...(response.conflicts || []), ...(response.insufficiencies || [])];
@@ -190,6 +192,7 @@ function renderAnswer(response, query) {
   if (response.stop_reason !== "completed" && !issues.length) issues.push(stopNames[response.stop_reason] || "当前回答尚未完成验证。");
   $("answer-limits").hidden = issues.length === 0;
   $("issues").replaceChildren(...issues.map((item) => node("li", item)));
+  renderClaims(claims, response.citations || []);
   const assumptions = response.assumptions || [];
   $("assumptions-section").hidden = !assumptions.length;
   $("answer-assumptions").replaceChildren(...assumptions.map((item) => node("li", item)));
@@ -198,6 +201,22 @@ function renderAnswer(response, query) {
   renderCitations(response.citations || [], $("citations"));
   state.contextPrompts = response.context_prompts || [];
   if (state.contextPrompts.length) openContextPrompt(state.contextPrompts[0]);
+}
+
+function claimSourceLabel(claim, citationsById) {
+  if (claim.kind === "general_knowledge") return "通用知识";
+  const sources = new Set((claim.citation_ids || []).map((id) => citationsById.get(id)?.source_type === "event_memory" ? "个人记忆" : "正式知识"));
+  return ["正式知识", "个人记忆"].filter((label) => sources.has(label)).join(" · ") || "正式知识";
+}
+function renderClaims(claims, citations) {
+  const citationsById = new Map(citations.map((citation) => [citation.citation_id, citation]));
+  $("claims-section").hidden = !claims.length;
+  $("answer-claims").replaceChildren(...claims.map((claim) => {
+    const label = claimSourceLabel(claim, citationsById);
+    const item = node("li", undefined, claim.kind === "general_knowledge" ? "claim general-knowledge" : "claim");
+    item.append(node("span", label, "badge"), node("span", claim.text));
+    return item;
+  }));
 }
 
 function openContextPrompt(prompt) {

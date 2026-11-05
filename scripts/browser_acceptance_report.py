@@ -81,6 +81,12 @@ ISSUE109_CHECKS = {
     "original": "the discussed material keeps its text, version and locations",
 }
 
+ISSUE110_CHECKS = {
+    "notice": "an answer with nothing relevant in the knowledge base opens by saying so",
+    "general": "uncited claims are labelled as general knowledge",
+    "sources": "cited claims are labelled with their source beside general knowledge",
+}
+
 ISSUE10_CHECKS = {
     "review": (
         "browser review queue covers counts, recovery, stale-version retry, and "
@@ -183,6 +189,7 @@ EXPECTED_CHECKS = {
     "context_prompts_issue8": Path("context-prompts-issue8/checks.json"),
     "pending_issue9": Path("pending-issue9/checks.json"),
     "issue109_provenance": Path("issue109-provenance/checks.json"),
+    "issue110_answer_sources": Path("issue110-answer-sources/checks.json"),
     "issue10_matrix": Path("issue10-matrix/checks.json"),
     "issue14_writes": Path("issue14-writes/checks.json"),
     "issue11_upgrade": Path("issue11-upgrade/checks.json"),
@@ -335,6 +342,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     "context_prompts_issue8",
                     "pending_issue9",
                     "issue109_provenance",
+                    "issue110_answer_sources",
                     "issue10_matrix",
                     "issue14_writes",
                     "issue11_upgrade",
@@ -557,6 +565,16 @@ def validate_checks(output: Path) -> dict[str, Any]:
                         result["error"] = f"required checks missing: {missing_issue109}"
                         results[name] = result
                         continue
+                if name == "issue110_answer_sources":
+                    missing_issue110 = [
+                        label
+                        for label in ISSUE110_CHECKS.values()
+                        if not any(isinstance(item, str) and item == label for item in checks)
+                    ]
+                    if missing_issue110:
+                        result["error"] = f"required checks missing: {missing_issue110}"
+                        results[name] = result
+                        continue
                 if name == "issue10_matrix":
                     missing_issue10 = [
                         label
@@ -748,6 +766,7 @@ def main() -> int:
             "node tests/e2e/check_context_prompts_issue8.cjs",
             "node tests/e2e/check_pending_issue9.cjs",
             "node tests/e2e/check_issue109_provenance.cjs",
+            "node tests/e2e/check_issue110_answer_sources.cjs",
             "node tests/e2e/check_issue10_matrix.cjs",
             "node tests/e2e/check_issue14_writes.cjs",
             "node tests/e2e/check_issue11_upgrade.cjs",
@@ -838,6 +857,7 @@ def main() -> int:
                 "and restart",
             ],
             "#109": list(ISSUE109_CHECKS.values()),
+            "#110": list(ISSUE110_CHECKS.values()),
             "#55": [
                 "browser answer failures use a local injected Provider boundary",
                 "invalid model output stops as invalid_model_output with audit metadata",

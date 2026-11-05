@@ -139,7 +139,7 @@ def test_gateway_answer_model_uses_privacy_pipeline_and_strict_scope(
     assert result.claims[0].citation_ids == (citation.citation_id,)
     assert result.personalization_refs == (expected_ref,)
     payload = json.loads(transport.calls[0])
-    assert payload["prompt_version"] == "gateway-answer-model-v5"
+    assert payload["prompt_version"] == "gateway-answer-model-v6"
     assert (
         "Put unsupported or partially unsupported parts of the question in insufficiencies."
         in (payload["ASSUMPTIONS"])
@@ -619,7 +619,7 @@ def test_gateway_answer_parser_requires_answerability_and_consistent_claims() ->
         "answerability": "insufficient",
         "claims": [{"text": "x", "citation_ids": [citation.citation_id]}],
     }
-    with pytest.raises(ValueError, match="cannot include claims"):
+    with pytest.raises(ValueError, match="cannot include cited claims"):
         _parse_generated_answer(
             json.dumps(inconsistent),
             citations=(citation,),
@@ -761,3 +761,117 @@ def _memory_context(*, sensitivity_level: str) -> MemoryContextSnapshot:
         eligible_count=1,
         source_digest="source-digest",
     )
+
+
+def _answer_json(*, answerability: str, claims: list[dict[str, Any]]) -> str:
+    return json.dumps(
+        {
+            "answer": "回答",
+            "answerability": answerability,
+            "claims": claims,
+            "conflicts": [],
+            "assumptions": [],
+            "insufficiencies": [],
+            "output_tokens": 1,
+            "personalization_refs": [],
+        }
+    )
+
+
+def test_gateway_answer_parser_accepts_uncited_general_knowledge_claims() -> None:
+    citation = _citation_for(_chunk())
+    result = _parse_generated_answer(
+        _answer_json(
+            answerability="mixed",
+            claims=[
+                {"text": "资料中的结论", "citation_ids": [citation.citation_id], "kind": "cited"},
+                {
+                    "text": "水在标准大气压下 100 度沸腾",
+                    "citation_ids": [],
+                    "kind": "general_knowledge",
+                },
+            ],
+        ),
+        citations=(citation,),
+        memory_context=None,
+        max_output_tokens=None,
+    )
+    assert [(claim.kind, claim.citation_ids) for claim in result.claims] == [
+        ("cited", (citation.citation_id,)),
+        ("general_knowledge", ()),
+    ]
+
+
+def test_gateway_answer_parser_allows_general_knowledge_when_insufficient() -> None:
+    citation = _citation_for(_chunk())
+    result = _parse_generated_answer(
+        _answer_json(
+            answerability="insufficient",
+            claims=[{"text": "通用常识", "citation_ids": [], "kind": "general_knowledge"}],
+        ),
+        citations=(citation,),
+        memory_context=None,
+        max_output_tokens=None,
+    )
+    assert result.answerability == "insufficient"
+    assert [claim.kind for claim in result.claims] == ["general_knowledge"]
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        {"text": "缺少引用", "citation_ids": [], "kind": "cited"},
+        {"text": "缺少引用", "citation_ids": []},
+        {"text": "越界引用", "citation_ids": ["unknown-citation"], "kind": "cited"},
+        {"text": "带引用的通用知识", "citation_ids": ["CITATION"], "kind": "general_knowledge"},
+        {"text": "未知类型", "citation_ids": [], "kind": "model_guess"},
+    ],
+)
+def test_gateway_answer_parser_rejects_claims_that_break_citation_rules(
+    claim: dict[str, Any],
+) -> None:
+    citation = _citation_for(_chunk())
+    claim = {
+        **claim,
+        "citation_ids": [
+            citation.citation_id if item == "CITATION" else item for item in claim["citation_ids"]
+        ],
+    }
+    with pytest.raises(ValueError):
+        _parse_generated_answer(
+            _answer_json(answerability="supported", claims=[claim]),
+            citations=(citation,),
+            memory_context=None,
+            max_output_tokens=None,
+        )
+
+
+def test_gateway_negative_existence_guard_keeps_general_knowledge_claims() -> None:
+    citation = _citation_for(_chunk())
+    result = _parse_generated_answer(
+        json.dumps(
+            {
+                "answer": "没有给出作者的银行账户号码，现有证据未出现该信息。",
+                "answerability": "supported",
+                "claims": [
+                    {
+                        "text": "无关审稿意见",
+                        "citation_ids": [citation.citation_id],
+                        "kind": "cited",
+                    },
+                    {"text": "银行账户通常不公开", "citation_ids": [], "kind": "general_knowledge"},
+                ],
+                "conflicts": [],
+                "assumptions": [],
+                "insufficiencies": [],
+                "output_tokens": 3,
+                "personalization_refs": [],
+            }
+        ),
+        citations=(citation,),
+        memory_context=None,
+        max_output_tokens=None,
+    )
+    guarded = _guard_negative_existence_response("这些材料是否给出作者的银行账户号码？", result)
+    assert guarded.answerability == "insufficient"
+    assert [claim.text for claim in guarded.claims] == ["银行账户通常不公开"]

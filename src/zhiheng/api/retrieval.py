@@ -51,7 +51,7 @@ from zhiheng.query import (
     StructuredLookupResult,
 )
 from zhiheng.query.conflicts import explicit_constraint_conflicts
-from zhiheng.query.contracts import AnswerEnvelope, PersonalizationRef
+from zhiheng.query.contracts import AnswerEnvelope, ClaimKind, PersonalizationRef
 from zhiheng.query.conversations import ConversationRepository
 from zhiheng.retrieval import (
     Citation,
@@ -105,6 +105,7 @@ class ClaimPayload(BaseModel):
 
     text: str
     citation_ids: list[str]
+    kind: ClaimKind = "cited"
 
 
 class CitationPayload(BaseModel):
@@ -1334,7 +1335,7 @@ def _validate_replayed_personalization_refs(
 
 
 def _claim_payload(claim: AnswerClaim) -> ClaimPayload:
-    return ClaimPayload(text=claim.text, citation_ids=list(claim.citation_ids))
+    return ClaimPayload(text=claim.text, citation_ids=list(claim.citation_ids), kind=claim.kind)
 
 
 def _citation_payload(citation: Citation) -> CitationPayload:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,6 +29,7 @@ from zhiheng.privacy.gateway import DeterministicPatternAnalyzer, PrivacyPipelin
 class _AnswerJsonTransport:
     calls: list[str]
     evidence_insufficient: bool = False
+    general_knowledge_claims: list[str] = field(default_factory=list)
     invalid_response_text: str | None = None
     raised_exception: Exception | None = None
 
@@ -53,7 +54,7 @@ class _AnswerJsonTransport:
             entry["provenance"]["memory_ref_id"]
             for entry in prompt["USER_CONFIRMED_CONTEXT"]["entries"]
         ]
-        response = {
+        response: dict[str, Any] = {
             "answer": "网关模型基于授权证据生成回答。",
             "answerability": "supported",
             "claims": [{"text": "授权证据可用于回答", "citation_ids": [citation_id]}],
@@ -71,6 +72,13 @@ class _AnswerJsonTransport:
                 insufficiencies=["检索到的材料不支持当前问题。"],
                 personalization_refs=[],
             )
+        response["claims"] = [
+            *response["claims"],
+            *(
+                {"text": text, "citation_ids": [], "kind": "general_knowledge"}
+                for text in self.general_knowledge_claims
+            ),
+        ]
         return TransportResponse(
             text=json.dumps(response, ensure_ascii=False),
             response_hash=sha256_text(payload.text),
@@ -145,7 +153,7 @@ def test_answer_api_uses_configured_model_gateway_and_counting_transport(
     payload = response.json()
     prompt = json.loads(transport.calls[0])
     assert len(transport.calls) == 1
-    assert prompt["prompt_version"] == "gateway-answer-model-v5"
+    assert prompt["prompt_version"] == "gateway-answer-model-v6"
     assert prompt["KNOWLEDGE_EVIDENCE"]
     assert prompt["USER_CONFIRMED_CONTEXT"]["entries"]
     assert "pending-memory-sentinel" not in transport.calls[0]
@@ -191,6 +199,65 @@ def test_answer_api_insufficient_answer_does_not_present_retrieved_material_as_c
     assert payload["insufficiencies"]
     assert payload["claims"] == []
     assert payload["citations"] == []
+
+
+def test_answer_api_labels_general_knowledge_when_knowledge_base_has_nothing_relevant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "secret-value")
+    client, session_factory, transport = _gateway_client(tmp_path, external_models_enabled=True)
+    transport.evidence_insufficient = True
+    transport.general_knowledge_claims = ["检索系统通常结合关键词和向量召回。"]
+    csrf = _login(client)
+    _seed(session_factory, tmp_path)
+    with session_scope(session_factory) as session:
+        _insert_provider(session)
+
+    response = client.post(
+        "/v1/answers",
+        json={"query": "中文 全文 检索 正式 视图"},
+        headers=_headers(csrf, "answer-gateway-general-knowledge"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stop_reason"] == "completed"
+    assert payload["answer"].startswith("知识库中没有与这个问题相关的内容。")
+    assert payload["claims"] == [
+        {
+            "text": "检索系统通常结合关键词和向量召回。",
+            "citation_ids": [],
+            "kind": "general_knowledge",
+        }
+    ]
+    assert payload["citations"] == []
+
+
+def test_answer_api_mixed_answer_marks_each_claim_kind(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ZHIHENG_PRIVATE_TEST_SECRET", "secret-value")
+    client, session_factory, transport = _gateway_client(tmp_path, external_models_enabled=True)
+    transport.general_knowledge_claims = ["这是模型的通用知识。"]
+    csrf = _login(client)
+    _seed(session_factory, tmp_path)
+    with session_scope(session_factory) as session:
+        _insert_provider(session)
+
+    response = client.post(
+        "/v1/answers",
+        json={"query": "中文 全文 检索 正式 视图"},
+        headers=_headers(csrf, "answer-gateway-mixed-kinds"),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [claim["kind"] for claim in payload["claims"]] == ["cited", "general_knowledge"]
+    assert [citation["citation_id"] for citation in payload["citations"]] == payload["claims"][0][
+        "citation_ids"
+    ]
 
 
 def test_answer_api_external_model_disabled_returns_privacy_denied_zero_send(
