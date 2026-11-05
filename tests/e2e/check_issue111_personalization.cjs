@@ -25,7 +25,8 @@ const excludedAnswer = {
   budget_usage: budget, rows: [], personalization_refs: [], memory_context_digest: null,
   context_prompts: [],
   personalization: { question_domain_id: "medicine_health", question_domain_name: "医学与健康",
-    matched_keywords: ["睡眠"], method: "keyword-rule-v1", applied: false, reason: "domain_excluded" },
+    matched_keywords: ["睡眠"], method: "keyword-rule-v2", applied: false, reason: "domain_excluded",
+    matched_domains: [{ domain_id: "medicine_health", domain_name: "医学与健康", keywords: ["睡眠"] }] },
 };
 
 (async () => {

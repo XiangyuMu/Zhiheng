@@ -38,6 +38,7 @@ from zhiheng.memory.personalization import (
     PersonalizationDecision,
     PersonalizationReason,
     PersonalizationSettings,
+    primary_domain_name,
 )
 from zhiheng.models import ModelGateway
 from zhiheng.models.configuration import defaults as model_defaults
@@ -203,6 +204,14 @@ class PersonalizationRefPayload(BaseModel):
     state_key: str
 
 
+class MatchedDomainPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    domain_id: str
+    domain_name: str | None
+    keywords: list[str]
+
+
 class PersonalizationDecisionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -212,6 +221,7 @@ class PersonalizationDecisionPayload(BaseModel):
     method: str
     applied: bool
     reason: PersonalizationReason
+    matched_domains: list[MatchedDomainPayload]
 
 
 class MemoryImpactPayload(BaseModel):
@@ -1341,7 +1351,20 @@ def _personalization_payload(
     if decision is None:
         return None
     return PersonalizationDecisionPayload(
-        **asdict(decision), question_domain_name=decision.question_domain_name
+        question_domain_id=decision.question_domain_id,
+        question_domain_name=decision.question_domain_name,
+        matched_keywords=list(decision.matched_keywords),
+        method=decision.method,
+        applied=decision.applied,
+        reason=decision.reason,
+        matched_domains=[
+            MatchedDomainPayload(
+                domain_id=domain_id,
+                domain_name=primary_domain_name(domain_id),
+                keywords=list(keywords),
+            )
+            for domain_id, keywords in decision.matched_domains
+        ],
     )
 
 

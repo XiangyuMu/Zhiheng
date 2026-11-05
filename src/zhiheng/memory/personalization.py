@@ -13,40 +13,37 @@ from typing import Any, Literal
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from zhiheng.classification.domain_keywords import match_primary_domains
+from zhiheng.classification.domain_keywords import DomainMatch, match_primary_domains
 from zhiheng.classification.taxonomy import PRIMARY_DOMAINS
 from zhiheng.core.ids import sha256_json
 
 _PRIMARY_DOMAIN_NAMES = {domain.id: domain.name for domain in PRIMARY_DOMAINS}
-QUESTION_DOMAIN_METHOD = "keyword-rule-v1"
+QUESTION_DOMAIN_METHOD = "keyword-rule-v2"
 
 PersonalizationReason = Literal["domain_excluded", "domain_not_excluded", "domain_undetermined"]
 
 
 @dataclass(frozen=True)
 class PersonalizationDecision:
-    """Which primary domain a question was judged to belong to, and whether
-    its answer may read personal memory. A question whose domain cannot be
-    judged is treated as belonging to no excluded domain."""
+    """Which primary domains a question was judged to belong to, and whether
+    its answer may read personal memory. ``question_domain_id`` is the domain
+    that decided: the first excluded one, otherwise the first matched. A
+    question whose domain cannot be judged belongs to no excluded domain."""
 
     question_domain_id: str | None
     matched_keywords: tuple[str, ...]
     applied: bool
     reason: PersonalizationReason
     method: str = QUESTION_DOMAIN_METHOD
+    matched_domains: tuple[DomainMatch, ...] = ()
 
     @property
     def question_domain_name(self) -> str | None:
-        return _PRIMARY_DOMAIN_NAMES.get(self.question_domain_id or "")
+        return primary_domain_name(self.question_domain_id)
 
 
-def judge_question_domain(query: str) -> tuple[str | None, tuple[str, ...]]:
-    """The question's primary domain is the first rule that matches, as for
-    conclusion classification suggestions."""
-    matches = match_primary_domains(query)
-    if not matches:
-        return None, ()
-    return matches[0]
+def primary_domain_name(domain_id: str | None) -> str | None:
+    return _PRIMARY_DOMAIN_NAMES.get(domain_id or "")
 
 
 class PersonalizationSettings:
@@ -72,15 +69,18 @@ class PersonalizationSettings:
             )
 
     def decide(self, session: Session, query: str) -> PersonalizationDecision:
-        domain_id, keywords = judge_question_domain(query)
-        if domain_id is None:
+        matches = tuple(match_primary_domains(query))
+        if not matches:
             return PersonalizationDecision(None, (), applied=True, reason="domain_undetermined")
-        if domain_id in self.excluded_domain_ids(session):
-            return PersonalizationDecision(
-                domain_id, keywords, applied=False, reason="domain_excluded"
-            )
+        excluded = self.excluded_domain_ids(session)
+        for domain_id, keywords in matches:
+            if domain_id in excluded:
+                return PersonalizationDecision(
+                    domain_id, keywords, False, "domain_excluded", matched_domains=matches
+                )
+        domain_id, keywords = matches[0]
         return PersonalizationDecision(
-            domain_id, keywords, applied=True, reason="domain_not_excluded"
+            domain_id, keywords, True, "domain_not_excluded", matched_domains=matches
         )
 
     def payload(self, session: Session) -> dict[str, Any]:

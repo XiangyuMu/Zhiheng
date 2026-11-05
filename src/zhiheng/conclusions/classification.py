@@ -19,7 +19,9 @@ def _is_known_domain(domain_id: str) -> bool:
 
 def suggest_classification(*, title: str, claim: str, domain_id: str) -> dict[str, Any]:
     text = f"{title} {claim}".casefold()
-    matched = [candidate for candidate, _keywords in match_primary_domains(text)]
+    matched = [
+        candidate for candidate, _keywords in match_primary_domains(text, prefer_specific=False)
+    ]
     primary = domain_id if domain_id in matched else (matched[0] if matched else domain_id)
     related = set(matched)
     related.discard(primary)

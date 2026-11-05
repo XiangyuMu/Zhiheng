@@ -85,6 +85,11 @@ def test_only_active_primary_domains_can_be_excluded(tmp_path: Path) -> None:
 
 ENGINEERING_TEXT = "软件发布前必须完成回归测试。"
 ENGINEERING_QUERY = "软件 发布 回归 测试"
+ENGINEERING_MATCH = {
+    "domain_id": "computing_engineering",
+    "domain_name": "计算机与工程技术",
+    "keywords": ["软件"],
+}
 
 
 def _seed_engineering_knowledge(factory: sessionmaker[Session], tmp_path: Path) -> None:
@@ -130,7 +135,8 @@ def test_answer_in_excluded_domain_uses_no_personal_memory(tmp_path: Path) -> No
         "question_domain_id": "computing_engineering",
         "question_domain_name": "计算机与工程技术",
         "matched_keywords": ["软件"],
-        "method": "keyword-rule-v1",
+        "method": "keyword-rule-v2",
+        "matched_domains": [ENGINEERING_MATCH],
         "applied": True,
         "reason": "domain_not_excluded",
     }
@@ -152,9 +158,43 @@ def test_answer_in_excluded_domain_uses_no_personal_memory(tmp_path: Path) -> No
         "question_domain_id": "computing_engineering",
         "question_domain_name": "计算机与工程技术",
         "matched_keywords": ["软件"],
-        "method": "keyword-rule-v1",
+        "method": "keyword-rule-v2",
+        "matched_domains": [ENGINEERING_MATCH],
         "applied": False,
         "reason": "domain_excluded",
+    }
+
+
+def test_question_in_several_domains_is_not_personalized_if_any_is_excluded(
+    tmp_path: Path,
+) -> None:
+    client, factory = answer_client(tmp_path)
+    csrf = _login(client)
+    seed(factory, tmp_path)
+    _exclude(client, csrf, ["career_work_practice"])
+
+    payload = client.post(
+        "/v1/answers",
+        json={"query": "工作压力影响睡眠怎么办"},
+        headers=answer_headers(csrf, "several-domains"),
+    ).json()
+    assert payload["personalization_refs"] == []
+    assert payload["context_prompts"] == []
+    assert payload["personalization"] == {
+        "question_domain_id": "career_work_practice",
+        "question_domain_name": "职业与工作实践",
+        "matched_keywords": ["工作"],
+        "method": "keyword-rule-v2",
+        "applied": False,
+        "reason": "domain_excluded",
+        "matched_domains": [
+            {"domain_id": "medicine_health", "domain_name": "医学与健康", "keywords": ["睡眠"]},
+            {
+                "domain_id": "career_work_practice",
+                "domain_name": "职业与工作实践",
+                "keywords": ["工作"],
+            },
+        ],
     }
 
 
@@ -174,7 +214,8 @@ def test_question_without_a_recognised_domain_is_personalized(tmp_path: Path) ->
         "question_domain_id": None,
         "question_domain_name": None,
         "matched_keywords": [],
-        "method": "keyword-rule-v1",
+        "method": "keyword-rule-v2",
+        "matched_domains": [],
         "applied": True,
         "reason": "domain_undetermined",
     }

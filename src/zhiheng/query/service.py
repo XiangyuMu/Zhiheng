@@ -278,6 +278,9 @@ class QueryAnswerService:
                     # Matched keywords are query text, which trajectories never keep.
                     "personalization": {
                         "question_domain_id": result.personalization.question_domain_id,
+                        "matched_domain_ids": [
+                            domain_id for domain_id, _ in result.personalization.matched_domains
+                        ],
                         "applied": result.personalization.applied,
                         "reason": result.personalization.reason,
                         "method": result.personalization.method,
