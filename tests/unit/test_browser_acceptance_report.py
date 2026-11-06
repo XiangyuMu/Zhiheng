@@ -84,6 +84,15 @@ ISSUE111_CHECKS = [
     "personalization settings fit a narrow viewport",
 ]
 
+ISSUE112_CHECKS = [
+    "the pending list opens in importance order and labels the tiers",
+    "the pending list can switch to time order",
+    "the daily suggested amount defaults to ten and can be changed",
+    "reaching the daily amount says today can stop and changes no other item",
+    "setting the daily amount to zero hides the note",
+    "the daily note fits a narrow viewport",
+]
+
 ISSUE10_CHECKS = [
     (
         "browser review queue covers counts, recovery, stale-version retry, and "
@@ -203,6 +212,14 @@ def complete_issue111_checks() -> dict[str, object]:
         "checks": ISSUE111_CHECKS,
         "browserErrors": [],
         "evidence": {"settings": {"saved": ["medicine_health"]}},
+    }
+
+
+def complete_issue112_checks() -> dict[str, object]:
+    return {
+        "checks": ISSUE112_CHECKS,
+        "browserErrors": [],
+        "evidence": {"importance": {"order": ["relation", "conflict", "draft"]}},
     }
 
 
@@ -456,6 +473,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "issue109-provenance/checks.json",
         "issue110-answer-sources/checks.json",
         "issue111-personalization/checks.json",
+        "issue112-pending-importance/checks.json",
         "issue10-matrix/checks.json",
         "issue14-writes/checks.json",
         "issue11-upgrade/checks.json",
@@ -481,6 +499,8 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             if relative == "issue110-answer-sources/checks.json"
             else complete_issue111_checks()
             if relative == "issue111-personalization/checks.json"
+            else complete_issue112_checks()
+            if relative == "issue112-pending-importance/checks.json"
             else complete_issue10_checks()
             if relative == "issue10-matrix/checks.json"
             else complete_issue14_checks()
@@ -819,6 +839,14 @@ def test_issue111_personalization_requires_every_scenario(tmp_path: Path) -> Non
     result = reporter().validate_checks(tmp_path)["issue111_personalization"]
     assert result["status"] == "failed"
     assert ISSUE111_CHECKS[-1] in result["error"]
+
+
+def test_issue112_pending_importance_requires_every_scenario(tmp_path: Path) -> None:
+    partial = {**complete_issue112_checks(), "checks": ISSUE112_CHECKS[:-1]}
+    write_checks(tmp_path, "issue112-pending-importance/checks.json", partial)
+    result = reporter().validate_checks(tmp_path)["issue112_pending_importance"]
+    assert result["status"] == "failed"
+    assert ISSUE112_CHECKS[-1] in result["error"]
 
 
 def test_issue110_answer_sources_requires_every_scenario(tmp_path: Path) -> None:
