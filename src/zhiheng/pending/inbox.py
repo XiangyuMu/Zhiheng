@@ -127,6 +127,10 @@ class PendingSource(Protocol):
 
     def items(self, session: Session, owner: str) -> list[PendingItem]: ...
 
+    def known(self, session: Session, owner: str, item_id: str) -> bool:
+        """Whether the id names an item of this type, pending or already decided."""
+        ...
+
 
 ActionHandler = Callable[[Session, str, PendingItem], Mapping[str, Any]]
 # Told about each item the user decided on (every verb except restore).
@@ -208,6 +212,11 @@ class PendingInbox:
             if item.id == item_id:
                 return item
         raise PendingItemNotFoundError("pending item not found")
+
+    def known(self, session: Session, owner: str, item_type: str, item_id: str) -> bool:
+        require_known_types([item_type])
+        source = self._sources.get(item_type)
+        return source is not None and source.known(session, owner, item_id)
 
     def perform(
         self,

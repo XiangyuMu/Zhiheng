@@ -16,6 +16,7 @@ from tests.integration.test_pending_inbox import (
     _act,
     _conflict,
     _draft,
+    _import,
     _items,
     _missing_prompt,
     _set_created,
@@ -121,6 +122,8 @@ def test_daily_suggested_amount_defaults_to_ten_and_zero_turns_it_off(tmp_path: 
 
     default = _daily(client)
     assert (default["suggested"], default["handled_today"], default["reached"]) == (10, 0, False)
+    assert default["max_suggested"] == 500
+    assert _set_daily(client, csrf, 501, "daily-too-many", default["etag"]).status_code == 422
 
     changed = _set_daily(client, csrf, 3, "daily-three", default["etag"])
     assert changed.status_code == 200, changed.text
@@ -206,4 +209,32 @@ def test_a_decision_made_in_the_detail_view_counts_once_it_changed_the_item(
     assert decided.status_code == 200, decided.text
     assert _report(client, csrf, item, "detail-reported").status_code == 200
     assert _report(client, csrf, item, "detail-again").status_code == 200
+    assert _daily(client)["handled_today"] == 1
+
+
+def test_reporting_an_item_that_never_existed_counts_nothing(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+    csrf = _login(client)
+    made_up = {"type": "personal_conflict", "id": "no-such-conflict", "etag": "any"}
+
+    response = _report(client, csrf, made_up, "made-up")
+
+    assert response.status_code == 404, response.text
+    assert _daily(client)["handled_today"] == 0
+
+
+def test_classifying_material_in_the_detail_view_counts_toward_today(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path)
+    csrf = _login(client)
+    knowledge_id = _import(client, csrf, "detail-classify")
+    item = next(i for i in _items(client, type="classification") if i["id"] == knowledge_id)
+
+    classified = client.put(
+        f"/v1/knowledge/{knowledge_id}/classifications",
+        json={"primary_domain_id": "computing_engineering", "node_ids": []},
+        headers=_headers(csrf, "detail-classify-put"),
+    )
+    assert classified.status_code == 200, classified.text
+
+    assert _report(client, csrf, item, "detail-classify-report").status_code == 200
     assert _daily(client)["handled_today"] == 1

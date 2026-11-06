@@ -58,8 +58,20 @@ def _candidate_evidence(
     return grouped
 
 
+def _exists(session: Session, sql: str, item_id: str, owner: str) -> bool:
+    return session.execute(text(sql), {"id": item_id, "owner": owner}).first() is not None
+
+
 class ConclusionDraftSource:
     type = "conclusion_draft"
+
+    def known(self, session: Session, owner: str, item_id: str) -> bool:
+        return _exists(
+            session,
+            "SELECT 1 FROM conclusion_entries WHERE id = :id AND owner_user_id = :owner",
+            item_id,
+            owner,
+        )
 
     def items(self, session: Session, owner: str) -> list[PendingItem]:
         rows = session.execute(
@@ -102,6 +114,14 @@ class ConclusionDraftSource:
 
 class RelationSuggestionSource:
     type = "relation_suggestion"
+
+    def known(self, session: Session, owner: str, item_id: str) -> bool:
+        return _exists(
+            session,
+            "SELECT 1 FROM conclusion_relations WHERE id = :id AND owner_user_id = :owner",
+            item_id,
+            owner,
+        )
 
     def items(self, session: Session, owner: str) -> list[PendingItem]:
         rows = session.execute(
@@ -192,6 +212,10 @@ def _relation_importance(row: Any) -> Importance:
 class PersonalConflictSource:
     type = "personal_conflict"
 
+    def known(self, session: Session, owner: str, item_id: str) -> bool:
+        # Personal memory belongs to the single local user, like items() above.
+        return _exists(session, "SELECT 1 FROM memory_conflicts WHERE id = :id", item_id, owner)
+
     def items(self, session: Session, owner: str) -> list[PendingItem]:
         rows = session.execute(
             text(
@@ -250,6 +274,15 @@ class PersonalConflictSource:
 class MissingInfoPromptSource:
     type = "missing_info_prompt"
 
+    def known(self, session: Session, owner: str, item_id: str) -> bool:
+        return _exists(
+            session,
+            "SELECT 1 FROM personal_prompts WHERE id = :id AND owner_user_id = :owner "
+            "AND prompt_kind = 'missing'",
+            item_id,
+            owner,
+        )
+
     def items(self, session: Session, owner: str) -> list[PendingItem]:
         rows = session.execute(
             text(
@@ -287,6 +320,14 @@ class MissingInfoPromptSource:
 
 class ExtractionSupplementSource:
     type = "extraction_supplement"
+
+    def known(self, session: Session, owner: str, item_id: str) -> bool:
+        return _exists(
+            session,
+            "SELECT 1 FROM conversation_extraction_runs WHERE id = :id AND owner_user_id = :owner",
+            item_id,
+            owner,
+        )
 
     def __init__(self, deferrals: DeferralStore) -> None:
         self._deferrals = deferrals
@@ -340,6 +381,9 @@ class ExtractionSupplementSource:
 
 class MemoryCandidateSource:
     type = "memory_candidate"
+
+    def known(self, session: Session, owner: str, item_id: str) -> bool:
+        return _exists(session, "SELECT 1 FROM memory_candidates WHERE id = :id", item_id, owner)
 
     def items(self, session: Session, owner: str) -> list[PendingItem]:
         # A candidate behind a personal conflict is decided through that
@@ -402,6 +446,15 @@ class ClassificationSource:
     """未分类资料 and 待审核的分类调整 share one type (filter 7)."""
 
     type = "classification"
+
+    def known(self, session: Session, owner: str, item_id: str) -> bool:
+        return _exists(
+            session,
+            "SELECT 1 FROM knowledge_objects WHERE id = :id AND owner_user_id = :owner "
+            "UNION ALL SELECT 1 FROM taxonomy_proposals WHERE id = :id AND owner_user_id = :owner",
+            item_id,
+            owner,
+        )
 
     def items(self, session: Session, owner: str) -> list[PendingItem]:
         return self._unclassified(session, owner) + self._proposals(session, owner)

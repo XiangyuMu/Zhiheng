@@ -92,7 +92,7 @@ beforeEach(() => {
   itemsGate = null;
   itemsError = null;
   batchFailures = {};
-  daily = { suggested: 10, handled_today: 0 };
+  daily = { suggested: 10, handled_today: 0, max_suggested: 500 };
 });
 
 const TIERS = ['affects_knowledge', 'conflict_or_review', 'ordinary'];
@@ -804,6 +804,35 @@ test('at 390px a long summary is cut off inside its row instead of widening the 
   await ready(page);
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
     'the pending list must fit a narrow viewport');
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+test('the daily amount input takes its upper bound from the server', async () => {
+  daily = { suggested: 10, handled_today: 0, max_suggested: 20 };
+  const page = await open();
+  await ready(page);
+  await page.locator('#daily-progress').filter({ hasText: '/ 10 项' }).waitFor();
+  assert.equal(await page.locator('#daily-amount').getAttribute('max'), '20');
+  await page.locator('#daily-amount').fill('30');
+  await page.locator('#daily-amount').press('Enter');
+  await page.getByText('每日建议处理量须是 0 到 20 之间的整数。').waitFor();
+  assert.equal(await page.locator('#daily-amount').inputValue(), '10');
+  assert(!writes.some((write) => write.path === '/v1/review/daily'), 'nothing is saved');
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+test('an open page picks up a new day without a reload', async () => {
+  daily = { suggested: 2, handled_today: 2, max_suggested: 500 };
+  const page = await open();
+  await ready(page);
+  const progress = page.locator('#daily-progress');
+  await progress.filter({ hasText: '今天可以停止了' }).waitFor();
+  daily = { suggested: 2, handled_today: 0, max_suggested: 500 };  // midnight passed
+  await page.clock.runFor(60_000);
+  await progress.filter({ hasText: '今天已处理 0 / 2 项' }).waitFor();
+  assert.equal(await progress.getAttribute('data-reached'), 'false');
   assert.deepEqual(page.errors, []);
   await page.context().close();
 });

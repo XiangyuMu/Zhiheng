@@ -215,12 +215,15 @@ def report_handled(
 ) -> dict[str, Any]:
     """Count a decision made in the detail view through the type's own API.
 
-    The item must have changed since the page read it (decided, or no longer
-    pending), so merely opening an item never counts as handling it.
+    The item must exist and have changed since the page read it (decided, or no
+    longer pending), so merely opening an item, or naming one that never
+    existed, never counts as handling it.
     """
     try:
         item = inbox.get(session, user, payload.type.value, payload.id)
     except PendingItemNotFoundError:
+        if not inbox.known(session, user, payload.type.value, payload.id):
+            raise HTTPException(status_code=404, detail="pending item not found") from None
         item = None
     if item is not None and item.etag == payload.etag:
         raise HTTPException(status_code=409, detail="the item has not changed since it was read")

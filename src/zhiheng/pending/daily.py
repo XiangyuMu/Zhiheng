@@ -80,6 +80,8 @@ class DailySuggestion:
         return {
             "date": day,
             "suggested": suggested,
+            # The one place the page learns the upper bound it validates against.
+            "max_suggested": MAX_DAILY_SUGGESTION,
             "handled_today": handled,
             # 0 turns the suggestion off, so it is never reached.
             "reached": suggested > 0 and handled >= suggested,

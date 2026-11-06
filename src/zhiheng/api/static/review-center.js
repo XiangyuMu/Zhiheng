@@ -5,6 +5,8 @@
   "use strict";
 
   const UNDO_MS = 5000;
+  // How often an open page re-reads the daily note, so it follows the day changing.
+  const DAILY_REFRESH_MS = 60000;
   const NARROW = window.matchMedia("(max-width: 900px)");
   const TYPES = [
     "conclusion_draft", "relation_suggestion", "personal_conflict", "missing_info_prompt",
@@ -203,6 +205,7 @@
   function renderDaily(daily) {
     state.daily = daily;
     const amount = $("daily-amount");
+    amount.max = String(daily.max_suggested);
     if (document.activeElement !== amount) amount.value = String(daily.suggested);
     const progress = $("daily-progress");
     progress.hidden = daily.suggested === 0;
@@ -212,12 +215,18 @@
       : `今天已处理 ${daily.handled_today} / ${daily.suggested} 项。`;
   }
 
+  async function refreshDaily() {
+    const daily = await request("/v1/review/daily").catch(() => null);
+    if (daily) renderDaily(daily);
+  }
+
   async function saveDailyAmount() {
     const input = $("daily-amount");
     const suggested = Number(input.value);
     if (!state.daily) { say("每日建议处理量还没有读取，请刷新后再改。", "hint"); return; }
-    if (!Number.isInteger(suggested) || suggested < 0 || suggested > 500) {
-      say("每日建议处理量须是 0 到 500 之间的整数。", "hint");
+    const max = state.daily.max_suggested;
+    if (!Number.isInteger(suggested) || suggested < 0 || suggested > max) {
+      say(`每日建议处理量须是 0 到 ${max} 之间的整数。`, "hint");
       input.value = String(state.daily.suggested);
       return;
     }
@@ -227,8 +236,8 @@
       say(suggested === 0 ? "已关闭每日建议处理量。" : `每日建议处理 ${suggested} 项。`, "success");
     } catch (error) {
       say(`每日建议处理量未保存：${error.message}`, "error");
-      const daily = await request("/v1/review/daily").catch(() => null);
-      if (daily) { input.blur(); renderDaily(daily); }
+      input.blur();
+      await refreshDaily();
     }
   }
 
@@ -1011,6 +1020,10 @@
     load();
   });
   $("daily-amount").addEventListener("change", saveDailyAmount);
+  setInterval(refreshDaily, DAILY_REFRESH_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") refreshDaily();
+  });
   $("refresh").addEventListener("click", () => load());
   $("undo-button").addEventListener("click", undo);
   $("batch-clear").addEventListener("click", clearSelection);
