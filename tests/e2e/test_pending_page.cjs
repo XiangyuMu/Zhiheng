@@ -777,3 +777,22 @@ test('a decision made in the detail view is reported toward today with the liste
   assert.deepEqual(page.errors, []);
   await page.context().close();
 });
+
+test('a detail save says it is saved only once the list has reloaded with the new etags', async () => {
+  const page = await open();
+  await ready(page);
+  await page.keyboard.press('j');
+  await page.keyboard.press('j');
+  assert.equal(await selectedId(page), 'pc1');
+  let release;
+  itemsGate = new Promise((resolve) => { release = resolve; });
+  await page.getByRole('button', { name: '采用新记录' }).click();
+  await page.waitForFunction(() => document.querySelector('#queue')?.getAttribute('aria-busy') === 'true');
+  assert.equal(await page.locator('#message').innerText(), '正在保存…');
+  release();
+  itemsGate = null;
+  await page.getByText('冲突已处理。').waitFor();
+  assert.equal(await page.locator('#queue').getAttribute('aria-busy'), 'false');
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});

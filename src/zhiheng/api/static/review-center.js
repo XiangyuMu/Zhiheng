@@ -444,8 +444,10 @@
           { type: item.type, id: item.id, etag: item.etag }).catch(() => null);
       }
       state.failures.delete(keyOf(item));
-      say(success, "success");
+      // Only report success once the list carries the new etags, so the next action
+      // on this item cannot be sent with the one it was read with before the save.
       await load();
+      say(success, "success");
     } catch (error) {
       say(`操作未完成：${error.message}`, "error");
       button.disabled = false;
