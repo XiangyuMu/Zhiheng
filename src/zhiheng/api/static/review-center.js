@@ -1,5 +1,6 @@
 // 待处理 (ADR 0011): every pending item in one list with a detail pane, type and
-// deferred filters, oldest/newest order, keyboard triage and a 5 second undo window.
+// deferred filters, importance or time order, a daily suggested amount, keyboard triage
+// and a 5 second undo window.
 (() => {
   "use strict";
 
@@ -24,6 +25,11 @@
     explicit_extracted: "明确陈述",
     inferred: "推断画像",
   };
+  // The default order (#112): what affects current work first, then conflicts and paused review.
+  const IMPORTANCE_LABELS = {
+    affects_knowledge: "影响当前任务或已有知识",
+    conflict_or_review: "冲突与复核",
+  };
   const VERBS = { approve: "批准", reject: "拒绝", defer: "延后", restore: "恢复" };
   const DONE = { approve: "已批准", reject: "已拒绝", defer: "已延后" };
 
@@ -36,7 +42,8 @@
   const state = {
     type: initialType(),
     deferred: false,
-    order: "oldest",
+    order: "importance",
+    daily: null,
     items: [],
     index: 0,
     loaded: false,
@@ -157,9 +164,10 @@
     $("queue").setAttribute("aria-busy", "true");
     if (!state.loaded || state.error) renderLoading();
     try {
-      const [listing, counts] = await Promise.all([
+      const [listing, counts, daily] = await Promise.all([
         request(`/v1/review/items?${params}`),
         request("/v1/review/counts").catch(() => null),
+        request("/v1/review/daily").catch(() => null),
       ]);
       if (seq !== state.loadSeq) return;
       const hidden = hiddenKeys();
@@ -170,6 +178,7 @@
       state.error = null;
       state.loaded = true;
       if (counts) renderCounts(counts);
+      if (daily) renderDaily(daily);
       const kept = keepKey ? state.items.findIndex((item) => keyOf(item) === keepKey) : -1;
       state.index = kept >= 0 ? kept : Math.min(state.index, Math.max(0, state.items.length - 1));
     } catch (error) {
@@ -188,6 +197,39 @@
     document.querySelectorAll("[data-count]").forEach((element) => {
       element.textContent = counts.by_type?.[element.dataset.count] ?? 0;
     });
+  }
+
+  // The suggestion only changes what is shown: reaching it leaves every item as it is.
+  function renderDaily(daily) {
+    state.daily = daily;
+    const amount = $("daily-amount");
+    if (document.activeElement !== amount) amount.value = String(daily.suggested);
+    const progress = $("daily-progress");
+    progress.hidden = daily.suggested === 0;
+    progress.dataset.reached = String(daily.reached);
+    progress.textContent = daily.reached
+      ? `今天已处理 ${daily.handled_today} 项，达到建议量，今天可以停止了。未处理的事项保持原样，明天还在这里。`
+      : `今天已处理 ${daily.handled_today} / ${daily.suggested} 项。`;
+  }
+
+  async function saveDailyAmount() {
+    const input = $("daily-amount");
+    const suggested = Number(input.value);
+    if (!state.daily) { say("每日建议处理量还没有读取，请刷新后再改。", "hint"); return; }
+    if (!Number.isInteger(suggested) || suggested < 0 || suggested > 500) {
+      say("每日建议处理量须是 0 到 500 之间的整数。", "hint");
+      input.value = String(state.daily.suggested);
+      return;
+    }
+    if (suggested === state.daily.suggested) return;
+    try {
+      renderDaily(await mutation("/v1/review/daily", "PUT", { suggested }, state.daily.etag));
+      say(suggested === 0 ? "已关闭每日建议处理量。" : `每日建议处理 ${suggested} 项。`, "success");
+    } catch (error) {
+      say(`每日建议处理量未保存：${error.message}`, "error");
+      const daily = await request("/v1/review/daily").catch(() => null);
+      if (daily) { input.blur(); renderDaily(daily); }
+    }
   }
 
   function renderFilters() {
@@ -238,7 +280,8 @@
       button.dataset.type = item.type;
       button.setAttribute("aria-current", String(index === state.index));
       const kind = KIND_LABELS[item.kind] ? ` · ${KIND_LABELS[item.kind]}` : "";
-      const meta = `${TYPE_LABELS[item.type] || item.type}${kind}${item.deferred ? " · 已延后" : ""} · ${dateText(item.pending_since)}`;
+      const importance = IMPORTANCE_LABELS[item.importance] ? ` · ${IMPORTANCE_LABELS[item.importance]}` : "";
+      const meta = `${TYPE_LABELS[item.type] || item.type}${kind}${importance}${item.deferred ? " · 已延后" : ""} · ${dateText(item.pending_since)}`;
       button.append(node("strong", item.title || "（无标题）"), node("small", meta));
       if (item.summary) button.append(node("span", item.summary, "queue-summary"));
       const failure = state.failures.get(keyOf(item));
@@ -388,12 +431,18 @@
   }
 
   // Run a detail decision (choose, supplement, restore) right away and reload.
-  async function immediate(button, item, success, fn) {
+  // `decides` marks a decision on the item itself, which counts toward today's suggested
+  // amount; the server only counts it once the item has really changed.
+  async function immediate(button, item, success, fn, { decides = false } = {}) {
     if (button.disabled) return;
     button.disabled = true;
     say("正在保存…", "info");
     try {
       await fn();
+      if (decides) {
+        await mutation("/v1/review/daily/handled", "POST",
+          { type: item.type, id: item.id, etag: item.etag }).catch(() => null);
+      }
       state.failures.delete(keyOf(item));
       say(success, "success");
       await load();
@@ -510,7 +559,7 @@
             ? mutation(`/v1/personal-updates/conflicts/${encodeURIComponent(item.id)}/decision`, "POST",
               { decision }, detail.candidate_etag)
             : Promise.reject(new Error("冲突已经变化，请刷新后重试。"))
-        )));
+        ), { decides: true }));
         return button;
       };
       const choices = node("div", undefined, "actions detail-choices");
@@ -523,7 +572,7 @@
         immediate(submit, item, "已补充个人信息。", () => mutation(
           `/v1/personal-updates/context-prompts/${encodeURIComponent(item.id)}/decision`, "POST",
           { decision: "supplement", value: { text }, state_key: detail.state_key },
-        ));
+        ), { decides: true });
       });
       return [
         definitions([
@@ -552,7 +601,7 @@
           immediate(submit, item, "已补充个人信息。", () => mutation(
             `/v1/personal-updates/context-prompts/${encodeURIComponent(item.id)}/decision`, "POST",
             { decision: "supplement", value: { text }, state_key: item.detail.state_key },
-          ));
+          ), { decides: true });
         }),
       ];
     },
@@ -593,7 +642,7 @@
               excerpt,
               evidence: [{ excerpt, source: "conversation" }],
             },
-          ));
+          ), { decides: true });
         }));
       return parts;
     },
@@ -656,7 +705,7 @@
             immediate(submit, item, "已归类。", () => mutation(
               `/v1/knowledge/${encodeURIComponent(item.id)}/classifications`, "PUT",
               { primary_domain_id: picker.value, node_ids: nodeIds },
-            ));
+            ), { decides: true });
           }),
         ];
       }
@@ -959,6 +1008,7 @@
     state.order = event.target.value;
     load();
   });
+  $("daily-amount").addEventListener("change", saveDailyAmount);
   $("refresh").addEventListener("click", () => load());
   $("undo-button").addEventListener("click", undo);
   $("batch-clear").addEventListener("click", clearSelection);

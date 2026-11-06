@@ -23,6 +23,7 @@ let failNext;
 let itemsGate;
 let itemsError;
 let batchFailures;
+let daily;
 
 function item(type, id, title, since, extra = {}) {
   return {
@@ -91,7 +92,20 @@ beforeEach(() => {
   itemsGate = null;
   itemsError = null;
   batchFailures = {};
+  daily = { suggested: 10, handled_today: 0 };
 });
+
+const TIERS = ['affects_knowledge', 'conflict_or_review', 'ordinary'];
+const tier = (entry) => TIERS.indexOf(entry.importance || 'ordinary');
+
+function dailyPayload() {
+  return {
+    ...daily,
+    date: '2026-11-06',
+    reached: daily.suggested > 0 && daily.handled_today >= daily.suggested,
+    etag: `daily-${daily.suggested}`,
+  };
+}
 
 function listing(url) {
   const types = (url.searchParams.get('type') || '').split(',').filter(Boolean);
@@ -99,7 +113,9 @@ function listing(url) {
   const selected = items.filter((entry) => (!types.length || types.includes(entry.type))
     && (deferred === 'include' || entry.deferred === (deferred === 'only')));
   selected.sort((a, b) => a.pending_since.localeCompare(b.pending_since));
-  if (url.searchParams.get('order') === 'newest') selected.reverse();
+  const order = url.searchParams.get('order') || 'importance';
+  if (order === 'newest') selected.reverse();
+  if (order === 'importance') selected.sort((a, b) => tier(a) - tier(b));
   return { items: selected, total: selected.length, limit: 500, offset: 0, next_offset: null };
 }
 
@@ -125,18 +141,28 @@ async function open(viewport = { width: 1440, height: 900 }, { clock = true } = 
           failNext = null;
           return route.fulfill({ status: failure.status, json: { detail: failure.detail } });
         }
+        if (url.pathname === '/v1/review/daily') {
+          daily.suggested = JSON.parse(request.postData()).suggested;
+          return route.fulfill({ json: dailyPayload() });
+        }
+        if (url.pathname === '/v1/review/daily/handled') {
+          daily.handled_today += 1;
+          return route.fulfill({ json: dailyPayload() });
+        }
         if (url.pathname === '/v1/review/batch') {
           const { action, items: targets } = JSON.parse(request.postData());
           const results = targets.map((target) => {
             const failure = batchFailures[target.id];
             if (failure) return { ...target, status: 'failed', reason: failure.reason, message: failure.message, result: null };
             items = items.filter((entry) => entry.id !== target.id);
+            if (action !== 'restore') daily.handled_today += 1;
             return { type: target.type, id: target.id, status: 'succeeded', reason: null, message: null, result: {} };
           });
           return route.fulfill({ json: { status: 'completed', result: { action, items: results } } });
         }
-        const id = url.pathname.match(/^\/v1\/review\/items\/[^/]+\/([^/]+)\/[^/]+$/)?.[1];
+        const [, id, verb] = url.pathname.match(/^\/v1\/review\/items\/[^/]+\/([^/]+)\/([^/]+)$/) || [];
         items = items.filter((entry) => entry.id !== id);
+        if (id && verb !== 'restore') daily.handled_today += 1;
         return route.fulfill({ json: { status: 'completed', result: {} } });
       }
       if (url.pathname === '/v1/review/items') {
@@ -145,6 +171,7 @@ async function open(viewport = { width: 1440, height: 900 }, { clock = true } = 
         return route.fulfill({ json: listing(url) });
       }
       if (url.pathname === '/v1/review/counts') return route.fulfill({ json: counts() });
+      if (url.pathname === '/v1/review/daily') return route.fulfill({ json: dailyPayload() });
       if (url.pathname === '/v1/taxonomy') {
         return route.fulfill({ json: { domains: [
           { id: 'education_learning', name: '教育学习', status: 'active' },
@@ -687,5 +714,66 @@ test('Shift+A is greyed out with the reason while the selection needs individual
   await page.locator('#message').filter({ hasText: '已批准 1 项' }).waitFor();
   assert.deepEqual(writes.map((write) => [write.path, write.body.action, write.body.items.map((i) => i.id)]),
     [['/v1/review/batch', 'approve', ['m1']]]);
+  await page.context().close();
+});
+
+test('the list opens by importance with tier labels and can switch to time order', async () => {
+  const importance = { r1: 'affects_knowledge', mp1: 'affects_knowledge', pc1: 'conflict_or_review' };
+  items = items.map((entry) => ({ ...entry, importance: importance[entry.id] || 'ordinary' }));
+  const page = await open();
+  await ready(page);
+  assert.equal(await page.locator('#sort-order').inputValue(), 'importance');
+  assert.deepEqual(await ids(page), ['r1', 'mp1', 'pc1', 'c1', 'm1', 'k1']);
+  const meta = (id) => page.locator(`#queue .queue-item[data-entry-id="${id}"] small`).innerText();
+  assert((await meta('r1')).includes('影响当前任务或已有知识'));
+  assert((await meta('pc1')).includes('冲突与复核'));
+  assert(!(await meta('c1')).includes('冲突'), 'ordinary items carry no tier label');
+  await page.locator('#sort-order').selectOption('oldest');
+  await page.waitForFunction(() => document.querySelector('#queue .queue-item')?.dataset.entryId === 'c1');
+  assert.deepEqual(await ids(page), ['c1', 'r1', 'pc1', 'mp1', 'm1', 'k1']);
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+test('the daily amount shows progress, says today can stop once reached, and hides at 0', async () => {
+  daily = { suggested: 2, handled_today: 1 };
+  const page = await open();
+  await ready(page);
+  const progress = page.locator('#daily-progress');
+  await progress.filter({ hasText: '今天已处理 1 / 2 项' }).waitFor();
+  assert.equal(await page.locator('#daily-amount').inputValue(), '2');
+
+  await page.keyboard.press('d');
+  await page.clock.runFor(5000);
+  await progress.filter({ hasText: '今天可以停止了' }).waitFor();
+  assert.equal(await progress.getAttribute('data-reached'), 'true');
+  assert.deepEqual(await ids(page), ['r1', 'pc1', 'mp1', 'm1', 'k1'], 'reaching it removes nothing else');
+
+  await page.locator('#daily-amount').fill('5');
+  await page.locator('#daily-amount').press('Enter');
+  await progress.filter({ hasText: '今天已处理 2 / 5 项' }).waitFor();
+  const put = writes.find((write) => write.method === 'PUT' && write.path === '/v1/review/daily');
+  assert.deepEqual([put?.body, put?.ifMatch], [{ suggested: 5 }, 'daily-2']);
+
+  await page.locator('#daily-amount').fill('0');
+  await page.locator('#daily-amount').press('Enter');
+  await page.getByText('已关闭每日建议处理量。').waitFor();
+  assert.equal(await progress.isHidden(), true);
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
+test('a decision made in the detail view is reported toward today with the listed etag', async () => {
+  const page = await open();
+  await ready(page);
+  await page.keyboard.press('j');
+  await page.keyboard.press('j');
+  assert.equal(await selectedId(page), 'pc1');
+  await page.getByRole('button', { name: '采用新记录' }).click();
+  await page.getByText('冲突已处理。').waitFor();
+  const report = writes.find((write) => write.path === '/v1/review/daily/handled');
+  assert.deepEqual(report?.body, { type: 'personal_conflict', id: 'pc1', etag: 'etag-pc1' });
+  await page.locator('#daily-progress').filter({ hasText: '今天已处理 1 / 10 项' }).waitFor();
+  assert.deepEqual(page.errors, []);
   await page.context().close();
 });

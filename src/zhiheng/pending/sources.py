@@ -19,7 +19,14 @@ from zhiheng.knowledge.classification import (
 from zhiheng.memory.personal_updates import PersonalUpdateService
 from zhiheng.memory.repository import MemoryRepository
 from zhiheng.pending.deferrals import DeferralStore
-from zhiheng.pending.inbox import ActionHandler, PendingInbox, PendingItem, to_utc
+from zhiheng.pending.inbox import (
+    ActionHandler,
+    HandledListener,
+    Importance,
+    PendingInbox,
+    PendingItem,
+    to_utc,
+)
 
 
 def _payload(value: object) -> dict[str, Any]:
@@ -108,7 +115,10 @@ class RelationSuggestionSource:
                        )) AS pending_since,
                        le.status AS left_status, le.current_version AS left_current,
                        re.status AS right_status, re.current_version AS right_current,
-                       lv.payload_json AS left_payload, rv.payload_json AS right_payload
+                       lv.payload_json AS left_payload, rv.payload_json AS right_payload,
+                       (SELECT a.state FROM conclusion_applicability a
+                        WHERE a.entry_id = re.id AND a.version = re.approved_version
+                       ) AS right_applicability
                 FROM conclusion_relations r
                 JOIN conclusion_entries le
                   ON le.id = r.left_id AND le.owner_user_id = r.owner_user_id
@@ -153,6 +163,7 @@ class RelationSuggestionSource:
                     actions=actions,
                     requires_individual_approval=True,
                     deferred=deferred,
+                    importance=_relation_importance(row),
                     title=str(left.get("claim") or left.get("title") or ""),
                     summary=str(right.get("claim") or "") or None,
                     detail={
@@ -166,6 +177,16 @@ class RelationSuggestionSource:
                 )
             )
         return items
+
+
+def _relation_importance(row: Any) -> Importance:
+    if row["kind"] == "conflict":
+        return Importance.CONFLICT_OR_REVIEW
+    if row["right_status"] != "formal":
+        return Importance.ORDINARY
+    if row["right_applicability"] is not None:
+        return Importance.CONFLICT_OR_REVIEW
+    return Importance.AFFECTS_KNOWLEDGE
 
 
 class PersonalConflictSource:
@@ -210,6 +231,7 @@ class PersonalConflictSource:
                     detail_actions=("confirm", "reject", "supplement"),
                     requires_individual_approval=False,
                     deferred=deferred,
+                    importance=Importance.CONFLICT_OR_REVIEW,
                     title=str(row["state_key"]),
                     detail={
                         "state_key": row["state_key"],
@@ -254,6 +276,7 @@ class MissingInfoPromptSource:
                     detail_actions=("supplement",),
                     requires_individual_approval=False,
                     deferred=deferred,
+                    importance=Importance.AFFECTS_KNOWLEDGE,
                     title=str(payload.get("query") or row["state_key"] or ""),
                     summary=str(row["reason"]),
                     detail={"state_key": row["state_key"], "payload": payload},
@@ -676,7 +699,7 @@ def _restore_conclusion(session: Session, owner: str, item: PendingItem) -> dict
     return {"status": ConclusionRepository().restore_draft(session, owner, item.id)["status"]}
 
 
-def build_inbox() -> PendingInbox:
+def build_inbox(on_handled: HandledListener | None = None) -> PendingInbox:
     deferrals = DeferralStore()
     inbox = PendingInbox(
         [
@@ -687,7 +710,8 @@ def build_inbox() -> PendingInbox:
             ExtractionSupplementSource(deferrals),
             MemoryCandidateSource(),
             ClassificationSource(),
-        ]
+        ],
+        on_handled,
     )
     # Approving a draft or relation writes formal knowledge, which needs the
     # app's object store: the API registers those two handlers on its inbox.

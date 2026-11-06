@@ -14,6 +14,10 @@
 .kb-page .inline-option { display: inline-flex; align-items: center; gap: var(--kb-space-2); font-weight: 500; }
 .kb-page .inline-option input[type="checkbox"] { width: auto; }
 .kb-page .inline-option select { width: auto; min-height: 36px; padding: 4px 34px 4px 12px; }
+.kb-page .inline-option input[type="number"] { width: 5.5em; min-height: 40px; padding: 4px 8px; }
+.kb-page .daily-progress { margin: 0 0 var(--kb-space-2); color: var(--muted); font-size: .92rem; }
+.kb-page .daily-progress[hidden] { display: none; }
+.kb-page .daily-progress[data-reached="true"] { color: var(--kb-success); font-weight: 500; }
 
 .kb-page .message { min-height: 1.6em; margin: 0 0 var(--kb-space-2); color: var(--accent); }
 .kb-page .message[data-tone="hint"] { color: var(--kb-warning); }

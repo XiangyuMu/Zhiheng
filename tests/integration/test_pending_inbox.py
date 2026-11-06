@@ -549,10 +549,11 @@ def test_items_are_ordered_by_when_they_became_pending_and_paginated(tmp_path: P
     _set_created(factory, "conclusion_entries", middle["id"], "2026-02-01 08:00:00")
     expected = [early["id"], middle["id"], late["id"]]
 
-    assert [i["id"] for i in _items(client)] == expected
+    assert [i["id"] for i in _items(client, order="oldest")] == expected
     assert [i["id"] for i in _items(client, order="newest")] == expected[::-1]
-    first = client.get("/v1/review/items", params={"limit": 2}).json()
-    second = client.get("/v1/review/items", params={"limit": 2, "offset": 2}).json()
+    page = {"order": "oldest", "limit": 2}
+    first = client.get("/v1/review/items", params=page).json()
+    second = client.get("/v1/review/items", params={**page, "offset": 2}).json()
     assert [i["id"] for i in first["items"]] == expected[:2]
     assert first["total"] == 3
     assert first["next_offset"] == 2

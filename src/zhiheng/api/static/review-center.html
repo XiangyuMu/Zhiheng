@@ -24,8 +24,11 @@
   </nav>
   <div class="list-options">
     <label class="inline-option"><input id="show-deferred" type="checkbox"> 只看已延后</label>
-    <label class="inline-option">排序 <select id="sort-order" aria-label="排序"><option value="oldest">最早优先</option><option value="newest">最新优先</option></select></label>
+    <label class="inline-option">排序 <select id="sort-order" aria-label="排序"><option value="importance">按重要程度</option><option value="oldest">最早优先</option><option value="newest">最新优先</option></select></label>
+    <label class="inline-option" title="设为 0 关闭每日提示">每日建议处理 <input id="daily-amount" type="number" min="0" max="500" step="1" inputmode="numeric" aria-describedby="daily-amount-hint"> 项</label>
+    <span id="daily-amount-hint" class="sr-only">设为 0 关闭每日提示</span>
   </div>
+  <p id="daily-progress" class="daily-progress" role="status" aria-live="polite" hidden></p>
   <p id="message" class="message" role="status" aria-live="polite"></p>
   <section id="layout" class="layout" data-view="list">
     <div class="list-pane">

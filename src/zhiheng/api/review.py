@@ -28,6 +28,7 @@ from zhiheng.pending import (
     UnknownPendingTypeError,
     require_known_types,
 )
+from zhiheng.pending.daily import MAX_DAILY_SUGGESTION, DailySuggestion, daily_etag
 from zhiheng.pending.inbox import DeferredFilter, PendingInbox, PendingItem, SortOrder
 from zhiheng.pending.sources import build_inbox
 
@@ -45,9 +46,20 @@ def _inbox(request: Request) -> PendingInbox:
 InboxDep = Annotated[PendingInbox, Depends(_inbox)]
 
 
+def _daily(request: Request) -> DailySuggestion:
+    daily: DailySuggestion = request.app.state.pending_daily
+    return daily
+
+
+DailyDep = Annotated[DailySuggestion, Depends(_daily)]
+
+
 def build_app_inbox(app: FastAPI) -> PendingInbox:
     """The inbox plus the approvals that write formal knowledge through the app's store."""
-    inbox = build_inbox()
+    daily: DailySuggestion = app.state.pending_daily
+    inbox = build_inbox(
+        lambda session, owner, item: daily.record(session, owner, item.type, item.id)
+    )
     repo = ConclusionRepository()
 
     def approve_draft(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
@@ -99,7 +111,7 @@ def pending_items(
     inbox: InboxDep,
     type: str | None = None,
     deferred: DeferredFilter = "exclude",
-    order: SortOrder = "oldest",
+    order: SortOrder = "importance",
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> dict[str, Any]:
@@ -156,17 +168,70 @@ def perform_pending_action(
     return response.model_dump()
 
 
-class BatchItem(BaseModel):
+class PendingItemRef(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: PendingType
     id: str = Field(min_length=1, max_length=255)
     etag: str = Field(min_length=1, max_length=255)
 
 
+@router.get("/daily")
+def daily_suggestion(session: SessionDep, user: AuthDep, daily: DailyDep) -> dict[str, Any]:
+    """The daily suggested amount and how many items were handled today."""
+    return daily.payload(session, user)
+
+
+class DailyPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    suggested: int = Field(ge=0, le=MAX_DAILY_SUGGESTION)
+
+
+@router.put("/daily")
+def update_daily_suggestion(
+    payload: DailyPayload,
+    session: SessionDep,
+    user: AuthDep,
+    daily: DailyDep,
+    mutation: MutationDep,
+) -> dict[str, Any]:
+    _key, if_match = mutation
+    current = daily.amount(session, user)
+    # Saving the amount that is already stored is a no-op, so a retried save succeeds.
+    if current != payload.suggested:
+        if if_match != daily_etag(current):
+            raise HTTPException(status_code=412, detail="daily suggested amount changed")
+        daily.set_amount(session, user, payload.suggested)
+    return daily.payload(session, user)
+
+
+@router.post("/daily/handled")
+def report_handled(
+    payload: PendingItemRef,
+    session: SessionDep,
+    user: AuthDep,
+    inbox: InboxDep,
+    daily: DailyDep,
+    _mutation: MutationDep,
+) -> dict[str, Any]:
+    """Count a decision made in the detail view through the type's own API.
+
+    The item must have changed since the page read it (decided, or no longer
+    pending), so merely opening an item never counts as handling it.
+    """
+    try:
+        item = inbox.get(session, user, payload.type.value, payload.id)
+    except PendingItemNotFoundError:
+        item = None
+    if item is not None and item.etag == payload.etag:
+        raise HTTPException(status_code=409, detail="the item has not changed since it was read")
+    daily.record(session, user, payload.type.value, payload.id)
+    return daily.payload(session, user)
+
+
 class BatchPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     action: Literal["approve", "reject", "defer", "restore"]
-    items: list[BatchItem] = Field(min_length=1, max_length=500)
+    items: list[PendingItemRef] = Field(min_length=1, max_length=500)
 
 
 @router.post("/batch")
@@ -203,6 +268,7 @@ def perform_pending_batch(
 
 
 def install_review_routes(app: FastAPI) -> None:
+    app.state.pending_daily = DailySuggestion()
     app.state.pending_inbox = build_app_inbox(app)
     app.include_router(router)
 

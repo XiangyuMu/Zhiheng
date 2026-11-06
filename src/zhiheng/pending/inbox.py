@@ -12,7 +12,7 @@ import builtins
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from typing import Any, Literal, Protocol
 
 from sqlalchemy.orm import Session
@@ -31,8 +31,23 @@ class PendingType(StrEnum):
 # In the order the inbox lists types (filters 1-7).
 PENDING_TYPES: tuple[str, ...] = tuple(PendingType)
 
+
+class Importance(IntEnum):
+    """The default order of 待处理 (spec decision 22), most important first.
+
+    It only orders the list: no tier changes what an item is or how it is decided.
+    """
+
+    # Asked by a question being answered, or changes formal knowledge in use.
+    AFFECTS_KNOWLEDGE = 0
+    # A conflict, or a relation to formal knowledge that is paused or under review.
+    CONFLICT_OR_REVIEW = 1
+    # Everything else, such as a new conclusion draft.
+    ORDINARY = 2
+
+
 DeferredFilter = Literal["exclude", "only", "include"]
-SortOrder = Literal["oldest", "newest"]
+SortOrder = Literal["importance", "oldest", "newest"]
 
 
 class PendingItemNotFoundError(LookupError):
@@ -87,6 +102,7 @@ class PendingItem:
     # Decisions that need the detail view (choose, clarify, supplement).
     detail_actions: tuple[str, ...] = ()
     detail: Mapping[str, Any] = field(default_factory=dict)
+    importance: Importance = Importance.ORDINARY
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -99,6 +115,7 @@ class PendingItem:
             "detail_actions": list(self.detail_actions),
             "requires_individual_approval": self.requires_individual_approval,
             "deferred": self.deferred,
+            "importance": self.importance.name.lower(),
             "title": self.title,
             "summary": self.summary,
             "detail": dict(self.detail),
@@ -112,6 +129,8 @@ class PendingSource(Protocol):
 
 
 ActionHandler = Callable[[Session, str, PendingItem], Mapping[str, Any]]
+# Told about each item the user decided on (every verb except restore).
+HandledListener = Callable[[Session, str, PendingItem], None]
 
 
 def to_utc(value: object) -> datetime:
@@ -123,9 +142,12 @@ def to_utc(value: object) -> datetime:
 
 
 class PendingInbox:
-    def __init__(self, sources: Iterable[PendingSource]) -> None:
+    def __init__(
+        self, sources: Iterable[PendingSource], on_handled: HandledListener | None = None
+    ) -> None:
         self._sources = {source.type: source for source in sources}
         self._handlers: dict[tuple[str, str], ActionHandler] = {}
+        self._on_handled = on_handled
 
     def register_action(self, item_type: str, action: str, handler: ActionHandler) -> None:
         require_known_types([item_type])
@@ -149,7 +171,7 @@ class PendingInbox:
         *,
         types: Sequence[str] | None = None,
         deferred: DeferredFilter = "exclude",
-        order: SortOrder = "oldest",
+        order: SortOrder = "importance",
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -161,6 +183,9 @@ class PendingInbox:
         items.sort(key=lambda item: (item.pending_since, item.type, item.id))
         if order == "newest":
             items.reverse()
+        elif order == "importance":
+            # Stable: oldest first within each tier.
+            items.sort(key=lambda item: item.importance)
         page = items[offset : offset + limit]
         next_offset = offset + limit if offset + limit < len(items) else None
         return {
@@ -200,6 +225,8 @@ class PendingInbox:
         if handler is None or action not in item.actions:
             raise ActionUnavailableError(f"{action} is not available for this item")
         result = dict(handler(session, owner, item))
+        if action != "restore" and self._on_handled is not None:
+            self._on_handled(session, owner, item)
         return {"type": item_type, "id": item_id, "action": action, **result}
 
     def perform_batch(
