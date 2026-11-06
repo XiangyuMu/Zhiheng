@@ -14,6 +14,7 @@ from typing import Literal, cast
 from sqlalchemy.exc import OperationalError
 
 from zhiheng.conclusions.applicability import ConclusionApplicabilityService
+from zhiheng.consolidation import run_consolidation_if_due
 from zhiheng.core.config import Settings, get_settings
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
 from zhiheng.evolution.contracts import (
@@ -118,6 +119,9 @@ def process_worker_once(
             )
         finally:
             _close_executor(executor)
+        # Last, and only once the user has been idle: never in an answer's path.
+        # At most daily, so it never keeps the loop from resting between batches.
+        run_consolidation_if_due(session_factory, now=_utc_now())
         return enqueued + indexed + classified + extracted + executed + suspended
     finally:
         engine.dispose()

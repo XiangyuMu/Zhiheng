@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, text
+from sqlalchemy import CursorResult, RowMapping, text
 from sqlalchemy.orm import Session
 
 from zhiheng.conclusions.applicability import ConclusionApplicabilityService
@@ -552,43 +552,16 @@ class ConclusionRepository:
             ).scalar_one_or_none()
             if duplicate is not None:
                 continue
-            relation_id = new_id()
-            created_at = self._event_timestamp()
-            session.execute(
-                text(
-                    "INSERT INTO conclusion_relations "
-                    "(id,owner_user_id,left_id,right_id,kind,status,left_version,right_version,"
-                    "created_at) VALUES (:id,:o,:left,:right,:kind,'proposed',:lv,:rv,:created_at)"
-                ),
-                {
-                    "id": relation_id,
-                    "o": owner,
-                    "left": entry_id,
-                    "right": row["id"],
-                    "kind": kind,
-                    "lv": item["version"],
-                    "rv": old_payload.get("version", 1),
-                    "created_at": created_at,
-                },
-            )
-            session.execute(
-                text(
-                    "INSERT INTO conclusion_relation_events "
-                    "(id,relation_id,owner_user_id,from_status,to_status,actor_user_id,"
-                    "left_version,right_version,left_source_id,right_source_id,created_at) "
-                    "VALUES (:id,:relation,:o,NULL,'proposed',:actor,:lv,:rv,:ls,:rs,:created_at)"
-                ),
-                {
-                    "id": new_id(),
-                    "relation": relation_id,
-                    "o": owner,
-                    "actor": owner,
-                    "lv": item["version"],
-                    "rv": old_payload.get("version", 1),
-                    "ls": item["source"]["id"],
-                    "rs": row["source_id"],
-                    "created_at": created_at,
-                },
+            relation_id, created_at = self.insert_relation(
+                session,
+                owner,
+                left_id=entry_id,
+                right_id=str(row["id"]),
+                kind=kind,
+                left_version=int(item["version"]),
+                right_version=int(old_payload.get("version", 1)),
+                left_source_id=str(item["source"]["id"]),
+                right_source_id=str(row["source_id"]),
             )
             proposals.append(
                 {
@@ -610,6 +583,63 @@ class ConclusionRepository:
             )
         self._write(session, owner, operation_key, {"entry_id": entry_id}, {"items": proposals})
         return proposals
+
+    def insert_relation(
+        self,
+        session: Session,
+        owner: str,
+        *,
+        left_id: str,
+        right_id: str,
+        kind: str,
+        left_version: int,
+        right_version: int,
+        left_source_id: str,
+        right_source_id: str,
+        origin: str = "review",
+    ) -> tuple[str, str]:
+        """Record a proposed relation and the first event of its history."""
+        relation_id = new_id()
+        created_at = self._event_timestamp()
+        session.execute(
+            text(
+                "INSERT INTO conclusion_relations "
+                "(id,owner_user_id,left_id,right_id,kind,status,left_version,right_version,"
+                "created_at,origin) "
+                "VALUES (:id,:o,:left,:right,:kind,'proposed',:lv,:rv,:created_at,:origin)"
+            ),
+            {
+                "id": relation_id,
+                "o": owner,
+                "left": left_id,
+                "right": right_id,
+                "kind": kind,
+                "lv": left_version,
+                "rv": right_version,
+                "created_at": created_at,
+                "origin": origin,
+            },
+        )
+        session.execute(
+            text(
+                "INSERT INTO conclusion_relation_events "
+                "(id,relation_id,owner_user_id,from_status,to_status,actor_user_id,"
+                "left_version,right_version,left_source_id,right_source_id,created_at) "
+                "VALUES (:id,:relation,:o,NULL,'proposed',:actor,:lv,:rv,:ls,:rs,:created_at)"
+            ),
+            {
+                "id": new_id(),
+                "relation": relation_id,
+                "o": owner,
+                "actor": owner,
+                "lv": left_version,
+                "rv": right_version,
+                "ls": left_source_id,
+                "rs": right_source_id,
+                "created_at": created_at,
+            },
+        )
+        return relation_id, created_at
 
     def list_relations(
         self, session: Session, owner: str, entry_id: str, status: str | None = None
@@ -768,8 +798,12 @@ class ConclusionRepository:
             raise ValueError("relation not found")
         if row["status"] not in {"proposed", "deferred"}:
             raise ValueError("relation is no longer reviewable")
+        # A review suggestion decides a draft against formal knowledge; a
+        # consolidation suggestion relates two conclusions that are both formal.
+        is_consolidation = row["origin"] == "consolidation"
+        left_expected = "formal" if is_consolidation else "draft"
         if decision == "approved" and (
-            row["left_status"] != "draft"
+            row["left_status"] != left_expected
             or row["right_status"] != "formal"
             or int(row["left_current_version"]) != int(row["left_version"])
             or int(row["right_current_version"]) != int(row["right_version"])
@@ -781,16 +815,18 @@ class ConclusionRepository:
                 "WHERE id=:id AND owner_user_id=:o AND status IN ('proposed','deferred') "
                 "AND (:status != 'approved' OR ("
                 "EXISTS (SELECT 1 FROM conclusion_entries e WHERE e.id=left_id "
-                "AND e.current_version=left_version AND e.status='draft') AND "
+                "AND e.current_version=left_version AND e.status=:left_status) AND "
                 "EXISTS (SELECT 1 FROM conclusion_entries e WHERE e.id=right_id "
                 "AND e.current_version=right_version AND e.approved_version=right_version "
                 "AND e.status='formal')))"
             ),
-            {"status": decision, "id": relation_id, "o": owner},
+            {"status": decision, "id": relation_id, "o": owner, "left_status": left_expected},
         )
         if int(session.execute(text("SELECT changes()")).scalar_one()) != 1:
             raise ValueError("relation is no longer reviewable")
-        if decision == "approved":
+        if decision == "approved" and is_consolidation:
+            self._apply_consolidation(session, owner, row)
+        elif decision == "approved":
             left_status = "merged" if row["kind"] == "duplicate" else "formal"
             session.execute(
                 text(
@@ -860,6 +896,7 @@ class ConclusionRepository:
             "left_id": row["left_id"],
             "right_id": row["right_id"],
             "kind": row["kind"],
+            "origin": row["origin"],
             "status": decision,
             "left_version": row["left_version"],
             "right_version": row["right_version"],
@@ -867,6 +904,28 @@ class ConclusionRepository:
         return self._write(
             session, owner, key, {"relation_id": relation_id, "decision": decision}, result
         )
+
+    @staticmethod
+    def _apply_consolidation(session: Session, owner: str, row: RowMapping) -> None:
+        """Approve a consolidation suggestion between two formal conclusions.
+
+        A merge retires the newer duplicate and a revision the older entry it
+        revises; both stay as history and stop serving. An approved conflict
+        changes no entry: while it stands, neither side serves answers.
+        """
+        retired = {"duplicate": ("left_id", "merged"), "revision": ("right_id", "superseded")}
+        if row["kind"] not in retired:
+            return
+        side, status = retired[str(row["kind"])]
+        session.execute(
+            text(
+                "UPDATE conclusion_entries SET status=:status "
+                "WHERE id=:id AND owner_user_id=:o AND status='formal'"
+            ),
+            {"status": status, "id": row[side], "o": owner},
+        )
+        if int(session.execute(text("SELECT changes()")).scalar_one()) != 1:
+            raise ValueError("relation is stale; refresh and regenerate the proposal")
 
     def restore_relation(self, session: Session, owner: str, relation_id: str) -> dict[str, Any]:
         """Return a deferred relation suggestion to review and record it in history."""
