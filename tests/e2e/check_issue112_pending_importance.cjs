@@ -126,7 +126,10 @@ const SUPPLEMENT = { formal: "琥珀能保存远古昆虫", draft: "琥珀能保
 
     const before = await api("/v1/review/daily");
     assert.equal(before.suggested, 10, "the amount defaults to ten");
-    await progress.filter({ hasText: `今天已处理 ${before.handled_today} / 10 项` }).waitFor();
+    // Earlier stages may already have handled ten or more items today.
+    await progress.filter({ hasText: before.handled_today >= 10
+      ? `今天已处理 ${before.handled_today} 项，达到建议量`
+      : `今天已处理 ${before.handled_today} / 10 项` }).waitFor();
     const target = before.handled_today + 1;
     const changed = await setAmount(target);
     assert.equal(changed.suggested, target);
