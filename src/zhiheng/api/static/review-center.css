@@ -86,7 +86,7 @@
 
 @media (max-width: 900px) {
   .kb-page .shell { padding: 28px 16px 96px; }
-  .kb-page .layout { grid-template-columns: 1fr; }
+  .kb-page .layout { grid-template-columns: minmax(0, 1fr); }
   .kb-page .layout[data-view="list"] .detail { display: none; }
   .kb-page .layout[data-view="detail"] .list-pane { display: none; }
   .kb-page .detail { position: static; max-height: none; min-height: 0; }

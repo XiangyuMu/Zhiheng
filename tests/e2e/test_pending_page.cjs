@@ -796,3 +796,14 @@ test('a detail save says it is saved only once the list has reloaded with the ne
   assert.deepEqual(page.errors, []);
   await page.context().close();
 });
+
+test('at 390px a long summary is cut off inside its row instead of widening the page', async () => {
+  items = items.map((entry) => (entry.id === 'c1'
+    ? { ...entry, summary: '很长的摘要'.repeat(60) } : entry));
+  const page = await open({ width: 390, height: 844 });
+  await ready(page);
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
+    'the pending list must fit a narrow viewport');
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
