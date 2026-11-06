@@ -46,6 +46,8 @@
     deferred: false,
     order: "importance",
     daily: null,
+    // Counts saved daily amounts, so a read that started before a save is dropped.
+    dailySaves: 0,
     items: [],
     index: 0,
     loaded: false,
@@ -156,6 +158,7 @@
 
   async function load({ keep } = {}) {
     const seq = ++state.loadSeq;
+    const dailySaves = state.dailySaves;
     const keepKey = keep || (current() ? keyOf(current()) : null);
     const params = new URLSearchParams({
       deferred: state.deferred ? "only" : "exclude",
@@ -180,7 +183,7 @@
       state.error = null;
       state.loaded = true;
       if (counts) renderCounts(counts);
-      if (daily) renderDaily(daily);
+      if (daily && dailySaves === state.dailySaves) renderDaily(daily);
       const kept = keepKey ? state.items.findIndex((item) => keyOf(item) === keepKey) : -1;
       state.index = kept >= 0 ? kept : Math.min(state.index, Math.max(0, state.items.length - 1));
     } catch (error) {
@@ -216,8 +219,9 @@
   }
 
   async function refreshDaily() {
+    const dailySaves = state.dailySaves;
     const daily = await request("/v1/review/daily").catch(() => null);
-    if (daily) renderDaily(daily);
+    if (daily && dailySaves === state.dailySaves) renderDaily(daily);
   }
 
   async function saveDailyAmount() {
@@ -232,7 +236,9 @@
     }
     if (suggested === state.daily.suggested) return;
     try {
-      renderDaily(await mutation("/v1/review/daily", "PUT", { suggested }, state.daily.etag));
+      const saved = await mutation("/v1/review/daily", "PUT", { suggested }, state.daily.etag);
+      state.dailySaves += 1;
+      renderDaily(saved);
       say(suggested === 0 ? "已关闭每日建议处理量。" : `每日建议处理 ${suggested} 项。`, "success");
     } catch (error) {
       say(`每日建议处理量未保存：${error.message}`, "error");

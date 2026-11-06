@@ -763,6 +763,31 @@ test('the daily amount shows progress, says today can stop once reached, and hid
   await page.context().close();
 });
 
+test('a list reload that started before a daily amount save does not bring the old amount back', async () => {
+  daily = { suggested: 2, handled_today: 0, max_suggested: 500 };
+  const page = await open();
+  await ready(page);
+  let release;
+  itemsGate = new Promise((resolve) => { release = resolve; });
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#queue')?.getAttribute('aria-busy') === 'true');
+
+  await page.locator('#daily-amount').fill('5');
+  await page.locator('#daily-amount').press('Enter');
+  await page.getByText('每日建议处理 5 项。').waitFor();
+  release();
+  itemsGate = null;
+  await page.waitForFunction(() => document.querySelector('#queue')?.getAttribute('aria-busy') === 'false');
+
+  await page.locator('#daily-amount').fill('0');
+  await page.locator('#daily-amount').press('Enter');
+  await page.getByText('已关闭每日建议处理量。').waitFor();
+  const puts = writes.filter((write) => write.method === 'PUT' && write.path === '/v1/review/daily');
+  assert.deepEqual(puts.map((write) => write.ifMatch), ['daily-2', 'daily-5']);
+  assert.deepEqual(page.errors, []);
+  await page.context().close();
+});
+
 test('a decision made in the detail view is reported toward today with the listed etag', async () => {
   const page = await open();
   await ready(page);
