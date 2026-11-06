@@ -127,7 +127,7 @@ class RelationSuggestionSource:
         rows = session.execute(
             text(
                 """
-                SELECT r.id, r.kind, r.status, r.left_id, r.right_id,
+                SELECT r.id, r.kind, r.status, r.origin, r.left_id, r.right_id,
                        r.left_version, r.right_version,
                        COALESCE(r.created_at, (
                          SELECT MIN(ev.created_at) FROM conclusion_relation_events ev
@@ -150,7 +150,8 @@ class RelationSuggestionSource:
                   ON rv.entry_id = r.right_id AND rv.version = r.right_version
                 WHERE r.owner_user_id = :owner
                   AND r.status IN ('proposed', 'deferred')
-                  AND le.status IN ('draft', 'deferred')
+                  AND (le.status IN ('draft', 'deferred')
+                       OR (r.origin = 'consolidation' AND le.status = 'formal'))
                 """
             ),
             {"owner": owner},
@@ -159,8 +160,11 @@ class RelationSuggestionSource:
         for row in rows:
             # Deferring the draft sets its relation suggestions aside with it.
             deferred = str(row["status"]) == "deferred" or row["left_status"] == "deferred"
+            # A review suggestion decides a draft; a consolidation suggestion
+            # relates two formal conclusions that must both be unchanged.
+            left_expected = "formal" if row["origin"] == "consolidation" else "draft"
             approvable = (
-                row["left_status"] == "draft"
+                row["left_status"] == left_expected
                 and row["right_status"] == "formal"
                 and int(row["left_current"]) == int(row["left_version"])
                 and int(row["right_current"]) == int(row["right_version"])
@@ -188,6 +192,7 @@ class RelationSuggestionSource:
                     summary=str(right.get("claim") or "") or None,
                     detail={
                         "kind": row["kind"],
+                        "origin": row["origin"],
                         "left_id": row["left_id"],
                         "right_id": row["right_id"],
                         "status": row["status"],

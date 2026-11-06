@@ -5,13 +5,14 @@ import hmac
 import json
 from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote
 
 import uvicorn
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -22,6 +23,7 @@ from sqlalchemy.orm import Session
 from zhiheng import __version__
 from zhiheng.api.classifications import install_classification_routes
 from zhiheng.api.conclusions import install_conclusion_routes
+from zhiheng.api.consolidation import install_consolidation_routes
 from zhiheng.api.decisions import install_decision_routes
 from zhiheng.api.deployment import install_deployment_routes
 from zhiheng.api.evolution import install_evolution_routes
@@ -35,6 +37,7 @@ from zhiheng.api.retrieval import initialize_retrieval_services, install_retriev
 from zhiheng.api.review import install_review_routes
 from zhiheng.api.taxonomy import install_taxonomy_routes
 from zhiheng.auth import SessionService
+from zhiheng.consolidation import is_activity, record_activity
 from zhiheng.core.config import Settings, get_settings
 from zhiheng.core.ids import sha256_text
 from zhiheng.db.session import create_session_factory, create_sqlite_engine, session_scope
@@ -205,6 +208,15 @@ def create_app(
     app.state.settings = app_settings
 
     @app.middleware("http")
+    async def mark_conversation_and_review_activity(request: Request, call_next: Any) -> Any:
+        # Background consolidation waits for 30 minutes without either (#113).
+        # Marked before the request runs: its own session holds the write lock
+        # until the response is sent.
+        if is_activity(request.method, request.url.path):
+            await run_in_threadpool(record_activity, session_factory, now=datetime.now(UTC))
+        return await call_next(request)
+
+    @app.middleware("http")
     async def revalidate_pages_and_assets(request: Request, call_next: Any) -> Any:
         # Pages and their scripts change with every release; without an explicit
         # policy browsers cache them heuristically and keep running stale code.
@@ -238,6 +250,7 @@ def create_app(
     install_memory_routes(app, app_settings)
     install_retrieval_routes(app, app_settings)
     install_review_routes(app)
+    install_consolidation_routes(app)
     install_decision_routes(app, app_settings)
     install_gap_routes(app, app_settings)
     install_evolution_routes(app, app_settings)

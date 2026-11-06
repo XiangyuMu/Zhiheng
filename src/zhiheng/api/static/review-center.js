@@ -540,7 +540,10 @@
       ]);
       const relation = (left.relations || []).find((entry) => entry.id === item.id) || {};
       const comparison = node("section", undefined, "relation-comparison");
-      [["待批准结论", left], ["已有知识", right]].forEach(([heading, side]) => {
+      // Background consolidation relates two conclusions that are both formal already.
+      const headings = item.detail.origin === "consolidation"
+        ? ["较新的正式知识", "较早的正式知识"] : ["待批准结论", "已有知识"];
+      [[headings[0], left], [headings[1], right]].forEach(([heading, side]) => {
         const block = node("div", undefined, "relation-side");
         block.append(node("h3", `${heading} · v${side.version || "?"}`), definitions([
           ["结论", side.claim],
@@ -554,6 +557,9 @@
         comparison,
         node("p", relation.explanation || "请确认这两条结论之间的关系。", "relation-explanation"),
       ];
+      if (item.detail.origin === "consolidation" && item.detail.kind === "conflict") {
+        parts.push(node("p", "批准冲突后，两条结论在冲突解决前都不再用于回答。", "muted decision-hint"));
+      }
       if (item.detail.stale) parts.push(node("p", "关系两侧的结论已变化，不能批准；可以拒绝或延后。", "kb-error"));
       return parts;
     },
