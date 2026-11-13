@@ -46,6 +46,16 @@
             </div>
           </section>
 
+          <section class="onboarding-entry panel" data-onboarding-entry hidden aria-labelledby="onboarding-entry-title">
+            <div>
+              <p class="eyebrow">首次引导</p>
+              <h2 id="onboarding-entry-title">用五个问题补充基本情况</h2>
+              <p>可以留空任意一题；明确的回答会成为个人记忆，推断要你确认后才生效。</p>
+            </div>
+            <button type="button" class="secondary" id="onboarding-entry-open" data-onboarding-open>填写首次引导</button>
+          </section>
+          <p class="onboarding-result muted" data-onboarding-result role="status" hidden></p>
+
           <section class="personalization-settings panel" aria-labelledby="personalization-title">
             <div>
               <p class="eyebrow">个性化范围</p>
@@ -181,6 +191,7 @@
     </dialog>
 
     <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+    <script src="/onboarding.js" defer></script>
     <script src="/memory-center.js" defer></script>
   </body>
 </html>

@@ -24,6 +24,8 @@
             <h1 id="research-title">让每一个结论，都有出处。</h1>
             <p class="lead">找回读过的材料，梳理问题，也核对答案。</p>
           </div>
+          <div id="onboarding-card" class="onboarding-card" data-onboarding-card hidden><div><strong>先用五个问题认识你</strong><p>职业、兴趣、当前目标、回答风格和不做个性化的主领域，都可以留空或整体跳过。</p><p class="inline-error" role="alert" data-onboarding-error hidden></p></div><div class="onboarding-card-actions"><button type="button" class="quiet" data-onboarding-skip>跳过</button><button type="button" class="button small" data-onboarding-open>开始</button></div></div>
+          <p class="onboarding-result muted" data-onboarding-result role="status" hidden></p>
           <form id="answer-form" class="question-composer">
             <label for="question" class="sr-only">研究问题</label>
             <textarea id="question" rows="3" required maxlength="4000" placeholder="想找回什么材料，或核对哪个结论？"></textarea>
@@ -223,6 +225,7 @@
     <div class="dialog-actions"><button id="context-prompt-skip" type="button" class="secondary">跳过</button><button id="context-prompt-defer" type="button" class="secondary">稍后处理</button><button id="context-prompt-supplement" type="button" class="secondary" hidden>补充并保存</button><button id="context-prompt-confirm" type="button" class="button" hidden>采用新记录</button></div>
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script src="/onboarding.js" defer></script>
   <script src="/knowledge-agent.js" defer></script>
 </body>
 </html>

@@ -19,6 +19,7 @@ from zhiheng.core.config import Settings
 from zhiheng.core.ids import json_text, new_id, sha256_json
 from zhiheng.db.session import session_scope
 from zhiheng.memory import MemoryCandidateInput, MemoryRepository, MemoryValue
+from zhiheng.memory.onboarding import OnboardingAlreadyCompletedError, OnboardingQuestionnaire
 from zhiheng.memory.personalization import PersonalizationSettings, personalization_etag
 from zhiheng.memory.repository import (
     OperationConflictError,
@@ -33,6 +34,7 @@ CSRF_COOKIE = "zhiheng_csrf"
 router = APIRouter()
 repository = MemoryRepository()
 personalization_settings = PersonalizationSettings()
+onboarding_questionnaire = OnboardingQuestionnaire()
 session_service = SessionService()
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -165,6 +167,22 @@ class PersonalizationSettingsPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     excluded_domain_ids: list[str] = Field(max_length=64)
+
+
+class OnboardingAnswers(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    occupation: str = Field(default="", max_length=200)
+    interests: str = Field(default="", max_length=200)
+    current_goal: str = Field(default="", max_length=200)
+    answer_style: str = Field(default="", max_length=200)
+    excluded_domains: list[str] | None = Field(default=None, max_length=64)
+
+
+class OnboardingPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    answers: OnboardingAnswers
 
 
 class MutationResponse(BaseModel):
@@ -364,6 +382,45 @@ def update_personalization(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return personalization_settings.payload(session)
+
+
+@router.get("/v1/memory/onboarding")
+def onboarding(session: SessionDep, user_id: AuthDep) -> dict[str, Any]:
+    return onboarding_questionnaire.payload(session, user_id)
+
+
+@router.post("/v1/memory/onboarding/skip")
+def skip_onboarding(
+    session: SessionDep,
+    user_id: AuthDep,
+    _mutation: MutationDep,
+) -> dict[str, Any]:
+    onboarding_questionnaire.skip(session, user_id)
+    return onboarding_questionnaire.payload(session, user_id)
+
+
+@router.post("/v1/memory/onboarding")
+def complete_onboarding(
+    payload: OnboardingPayload,
+    session: SessionDep,
+    user_id: AuthDep,
+    mutation: MutationDep,
+) -> dict[str, Any]:
+    operation_key, _if_match = mutation
+    answers = payload.answers
+    try:
+        result = onboarding_questionnaire.complete(
+            session,
+            user_id,
+            text_answers=answers.model_dump(exclude={"excluded_domains"}),
+            excluded_domain_ids=answers.excluded_domains,
+            operation_key=operation_key,
+        )
+    except OnboardingAlreadyCompletedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {**onboarding_questionnaire.payload(session, user_id), **result}
 
 
 @router.get("/v1/memory/profile-preview")
