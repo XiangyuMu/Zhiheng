@@ -118,6 +118,17 @@ ISSUE113_CHECKS = {
     "narrow": "the formal comparison fits a narrow viewport",
 }
 
+ISSUE114_CHECKS = {
+    "card": "the home page offers the questionnaire on first use without blocking the composer",
+    "skip": "skipping the whole questionnaire keeps it from appearing again",
+    "later": "a skipped questionnaire can still be completed from the memory center",
+    "memory": "explicit answers become personal memory under the auto-memory rules",
+    "inferred": "inferences from the answers await confirmation",
+    "volatile": "the current goal is remembered as volatile",
+    "domains": "the fifth answer becomes the domains without personalization",
+    "narrow": "the questionnaire fits a narrow viewport",
+}
+
 ISSUE10_CHECKS = {
     "review": (
         "browser review queue covers counts, recovery, stale-version retry, and "
@@ -220,6 +231,7 @@ SCENARIO_CHECKS = {
     "issue111_personalization": ISSUE111_CHECKS,
     "issue112_pending_importance": ISSUE112_CHECKS,
     "issue113_consolidation": ISSUE113_CHECKS,
+    "issue114_onboarding": ISSUE114_CHECKS,
     "issue10_matrix": ISSUE10_CHECKS,
     "issue14_writes": ISSUE14_CHECKS,
     "issue11_upgrade": ISSUE11_CHECKS,
@@ -239,6 +251,7 @@ EXPECTED_CHECKS = {
     "issue111_personalization": Path("issue111-personalization/checks.json"),
     "issue112_pending_importance": Path("issue112-pending-importance/checks.json"),
     "issue113_consolidation": Path("issue113-consolidation/checks.json"),
+    "issue114_onboarding": Path("issue114-onboarding/checks.json"),
     "issue10_matrix": Path("issue10-matrix/checks.json"),
     "issue14_writes": Path("issue14-writes/checks.json"),
     "issue11_upgrade": Path("issue11-upgrade/checks.json"),
@@ -395,6 +408,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     "issue111_personalization",
                     "issue112_pending_importance",
                     "issue113_consolidation",
+                    "issue114_onboarding",
                     "issue10_matrix",
                     "issue14_writes",
                     "issue11_upgrade",
@@ -754,6 +768,7 @@ def main() -> int:
             "node tests/e2e/check_issue111_personalization.cjs",
             "node tests/e2e/check_issue112_pending_importance.cjs",
             "node tests/e2e/check_issue113_consolidation.cjs",
+            "node tests/e2e/check_issue114_onboarding.cjs",
             "node tests/e2e/check_issue10_matrix.cjs",
             "node tests/e2e/check_issue14_writes.cjs",
             "node tests/e2e/check_issue11_upgrade.cjs",
@@ -848,6 +863,7 @@ def main() -> int:
             "#111": list(ISSUE111_CHECKS.values()),
             "#112": list(ISSUE112_CHECKS.values()),
             "#113": list(ISSUE113_CHECKS.values()),
+            "#114": list(ISSUE114_CHECKS.values()),
             "#55": [
                 "browser answer failures use a local injected Provider boundary",
                 "invalid model output stops as invalid_model_output with audit metadata",
