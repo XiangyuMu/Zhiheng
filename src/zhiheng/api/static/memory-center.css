@@ -67,6 +67,31 @@ body { overflow-x: hidden; }
   color: var(--muted, #606775);
 }
 
+.onboarding-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--kb-space-4);
+}
+
+.onboarding-entry[hidden] {
+  display: none;
+}
+
+.onboarding-result {
+  max-width: none;
+  margin: 0;
+}
+
+.onboarding-entry h2 {
+  margin: 0 0 6px;
+}
+
+.onboarding-entry p {
+  color: var(--kb-text-muted);
+}
+
 .personalization-settings {
   display: grid;
   grid-template-columns: minmax(220px, 0.65fr) minmax(0, 1.35fr);

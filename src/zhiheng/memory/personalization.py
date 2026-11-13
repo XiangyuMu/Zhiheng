@@ -42,6 +42,14 @@ class PersonalizationDecision:
         return primary_domain_name(self.question_domain_id)
 
 
+def ordered_primary_domains() -> list[dict[str, str]]:
+    """The fourteen primary domains as id and name, in catalog order."""
+    return [
+        {"id": domain.id, "name": domain.name}
+        for domain in sorted(PRIMARY_DOMAINS, key=lambda item: item.sort_order)
+    ]
+
+
 def primary_domain_name(domain_id: str | None) -> str | None:
     return _PRIMARY_DOMAIN_NAMES.get(domain_id or "")
 
@@ -53,9 +61,7 @@ class PersonalizationSettings:
 
     def replace_excluded_domain_ids(self, session: Session, domain_ids: Iterable[str]) -> None:
         wanted = frozenset(domain_ids)
-        unknown = wanted - _PRIMARY_DOMAIN_NAMES.keys()
-        if unknown:
-            raise ValueError(f"not an active primary domain: {', '.join(sorted(unknown))}")
+        self.validate_domain_ids(wanted)
         current = self.excluded_domain_ids(session)
         for domain_id in current - wanted:
             session.execute(
@@ -67,6 +73,11 @@ class PersonalizationSettings:
                 text("INSERT INTO personalization_excluded_domains (domain_id) VALUES (:id)"),
                 {"id": domain_id},
             )
+
+    def validate_domain_ids(self, domain_ids: Iterable[str]) -> None:
+        unknown = frozenset(domain_ids) - _PRIMARY_DOMAIN_NAMES.keys()
+        if unknown:
+            raise ValueError(f"not an active primary domain: {', '.join(sorted(unknown))}")
 
     def decide(self, session: Session, query: str) -> PersonalizationDecision:
         matches = tuple(match_primary_domains(query))
@@ -89,8 +100,8 @@ class PersonalizationSettings:
         return {
             "excluded_domain_ids": ordered,
             "domains": [
-                {"id": domain.id, "name": domain.name, "excluded": domain.id in excluded}
-                for domain in sorted(PRIMARY_DOMAINS, key=lambda item: item.sort_order)
+                {**domain, "excluded": domain["id"] in excluded}
+                for domain in ordered_primary_domains()
             ],
             "etag": personalization_etag(ordered),
         }

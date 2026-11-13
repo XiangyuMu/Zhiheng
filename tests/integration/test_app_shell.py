@@ -79,6 +79,7 @@ def test_pending_page_is_titled_pending(tmp_path: Path) -> None:
         "/review-center.js",
         "/taxonomy-center",
         "/app-shell.js",
+        "/onboarding.js",
     ],
 )
 def test_workspace_assets_require_a_session(tmp_path: Path, path: str) -> None:

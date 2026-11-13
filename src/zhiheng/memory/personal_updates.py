@@ -678,13 +678,19 @@ class PersonalUpdateService:
         )
 
 
+# Statements the user made themselves; only these may become memory without review.
+EXPLICIT_SOURCE_KINDS = frozenset(
+    {"user_explicit", "user", "conversation_explicit", "onboarding_explicit"}
+)
+
+
 def _requires_review(update: PersonalUpdate) -> bool:
     return (
         update.inferred
         or update.quoted
         or update.hypothetical
         or update.joke
-        or update.source_kind not in {"user_explicit", "user", "conversation_explicit"}
+        or update.source_kind not in EXPLICIT_SOURCE_KINDS
     )
 
 

@@ -46,6 +46,8 @@ const VIEW_COPY = {
 
 const SOURCE_LABELS = {
   user_explicit: "用户明确提供",
+  onboarding_explicit: "首次引导回答",
+  onboarding_inferred: "首次引导推断",
   agent_inferred: "Agent 推断",
   explicit_extracted: "明确内容提取",
   "explicit-extracted": "明确内容提取",
@@ -133,6 +135,12 @@ function init() {
   updateViewChrome();
   loadAllViews();
   loadPersonalization();
+  // A completed first-use questionnaire adds memory, candidates and domain settings (#114).
+  window.addEventListener(window.ZhihengOnboarding?.CHANGED || "zhiheng:onboarding-changed", (event) => {
+    if (event.detail?.status !== "completed") return;
+    loadAllViews();
+    loadPersonalization();
+  });
 }
 
 function bindEvents() {
@@ -930,7 +938,7 @@ function sourceLabel(item) {
 
 function sourceClass(item) {
   const kind = item.candidate_type || item.extraction_kind || item.source_kind;
-  return kind === "agent_inferred" || kind === "inferred" ? "source-kind inferred" : "source-kind";
+  return kind === "agent_inferred" || kind === "inferred" || kind === "onboarding_inferred" ? "source-kind inferred" : "source-kind";
 }
 
 function extractionLabel(item) {
