@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 
 from zhiheng.core.ids import json_text, new_id, sha256_json
 
+# 综合结论草稿: drawn by reflection from formal knowledge, never from a turn (#116).
+SYSTEM_SYNTHESIS = "system_synthesis"
+
 
 class ConclusionApplicabilityService:
     def sweep(self, session: Session) -> int:
@@ -103,8 +106,9 @@ class ConclusionApplicabilityService:
               ON be.id=json_extract(b.value,'$.entry_id') AND be.owner_user_id=e.owner_user_id
             LEFT JOIN knowledge_objects ko ON ko.id=be.knowledge_id
             WHERE e.status='formal'
-              AND json_extract(v.payload_json,'$.origin')='system_synthesis'
-        """)
+              AND json_extract(v.payload_json,'$.origin')=:synthesis
+        """),
+                {"synthesis": SYSTEM_SYNTHESIS},
             )
             .mappings()
             .all()
@@ -120,8 +124,10 @@ class ConclusionApplicabilityService:
                 state, reason = "suspended", "basis_removed"
             elif row["basis_status"] == "formal" and row["basis_applicability"] == "suspended":
                 state, reason = "suspended", "basis_suspended"
-            elif row["basis_status"] in {"superseded", "merged"} or (
-                row["basis_approved_version"] != basis["version"]
+            elif (
+                row["basis_status"] in {"superseded", "merged"}
+                or row["basis_lifecycle"] == "merged"
+                or row["basis_approved_version"] != basis["version"]
             ):
                 state, reason = "review_required", "basis_revised"
             else:

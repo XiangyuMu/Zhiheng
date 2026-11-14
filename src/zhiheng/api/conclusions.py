@@ -14,9 +14,9 @@ from zhiheng.conclusions import (
     get_extraction_review_result,
     list_extraction_review_results,
 )
+from zhiheng.conclusions.applicability import SYSTEM_SYNTHESIS
 from zhiheng.conclusions.extraction import (
     ASSISTANT_OUTPUT,
-    SYSTEM_SYNTHESIS,
     USER_STATEMENT,
     resolve_extraction_supplement,
 )

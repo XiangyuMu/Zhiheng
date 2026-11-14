@@ -22,9 +22,9 @@ from typing import Any, cast
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from zhiheng.conclusions.extraction import SYSTEM_SYNTHESIS
+from zhiheng.conclusions.applicability import SYSTEM_SYNTHESIS
 from zhiheng.conclusions.relations import CONSOLIDATION_KINDS, normalize_claim, relation_kind
-from zhiheng.conclusions.repository import ConclusionRepository
+from zhiheng.conclusions.repository import ConclusionRepository, synthesis_basis_ids
 from zhiheng.consolidation.findings import iso_utc, parse_utc
 from zhiheng.core.ids import json_text, new_id, sha256_json
 
@@ -238,10 +238,10 @@ def _groups(entries: list[dict[str, Any]]) -> list[_Group]:
 def _collapse_syntheses(members: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """An approved synthesis in the group stands for the basis it was drawn from."""
     covered = {
-        str(item.get("entry_id"))
+        entry_id
         for member in members
         if member["payload"].get("origin") == SYSTEM_SYNTHESIS
-        for item in member["payload"].get("basis", [])
+        for entry_id in synthesis_basis_ids(member["payload"])
     }
     return [member for member in members if str(member["id"]) not in covered]
 

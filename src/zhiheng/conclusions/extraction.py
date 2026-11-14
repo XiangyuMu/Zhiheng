@@ -28,8 +28,6 @@ class ExtractedConclusion:
 
 USER_STATEMENT = "user_statement"
 ASSISTANT_OUTPUT = "assistant_output"
-# 综合结论草稿: drawn by reflection from formal knowledge, never from a turn (#116).
-SYSTEM_SYNTHESIS = "system_synthesis"
 _ASSISTANT_PREFIX = "\n助手："
 
 
