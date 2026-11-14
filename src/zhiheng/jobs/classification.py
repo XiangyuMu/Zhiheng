@@ -129,16 +129,15 @@ def process_classification_jobs_once(
                     text(
                         """
                         INSERT INTO job_attempts
-                          (id, job_id, attempt_no, status, started_at, finished_at,
+                          (id, job_id, status, started_at, finished_at,
                            error_class, error_message)
-                        VALUES (:attempt, :job, :attempt_no, 'failed',
+                        VALUES (:attempt, :job, 'failed',
                                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, :error_class, :error_message)
                         """
                     ),
                     {
                         "attempt": f"{job.id}:{job.attempts}",
                         "job": job.id,
-                        "attempt_no": job.attempts,
                         "error_class": type(exc).__name__,
                         "error_message": str(exc)[:1000],
                     },
