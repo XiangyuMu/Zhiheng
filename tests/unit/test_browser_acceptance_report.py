@@ -114,6 +114,16 @@ ISSUE114_CHECKS = [
     "the questionnaire fits a narrow viewport",
 ]
 
+ISSUE115_CHECKS = [
+    "a weekly report covering the last seven days is generated in the background",
+    "the change summary lists the knowledge added in the period with links to it",
+    "every health indicator shows its value and the change since the previous snapshot",
+    "suggestions link to the pending list filtered to their type",
+    "findings in the report link to their entries",
+    "opening reports changes no pending item and earlier snapshots stay unchanged",
+    "the report fits a narrow viewport",
+]
+
 ISSUE10_CHECKS = [
     (
         "browser review queue covers counts, recovery, stale-version retry, and "
@@ -249,6 +259,14 @@ def complete_issue113_checks() -> dict[str, object]:
         "checks": ISSUE113_CHECKS,
         "browserErrors": [],
         "evidence": {"run": {"ran": True, "suggestions_created": 2}},
+    }
+
+
+def complete_issue115_checks() -> dict[str, object]:
+    return {
+        "checks": ISSUE115_CHECKS,
+        "browserErrors": [],
+        "evidence": {"run": {"ran": True, "health_reports_created": 1}},
     }
 
 
@@ -513,6 +531,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "issue112-pending-importance/checks.json",
         "issue113-consolidation/checks.json",
         "issue114-onboarding/checks.json",
+        "issue115-health/checks.json",
         "issue10-matrix/checks.json",
         "issue14-writes/checks.json",
         "issue11-upgrade/checks.json",
@@ -544,6 +563,8 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             if relative == "issue113-consolidation/checks.json"
             else complete_issue114_checks()
             if relative == "issue114-onboarding/checks.json"
+            else complete_issue115_checks()
+            if relative == "issue115-health/checks.json"
             else complete_issue10_checks()
             if relative == "issue10-matrix/checks.json"
             else complete_issue14_checks()
@@ -906,6 +927,14 @@ def test_issue114_onboarding_requires_every_scenario(tmp_path: Path) -> None:
     result = reporter().validate_checks(tmp_path)["issue114_onboarding"]
     assert result["status"] == "failed"
     assert ISSUE114_CHECKS[-1] in result["error"]
+
+
+def test_issue115_health_requires_every_scenario(tmp_path: Path) -> None:
+    partial = {**complete_issue115_checks(), "checks": ISSUE115_CHECKS[:-1]}
+    write_checks(tmp_path, "issue115-health/checks.json", partial)
+    result = reporter().validate_checks(tmp_path)["issue115_health"]
+    assert result["status"] == "failed"
+    assert ISSUE115_CHECKS[-1] in result["error"]
 
 
 def test_issue110_answer_sources_requires_every_scenario(tmp_path: Path) -> None:
