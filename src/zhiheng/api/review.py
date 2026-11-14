@@ -30,9 +30,12 @@ from zhiheng.pending import (
 )
 from zhiheng.pending.daily import MAX_DAILY_SUGGESTION, DailySuggestion, daily_etag
 from zhiheng.pending.inbox import DeferredFilter, PendingInbox, PendingItem, SortOrder
+from zhiheng.pending.resolutions import NOT_DECISIONS, PendingResolutions
 from zhiheng.pending.sources import build_inbox
 
 router = APIRouter(prefix="/v1/review", tags=["review"])
+# When each item was first decided, for the knowledge health report (#115).
+RESOLUTIONS = PendingResolutions()
 STATIC_DIR = Path(__file__).parent / "static"
 SessionDep = Annotated[Session, Depends(get_db_session)]
 AuthDep = Annotated[str, Depends(require_user)]
@@ -57,9 +60,13 @@ DailyDep = Annotated[DailySuggestion, Depends(_daily)]
 def build_app_inbox(app: FastAPI) -> PendingInbox:
     """The inbox plus the approvals that write formal knowledge through the app's store."""
     daily: DailySuggestion = app.state.pending_daily
-    inbox = build_inbox(
-        lambda session, owner, item: daily.record(session, owner, item.type, item.id)
-    )
+
+    def handled(session: Session, owner: str, item: PendingItem, action: str) -> None:
+        daily.record(session, owner, item.type, item.id)
+        if action not in NOT_DECISIONS:
+            RESOLUTIONS.record(session, owner, item.type, item.id, item.pending_since)
+
+    inbox = build_inbox(handled)
     repo = ConclusionRepository()
 
     def approve_draft(session: Session, owner: str, item: PendingItem) -> dict[str, Any]:
@@ -222,8 +229,11 @@ def report_handled(
     try:
         item = inbox.get(session, user, payload.type.value, payload.id)
     except PendingItemNotFoundError:
-        if not inbox.known(session, user, payload.type.value, payload.id):
+        pending_since = inbox.pending_since(session, user, payload.type.value, payload.id)
+        if pending_since is None:
             raise HTTPException(status_code=404, detail="pending item not found") from None
+        # Decided in the detail view, so it has left 待处理 (#115).
+        RESOLUTIONS.record(session, user, payload.type.value, payload.id, pending_since)
         item = None
     if item is not None and item.etag == payload.etag:
         raise HTTPException(status_code=409, detail="the item has not changed since it was read")

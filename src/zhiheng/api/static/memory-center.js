@@ -133,7 +133,7 @@ init();
 function init() {
   bindEvents();
   updateViewChrome();
-  loadAllViews();
+  loadAllViews().then(showLinkedMemory);
   loadPersonalization();
   // A completed first-use questionnaire adds memory, candidates and domain settings (#114).
   window.addEventListener(window.ZhihengOnboarding?.CHANGED || "zhiheng:onboarding-changed", (event) => {
@@ -240,6 +240,20 @@ async function loadAllViews() {
 
   state.selected.clear();
   renderAll();
+}
+
+// The knowledge health report links a memory here as /memory-center?memory=<id> (#115).
+function showLinkedMemory() {
+  const id = new URLSearchParams(location.search).get("memory");
+  if (!id) return;
+  const view = ["formal", "history", "trash"].find((name) => state.items[name]?.some((item) => item.id === id));
+  if (!view) {
+    showToast("这条记忆已不在当前列表中。");
+    return;
+  }
+  setActiveView(view);
+  state.focusedItem = state.items[view].find((item) => item.id === id);
+  renderDetail();
 }
 
 function renderProfilePreview(preview) {

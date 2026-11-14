@@ -1,5 +1,8 @@
 const API = {
   overview: "/v1/evolution/overview",
+  healthReports: "/v1/knowledge-health/reports",
+  healthLatest: "/v1/knowledge-health/reports/latest",
+  healthReport: (id) => `/v1/knowledge-health/reports/${encodeURIComponent(id)}`,
   release: (id) => `/v1/evolution/releases/${encodeURIComponent(id)}`,
   proposal: (id) => `/v1/evolution/proposals/${encodeURIComponent(id)}`,
 };
@@ -22,6 +25,50 @@ const LABELS = {
   high: "高风险",
 };
 
+// 知识健康报告 (#115). For each indicator, whether a higher value is better,
+// and what it is counted over where that is not obvious.
+const HEALTH_METRICS = [
+  ["duplicate_suggestions", "重复建议", false],
+  ["explicit_premise_share", "含明确前提的结论", true],
+  ["unresolved_conflicts", "未解决冲突", false],
+  ["unconfirmed_assumption_conclusions", "依赖未确认假设的结论", false],
+  ["isolated_entries", "孤立条目", false],
+  ["stale_volatile_memories", "长期未确认的易变信息", false],
+  // Only items whose 7 days had passed by the end of the report are counted.
+  ["handled_within_7_days_share", "7 天内处理的待处理事项", true, "按报告结束前 7–14 天进入待处理的事项计算"],
+];
+
+const KNOWLEDGE_CHANGES = [
+  ["added", "新增"],
+  ["revised", "修订"],
+  ["merged", "合并"],
+  ["paused", "暂停"],
+];
+
+const MEMORY_CHANGES = [
+  ["remembered", "新记住"],
+  ["updated", "更新"],
+];
+
+const PENDING_TYPE_LABELS = {
+  conclusion_draft: "结论草稿",
+  relation_suggestion: "关系建议",
+  personal_conflict: "个人信息冲突",
+  missing_info_prompt: "缺失信息询问",
+  extraction_supplement: "待补充的提炼",
+  memory_candidate: "记忆候选",
+  classification: "分类",
+};
+
+const FINDING_LABELS = {
+  missing_premise: "缺少前提",
+  missing_source: "缺少来源",
+  unconfirmed_assumption: "依赖未确认假设",
+  isolated: "没有关联",
+  unused: "长期未参与回答",
+  stale_volatile: "易变信息长期未确认",
+};
+
 const state = {
   etag: "",
   overview: null,
@@ -40,14 +87,197 @@ const els = {
   detailKind: document.querySelector("#detail-kind"),
   detailBody: document.querySelector("#detail-body"),
   refresh: document.querySelector("#refresh"),
+  healthSelect: document.querySelector("#health-report"),
+  healthPeriod: document.querySelector("#health-period"),
+  healthBody: document.querySelector("#health-body"),
   toast: document.querySelector("#toast"),
 };
 
 init();
 
 function init() {
-  els.refresh.addEventListener("click", loadOverview);
+  els.refresh.addEventListener("click", () => {
+    loadOverview();
+    loadHealth();
+  });
+  els.healthSelect.addEventListener("change", () => loadHealthReport(API.healthReport(els.healthSelect.value)));
   loadOverview();
+  loadHealth();
+}
+
+async function getJson(url) {
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) throw responseError(response, await response.text());
+  return response.json();
+}
+
+async function loadHealth() {
+  const loading = emptyState("正在读取知识健康报告...");
+  loading.setAttribute("role", "status");
+  els.healthBody.replaceChildren(loading);
+  try {
+    const { items } = await getJson(API.healthReports);
+    renderHealthOptions(items || []);
+    if (!items || items.length === 0) {
+      els.healthPeriod.textContent = "";
+      els.healthBody.replaceChildren(emptyState("还没有知识健康报告。后台整理在空闲时运行，每周生成一份。"));
+      return;
+    }
+    await loadHealthReport(API.healthLatest);
+  } catch (error) {
+    els.healthBody.replaceChildren(errorState(readableError(error)));
+    els.healthBody.querySelector("button")?.addEventListener("click", loadHealth);
+  }
+}
+
+function renderHealthOptions(items) {
+  els.healthSelect.replaceChildren();
+  items.forEach((item) => {
+    const option = el("option", "", periodText(item));
+    option.value = item.id;
+    els.healthSelect.append(option);
+  });
+  els.healthSelect.disabled = items.length < 2;
+}
+
+async function loadHealthReport(url) {
+  try {
+    const report = await getJson(url);
+    els.healthSelect.value = report.id;
+    renderHealth(report);
+  } catch (error) {
+    els.healthBody.replaceChildren(errorState(readableError(error)));
+    els.healthBody.querySelector("button")?.addEventListener("click", loadHealth);
+  }
+}
+
+function periodText(report) {
+  const day = (value) => new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit" }).format(new Date(value));
+  return `${day(report.period_start)} – ${day(report.period_end)}`;
+}
+
+function renderHealth(report) {
+  els.healthPeriod.textContent = `覆盖 ${periodText(report)}，生成于 ${formatTime(report.generated_at)}`;
+  const metrics = el("div", "health-metrics");
+  metrics.setAttribute("role", "list");
+  metrics.setAttribute("aria-label", "健康指标");
+  HEALTH_METRICS.forEach(([name, title, higherIsBetter, basis]) => {
+    const metric = report.metrics?.[name];
+    if (metric) metrics.append(healthMetric(metric, title, higherIsBetter, basis));
+  });
+  els.healthBody.replaceChildren(
+    healthGroup("健康指标", metrics),
+    healthGroup("变化摘要", changeSummary(report.changes || {})),
+    healthGroup("整理发现", findingList(report.findings || [])),
+  );
+}
+
+function healthGroup(title, content) {
+  const group = el("section", "health-group");
+  group.append(el("h3", "", title), content);
+  return group;
+}
+
+function healthMetric(metric, title, higherIsBetter, basis) {
+  const share = "numerator" in metric;
+  const node = el("div", "metric health-metric");
+  node.setAttribute("role", "listitem");
+  node.dataset.metric = title;
+  node.append(el("strong", "", metricValue(metric.value, share)), el("span", "", title));
+  if (share && metric.denominator) node.append(el("span", "metric-basis", `${metric.numerator} / ${metric.denominator}`));
+  if (basis) node.append(el("span", "metric-basis", basis));
+  const change = el("span", "metric-change");
+  if (metric.change === null || metric.change === undefined) {
+    change.textContent = metric.previous === null || metric.previous === undefined ? "没有上期可比" : "较上期 不可比";
+  } else if (metric.change === 0) {
+    change.textContent = "与上期持平";
+  } else {
+    const sign = metric.change > 0 ? "+" : "−";
+    const amount = share ? `${Math.round(Math.abs(metric.change) * 1000) / 10} 个百分点` : String(Math.abs(metric.change));
+    change.textContent = `较上期 ${sign}${amount}`;
+    change.classList.add(metric.change > 0 === higherIsBetter ? "better" : "worse");
+  }
+  node.append(change);
+  (metric.links || []).forEach((link) => node.append(linkTo(link.href, `去待处理：${link.label}`)));
+  return node;
+}
+
+function metricValue(value, share) {
+  if (value === null || value === undefined) return "—";
+  return share ? `${Math.round(value * 1000) / 10}%` : String(value);
+}
+
+function changeSummary(changes) {
+  const wrapper = el("div", "health-changes");
+  const knowledge = el("dl", "change-list");
+  KNOWLEDGE_CHANGES.forEach(([key, title]) => knowledge.append(...changeRow(`${title}正式知识`, changes.knowledge?.[key] || [])));
+  MEMORY_CHANGES.forEach(([key, title]) => knowledge.append(...changeRow(`${title}的个人信息`, changes.memory?.[key] || [])));
+  wrapper.append(knowledge, pendingOverview(changes.pending));
+  return wrapper;
+}
+
+function changeRow(title, items) {
+  const term = el("dt", "", `${title} ${items.length}`);
+  const detail = el("dd");
+  if (items.length === 0) {
+    detail.append(el("span", "muted", "无"));
+    return [term, detail];
+  }
+  const list = el("ul", "entry-list");
+  items.forEach((item) => {
+    const row = el("li");
+    row.append(entryLink(item));
+    const related = item.into || item.revises;
+    if (related) {
+      row.append(el("span", "muted", item.into ? " 并入 " : " 修订 "), entryLink(related));
+    }
+    list.append(row);
+  });
+  detail.append(list);
+  return [term, detail];
+}
+
+function pendingOverview(pending) {
+  const block = el("div", "pending-overview");
+  block.append(el("h4", "", "待处理概况"));
+  if (!pending) return block;
+  block.append(el("p", "", `生成时待处理 ${pending.open} 项，已延后 ${pending.deferred} 项；本周期新进入 ${pending.entered} 项。`));
+  const list = el("ul", "entry-list");
+  Object.entries(pending.by_type || {})
+    .filter(([, count]) => count > 0)
+    .forEach(([type, count]) => {
+      const row = el("li");
+      row.append(linkTo(pending.links?.[type], `${PENDING_TYPE_LABELS[type] || type} ${count}`));
+      list.append(row);
+    });
+  if (list.childElementCount) block.append(list);
+  return block;
+}
+
+function findingList(findings) {
+  if (findings.length === 0) return emptyState("生成时没有未处理的整理发现。");
+  const list = el("ul", "entry-list finding-list");
+  findings.forEach((finding) => {
+    const row = el("li");
+    row.append(el("span", "count-pill", FINDING_LABELS[finding.kind] || finding.kind), entryLink(finding));
+    list.append(row);
+  });
+  return list;
+}
+
+function entryLink(item) {
+  if (!item.title) return el("span", "muted", "条目已不可用");
+  return linkTo(item.href, item.title);
+}
+
+function linkTo(href, text) {
+  if (!href) return el("span", "", text);
+  const link = el("a", "", text);
+  link.href = href;
+  return link;
 }
 
 async function loadOverview() {

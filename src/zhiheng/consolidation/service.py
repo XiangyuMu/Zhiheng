@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Any, cast
 
@@ -30,6 +30,7 @@ from zhiheng.consolidation.findings import (
     observe_memory,
     parse_utc,
 )
+from zhiheng.consolidation.health import HealthReports
 from zhiheng.core.ids import new_id
 from zhiheng.db.session import session_scope
 
@@ -67,6 +68,7 @@ class ConsolidationRun:
     started_at: datetime
     suggestions_created: int
     findings_created: int
+    health_reports_created: int = 0
 
 
 def is_activity(method: str, path: str) -> bool:
@@ -248,4 +250,7 @@ def run_consolidation_if_due(
     with session_scope(session_factory) as session:
         if not consolidation_due(session, now=now):
             return None
-        return ConsolidationService().run(session, now=now)
+        run = ConsolidationService().run(session, now=now)
+        # 健康检查 summarises the run's results once a week (spec decisions 23-24).
+        reports = HealthReports().generate_due(session, now=now)
+        return replace(run, health_reports_created=len(reports))

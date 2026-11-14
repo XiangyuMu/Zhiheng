@@ -32,6 +32,7 @@ def main(argv: list[str]) -> int:
                 "ran": True,
                 "suggestions_created": run.suggestions_created,
                 "findings_created": run.findings_created,
+                "health_reports_created": run.health_reports_created,
             }
         )
     )

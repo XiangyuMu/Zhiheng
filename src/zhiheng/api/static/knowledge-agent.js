@@ -1867,3 +1867,6 @@ $("add-classification").addEventListener("click", () => {
 loadKnowledge();
 loadPersistentImportTasks();
 loadClassifications();
+// The knowledge health report links an entry's knowledge here (#115).
+const linkedKnowledge = new URLSearchParams(location.search).get("knowledge");
+if (linkedKnowledge) loadKnowledgeDetail(linkedKnowledge);

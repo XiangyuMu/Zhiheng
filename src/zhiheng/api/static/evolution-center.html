@@ -25,6 +25,22 @@
             <p>查看发布阶段、改进提案、任务轨迹和评测集合。这里呈现系统状态，不执行发布、回滚或权限操作。</p>
           </section>
 
+          <section class="panel health" id="knowledge-health" aria-labelledby="health-title">
+            <header>
+              <div>
+                <p class="eyebrow">Knowledge health</p>
+                <h2 id="health-title">知识健康</h2>
+              </div>
+              <label class="health-select">
+                <span>报告周期</span>
+                <select id="health-report" disabled></select>
+              </label>
+            </header>
+            <p class="muted health-note">每周由后台整理生成，覆盖最近 7 天。报告只读，打开它不会批准、拒绝或延后任何事项；指标变差时只提供处理入口。</p>
+            <p id="health-period" class="health-period"></p>
+            <div id="health-body" class="health-body"></div>
+          </section>
+
           <section class="grid metrics" id="metrics" aria-label="系统指标"></section>
 
           <section class="management-grid">
