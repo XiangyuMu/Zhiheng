@@ -131,6 +131,7 @@ class ClaimedMemoryExtractionJob:
     id: str
     payload: dict[str, Any]
     attempts: int
+    max_attempts: int
 
 
 class MemoryExtractionJobExecutor:
@@ -366,7 +367,7 @@ def process_memory_extraction_jobs_once(
             session.execute(
                 text(
                     """
-                SELECT id, payload_json, attempts
+                SELECT id, payload_json, attempts, max_attempts
                 FROM jobs
                 WHERE job_type=:job_type AND status='pending'
                   AND available_at <= CURRENT_TIMESTAMP AND attempts < max_attempts
@@ -399,6 +400,7 @@ def process_memory_extraction_jobs_once(
                         id=str(row["id"]),
                         payload=_json_object(row["payload_json"]),
                         attempts=int(row["attempts"]) + 1,
+                        max_attempts=int(row["max_attempts"]),
                     )
                 )
 
@@ -408,7 +410,9 @@ def process_memory_extraction_jobs_once(
             executor.execute(session_factory, job)
         except Exception as exc:
             try:
-                _record_conclusion_extraction_failure(session_factory, job, exc)
+                # A failure that a retry may still recover never reaches 待处理.
+                if job.attempts >= job.max_attempts:
+                    _record_conclusion_extraction_failure(session_factory, job, exc)
             except RuntimeError:
                 # A transient database lock must not terminate the worker. The
                 # durable job_attempts row below still preserves the failure
@@ -419,7 +423,9 @@ def process_memory_extraction_jobs_once(
                     text(
                         """
                         UPDATE jobs
-                        SET status=CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'failed' END,
+                        SET status=CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'pending' END,
+                            lease_owner=NULL, lease_expires_at=NULL,
+                            available_at=datetime('now', '+1 minute'),
                             updated_at=CURRENT_TIMESTAMP
                         WHERE id=:id AND status='processing'
                         """

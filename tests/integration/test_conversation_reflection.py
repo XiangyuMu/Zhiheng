@@ -24,6 +24,7 @@ from tests.integration.test_pending_inbox import _items
 from zhiheng.consolidation import run_consolidation_if_due
 from zhiheng.db.session import session_scope
 from zhiheng.jobs.memory_extraction import (
+    MEMORY_EXTRACTION_JOB_TYPE,
     ExtractedMemory,
     MemoryExtractionJobExecutor,
     process_memory_extraction_jobs_once,
@@ -68,12 +69,23 @@ def _dispatch(factory: sessionmaker[Session]) -> None:
 def _extract(factory: sessionmaker[Session], *, broken: bool = False) -> None:
     """Run the per-turn extraction job; a broken extractor leaves the turn unextracted."""
     _dispatch(factory)
-    executor = (
-        MemoryExtractionJobExecutor(extractor=_BrokenExtractor())
-        if broken
-        else MemoryExtractionJobExecutor()
-    )
-    process_memory_extraction_jobs_once(factory, executor, worker_id="test-worker")
+    if not broken:
+        process_memory_extraction_jobs_once(
+            factory, MemoryExtractionJobExecutor(), worker_id="test-worker"
+        )
+        return
+    # A failure only reaches 待处理 once every retry is used up.
+    executor = MemoryExtractionJobExecutor(extractor=_BrokenExtractor())
+    for _ in range(3):
+        process_memory_extraction_jobs_once(factory, executor, worker_id="test-worker")
+        with session_scope(factory) as session:
+            session.execute(
+                text(
+                    "UPDATE jobs SET available_at = CURRENT_TIMESTAMP "
+                    "WHERE job_type = :job_type AND status = 'pending'"
+                ),
+                {"job_type": MEMORY_EXTRACTION_JOB_TYPE},
+            )
 
 
 def _reflect(factory: sessionmaker[Session], at: datetime | None = None) -> Any:

@@ -117,8 +117,10 @@ def process_classification_jobs_once(
                         UPDATE jobs
                         SET status = CASE
                                 WHEN attempts >= max_attempts THEN 'dead'
-                                ELSE 'failed'
+                                ELSE 'pending'
                             END,
+                            lease_owner = NULL, lease_expires_at = NULL,
+                            available_at = datetime('now', '+1 minute'),
                             updated_at = CURRENT_TIMESTAMP
                         WHERE id = :id AND status = 'processing'
                         """
