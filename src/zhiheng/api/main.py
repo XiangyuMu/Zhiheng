@@ -28,6 +28,7 @@ from zhiheng.api.decisions import install_decision_routes
 from zhiheng.api.deployment import install_deployment_routes
 from zhiheng.api.evolution import install_evolution_routes
 from zhiheng.api.gaps import install_gap_routes
+from zhiheng.api.health import install_health_routes
 from zhiheng.api.import_tasks import install_import_task_routes
 from zhiheng.api.knowledge import install_knowledge_routes
 from zhiheng.api.knowledge_workspace import install_knowledge_workspace_routes
@@ -251,6 +252,7 @@ def create_app(
     install_retrieval_routes(app, app_settings)
     install_review_routes(app)
     install_consolidation_routes(app)
+    install_health_routes(app)
     install_decision_routes(app, app_settings)
     install_gap_routes(app, app_settings)
     install_evolution_routes(app, app_settings)

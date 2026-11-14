@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import bindparam, text
@@ -58,17 +59,19 @@ def _candidate_evidence(
     return grouped
 
 
-def _exists(session: Session, sql: str, item_id: str, owner: str) -> bool:
-    return session.execute(text(sql), {"id": item_id, "owner": owner}).first() is not None
+def _pending_since(session: Session, sql: str, item_id: str, owner: str) -> datetime | None:
+    """When the item named by ``sql`` became pending, or None if there is no such item."""
+    value = session.execute(text(sql), {"id": item_id, "owner": owner}).scalar_one_or_none()
+    return None if value is None else to_utc(value)
 
 
 class ConclusionDraftSource:
     type = "conclusion_draft"
 
-    def known(self, session: Session, owner: str, item_id: str) -> bool:
-        return _exists(
+    def pending_since(self, session: Session, owner: str, item_id: str) -> datetime | None:
+        return _pending_since(
             session,
-            "SELECT 1 FROM conclusion_entries WHERE id = :id AND owner_user_id = :owner",
+            "SELECT created_at FROM conclusion_entries WHERE id = :id AND owner_user_id = :owner",
             item_id,
             owner,
         )
@@ -115,10 +118,12 @@ class ConclusionDraftSource:
 class RelationSuggestionSource:
     type = "relation_suggestion"
 
-    def known(self, session: Session, owner: str, item_id: str) -> bool:
-        return _exists(
+    def pending_since(self, session: Session, owner: str, item_id: str) -> datetime | None:
+        return _pending_since(
             session,
-            "SELECT 1 FROM conclusion_relations WHERE id = :id AND owner_user_id = :owner",
+            "SELECT COALESCE(r.created_at, (SELECT MIN(ev.created_at) "
+            "FROM conclusion_relation_events ev WHERE ev.relation_id = r.id)) "
+            "FROM conclusion_relations r WHERE r.id = :id AND r.owner_user_id = :owner",
             item_id,
             owner,
         )
@@ -217,9 +222,11 @@ def _relation_importance(row: Any) -> Importance:
 class PersonalConflictSource:
     type = "personal_conflict"
 
-    def known(self, session: Session, owner: str, item_id: str) -> bool:
+    def pending_since(self, session: Session, owner: str, item_id: str) -> datetime | None:
         # Personal memory belongs to the single local user, like items() above.
-        return _exists(session, "SELECT 1 FROM memory_conflicts WHERE id = :id", item_id, owner)
+        return _pending_since(
+            session, "SELECT created_at FROM memory_conflicts WHERE id = :id", item_id, owner
+        )
 
     def items(self, session: Session, owner: str) -> list[PendingItem]:
         rows = session.execute(
@@ -279,10 +286,10 @@ class PersonalConflictSource:
 class MissingInfoPromptSource:
     type = "missing_info_prompt"
 
-    def known(self, session: Session, owner: str, item_id: str) -> bool:
-        return _exists(
+    def pending_since(self, session: Session, owner: str, item_id: str) -> datetime | None:
+        return _pending_since(
             session,
-            "SELECT 1 FROM personal_prompts WHERE id = :id AND owner_user_id = :owner "
+            "SELECT created_at FROM personal_prompts WHERE id = :id AND owner_user_id = :owner "
             "AND prompt_kind = 'missing'",
             item_id,
             owner,
@@ -326,10 +333,11 @@ class MissingInfoPromptSource:
 class ExtractionSupplementSource:
     type = "extraction_supplement"
 
-    def known(self, session: Session, owner: str, item_id: str) -> bool:
-        return _exists(
+    def pending_since(self, session: Session, owner: str, item_id: str) -> datetime | None:
+        return _pending_since(
             session,
-            "SELECT 1 FROM conversation_extraction_runs WHERE id = :id AND owner_user_id = :owner",
+            "SELECT created_at FROM conversation_extraction_runs "
+            "WHERE id = :id AND owner_user_id = :owner",
             item_id,
             owner,
         )
@@ -387,8 +395,10 @@ class ExtractionSupplementSource:
 class MemoryCandidateSource:
     type = "memory_candidate"
 
-    def known(self, session: Session, owner: str, item_id: str) -> bool:
-        return _exists(session, "SELECT 1 FROM memory_candidates WHERE id = :id", item_id, owner)
+    def pending_since(self, session: Session, owner: str, item_id: str) -> datetime | None:
+        return _pending_since(
+            session, "SELECT created_at FROM memory_candidates WHERE id = :id", item_id, owner
+        )
 
     def items(self, session: Session, owner: str) -> list[PendingItem]:
         # A candidate behind a personal conflict is decided through that
@@ -452,11 +462,12 @@ class ClassificationSource:
 
     type = "classification"
 
-    def known(self, session: Session, owner: str, item_id: str) -> bool:
-        return _exists(
+    def pending_since(self, session: Session, owner: str, item_id: str) -> datetime | None:
+        return _pending_since(
             session,
-            "SELECT 1 FROM knowledge_objects WHERE id = :id AND owner_user_id = :owner "
-            "UNION ALL SELECT 1 FROM taxonomy_proposals WHERE id = :id AND owner_user_id = :owner",
+            "SELECT created_at FROM knowledge_objects WHERE id = :id AND owner_user_id = :owner "
+            "UNION ALL SELECT created_at FROM taxonomy_proposals "
+            "WHERE id = :id AND owner_user_id = :owner LIMIT 1",
             item_id,
             owner,
         )

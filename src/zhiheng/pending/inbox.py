@@ -127,14 +127,17 @@ class PendingSource(Protocol):
 
     def items(self, session: Session, owner: str) -> list[PendingItem]: ...
 
-    def known(self, session: Session, owner: str, item_id: str) -> bool:
-        """Whether the id names an item of this type, pending or already decided."""
+    def pending_since(self, session: Session, owner: str, item_id: str) -> datetime | None:
+        """When the item became pending, whether it still is or was already decided.
+
+        None when the id names no item of this type.
+        """
         ...
 
 
 ActionHandler = Callable[[Session, str, PendingItem], Mapping[str, Any]]
-# Told about each item the user decided on (every verb except restore).
-HandledListener = Callable[[Session, str, PendingItem], None]
+# Told about each item the user acted on with a verb other than restore.
+HandledListener = Callable[[Session, str, PendingItem, str], None]
 
 
 def to_utc(value: object) -> datetime:
@@ -213,10 +216,12 @@ class PendingInbox:
                 return item
         raise PendingItemNotFoundError("pending item not found")
 
-    def known(self, session: Session, owner: str, item_type: str, item_id: str) -> bool:
+    def pending_since(
+        self, session: Session, owner: str, item_type: str, item_id: str
+    ) -> datetime | None:
         require_known_types([item_type])
         source = self._sources.get(item_type)
-        return source is not None and source.known(session, owner, item_id)
+        return None if source is None else source.pending_since(session, owner, item_id)
 
     def perform(
         self,
@@ -235,7 +240,7 @@ class PendingInbox:
             raise ActionUnavailableError(f"{action} is not available for this item")
         result = dict(handler(session, owner, item))
         if action != "restore" and self._on_handled is not None:
-            self._on_handled(session, owner, item)
+            self._on_handled(session, owner, item, action)
         return {"type": item_type, "id": item_id, "action": action, **result}
 
     def perform_batch(
