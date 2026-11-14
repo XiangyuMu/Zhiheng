@@ -21,8 +21,8 @@ from typing import Any, cast
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
-from zhiheng.conclusions.relations import relation_kind
-from zhiheng.conclusions.repository import ConclusionRepository
+from zhiheng.conclusions.relations import CONSOLIDATION_KINDS, relation_kind
+from zhiheng.conclusions.repository import ConclusionRepository, synthesis_basis_ids
 from zhiheng.consolidation.findings import (
     FindingStore,
     iso_utc,
@@ -31,12 +31,10 @@ from zhiheng.consolidation.findings import (
     parse_utc,
 )
 from zhiheng.consolidation.health import HealthReports
+from zhiheng.consolidation.reflection import ReflectionService
 from zhiheng.core.ids import new_id
 from zhiheng.db.session import session_scope
 
-# Relations a run may propose between two formal conclusions. A supplement or
-# conditional coexistence would change nothing that is already formal.
-CONSOLIDATION_KINDS = frozenset({"duplicate", "revision", "conflict"})
 # 无对话和审核活动满 30 分钟视为空闲; a run happens at most once every 24 hours.
 IDLE_AFTER = timedelta(minutes=30)
 RUN_EVERY = timedelta(hours=24)
@@ -69,6 +67,7 @@ class ConsolidationRun:
     suggestions_created: int
     findings_created: int
     health_reports_created: int = 0
+    reflection_drafts_created: int = 0
 
 
 def is_activity(method: str, path: str) -> bool:
@@ -179,8 +178,10 @@ class ConsolidationService:
         for index, newer in enumerate(entries):
             for older in entries[:index]:
                 kind = relation_kind(newer["payload"], older["payload"])
-                if kind in CONSOLIDATION_KINDS and not self._already_considered(
-                    session, owner, newer, older
+                if (
+                    kind in CONSOLIDATION_KINDS
+                    and not _drawn_from(newer, older)
+                    and not self._already_considered(session, owner, newer, older)
                 ):
                     candidates.append((str(kind), newer, older))
         return candidates
@@ -243,6 +244,13 @@ class ConsolidationService:
         )
 
 
+def _drawn_from(newer: dict[str, Any], older: dict[str, Any]) -> bool:
+    """Whether either conclusion is a synthesis drawn from the other (#116)."""
+    return str(older["id"]) in synthesis_basis_ids(newer["payload"]) or str(
+        newer["id"]
+    ) in synthesis_basis_ids(older["payload"])
+
+
 def run_consolidation_if_due(
     session_factory: sessionmaker[Session], *, now: datetime
 ) -> ConsolidationRun | None:
@@ -251,6 +259,9 @@ def run_consolidation_if_due(
         if not consolidation_due(session, now=now):
             return None
         run = ConsolidationService().run(session, now=now)
+        # 反思 drafts 综合结论 from formal knowledge once a week (spec decision 23),
+        # before the health report so the report counts its drafts as pending.
+        drafts = ReflectionService().reflect_due(session, now=now)
         # 健康检查 summarises the run's results once a week (spec decisions 23-24).
         reports = HealthReports().generate_due(session, now=now)
-        return replace(run, health_reports_created=len(reports))
+        return replace(run, health_reports_created=len(reports), reflection_drafts_created=drafts)

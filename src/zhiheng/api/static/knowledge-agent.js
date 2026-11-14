@@ -1226,7 +1226,7 @@ async function loadKnowledgeDetail(id) {
     $("detail-source").textContent = sourceUrl ? `网页来源：${sourceUrl}` : "";
     $("detail-source").hidden = !sourceUrl;
     // ADR 0012: knowledge resting only on assistant reasoning says so, never as external evidence.
-    const basis = { assistant_reasoning: "依据：仅为助手推理，不是外部依据", user_statement: "依据：个人陈述" }[detail.source_metadata?.evidence_basis];
+    const basis = { assistant_reasoning: "依据：仅为助手推理，不是外部依据", user_statement: "依据：个人陈述", system_synthesis: "由系统归纳：依据为参与归纳的正式知识" }[detail.source_metadata?.evidence_basis];
     $("detail-basis").textContent = basis || "";
     $("detail-basis").hidden = !basis;
     $("detail-refresh-web").hidden = !sourceUrl;

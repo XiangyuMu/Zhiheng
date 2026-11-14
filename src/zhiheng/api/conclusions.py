@@ -16,6 +16,7 @@ from zhiheng.conclusions import (
 )
 from zhiheng.conclusions.extraction import (
     ASSISTANT_OUTPUT,
+    SYSTEM_SYNTHESIS,
     USER_STATEMENT,
     resolve_extraction_supplement,
 )
@@ -133,6 +134,8 @@ def _evidence_basis(item: dict[str, Any]) -> dict[str, str]:
     basis = {
         ASSISTANT_OUTPUT: "assistant_reasoning",
         USER_STATEMENT: "user_statement",
+        # Always marked as system synthesized, resting on the formal knowledge it cites.
+        SYSTEM_SYNTHESIS: "system_synthesis",
     }.get(str(item.get("origin")))
     return {"evidence_basis": basis} if basis else {}
 

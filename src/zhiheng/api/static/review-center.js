@@ -125,6 +125,8 @@
   const ORIGIN_LABELS = {
     user_statement: "个人陈述",
     assistant_output: "助手输出（不是依据，请逐条核对）",
+    // #116: a 综合结论草稿 rests only on the formal knowledge listed as its basis.
+    system_synthesis: "系统归纳（依据为下列正式知识，请逐条核对）",
   };
   const materialRefText = (refs) => (refs || [])
     .map((ref) => [ref.page_no != null ? `第 ${ref.page_no} 页` : null, ref.section_path || "正文",

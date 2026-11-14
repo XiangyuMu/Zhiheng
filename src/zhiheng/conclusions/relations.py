@@ -19,6 +19,9 @@ _CONTRADICTION_PAIRS = (
     ("允许", "禁止"),
     ("成功", "失败"),
 )
+# Relations the consolidation run proposes between two formal conclusions. A
+# supplement or conditional coexistence would change nothing already formal.
+CONSOLIDATION_KINDS = frozenset({"duplicate", "revision", "conflict"})
 _TOKEN_RE = re.compile(r"[\u4e00-\u9fff]|[a-z0-9]+", re.IGNORECASE)
 
 

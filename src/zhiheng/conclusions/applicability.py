@@ -77,6 +77,58 @@ class ConclusionApplicabilityService:
                 "premise_changed",
                 evidence,
             )
+        return count + self._track_synthesis_basis(session)
+
+    def _track_synthesis_basis(self, session: Session) -> int:
+        """A synthesized conclusion follows the formal knowledge it was drawn from (#116).
+
+        A basis entry that is paused or deleted puts the synthesis under
+        applicability review; one that is revised or merged only raises a
+        review reminder. The synthesis itself is never rewritten.
+        """
+        rows = (
+            session.execute(
+                text("""
+            SELECT e.id, e.approved_version, b.value AS basis_json,
+                   be.id AS basis_id, be.status AS basis_status,
+                   be.approved_version AS basis_approved_version,
+                   ko.lifecycle_status AS basis_lifecycle,
+                   (SELECT ba.state FROM conclusion_applicability ba
+                    WHERE ba.entry_id = be.id AND ba.version = be.approved_version
+                   ) AS basis_applicability
+            FROM conclusion_entries e
+            JOIN conclusion_versions v ON v.entry_id=e.id AND v.version=e.approved_version
+            JOIN json_each(v.payload_json,'$.basis') b
+            LEFT JOIN conclusion_entries be
+              ON be.id=json_extract(b.value,'$.entry_id') AND be.owner_user_id=e.owner_user_id
+            LEFT JOIN knowledge_objects ko ON ko.id=be.knowledge_id
+            WHERE e.status='formal'
+              AND json_extract(v.payload_json,'$.origin')='system_synthesis'
+        """)
+            )
+            .mappings()
+            .all()
+        )
+        count = 0
+        for row in rows:
+            basis = json.loads(str(row["basis_json"]))
+            evidence = {"basis_entry_id": basis["entry_id"], "basis_version": basis["version"]}
+            if row["basis_id"] is None or row["basis_lifecycle"] in {
+                "soft_deleted",
+                "privacy_erased",
+            }:
+                state, reason = "suspended", "basis_removed"
+            elif row["basis_status"] == "formal" and row["basis_applicability"] == "suspended":
+                state, reason = "suspended", "basis_suspended"
+            elif row["basis_status"] in {"superseded", "merged"} or (
+                row["basis_approved_version"] != basis["version"]
+            ):
+                state, reason = "review_required", "basis_revised"
+            else:
+                continue
+            count += self._record(
+                session, str(row["id"]), int(row["approved_version"]), state, reason, evidence
+            )
         return count
 
     def fact_changed(
