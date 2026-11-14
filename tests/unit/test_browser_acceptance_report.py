@@ -133,6 +133,15 @@ ISSUE116_CHECKS = [
     "the synthesis detail fits a narrow viewport",
 ]
 
+ISSUE117_CHECKS = [
+    "reflection drafts judgments a failed extraction left in a past turn",
+    "a judgment already extracted is not drafted again",
+    "a reflection draft shows its user or assistant origin and reflection",
+    "reflection reads no imported material, not even material the turn cited",
+    "an unapproved reflection draft does not answer, and answers once approved",
+    "the reflection draft detail fits a narrow viewport",
+]
+
 ISSUE10_CHECKS = [
     (
         "browser review queue covers counts, recovery, stale-version retry, and "
@@ -284,6 +293,14 @@ def complete_issue116_checks() -> dict[str, object]:
         "checks": ISSUE116_CHECKS,
         "browserErrors": [],
         "evidence": {"run": {"ran": True, "reflection_drafts_created": 1}},
+    }
+
+
+def complete_issue117_checks() -> dict[str, object]:
+    return {
+        "checks": ISSUE117_CHECKS,
+        "browserErrors": [],
+        "evidence": {"run": {"ran": True, "reflection_drafts_created": 2}},
     }
 
 
@@ -550,6 +567,7 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
         "issue114-onboarding/checks.json",
         "issue115-health/checks.json",
         "issue116-reflection/checks.json",
+        "issue117-conversation-reflection/checks.json",
         "issue10-matrix/checks.json",
         "issue14-writes/checks.json",
         "issue11-upgrade/checks.json",
@@ -585,6 +603,8 @@ def test_browser_acceptance_report_passes_with_complete_child_checks(
             if relative == "issue115-health/checks.json"
             else complete_issue116_checks()
             if relative == "issue116-reflection/checks.json"
+            else complete_issue117_checks()
+            if relative == "issue117-conversation-reflection/checks.json"
             else complete_issue10_checks()
             if relative == "issue10-matrix/checks.json"
             else complete_issue14_checks()
@@ -963,6 +983,14 @@ def test_issue116_reflection_requires_every_scenario(tmp_path: Path) -> None:
     result = reporter().validate_checks(tmp_path)["issue116_reflection"]
     assert result["status"] == "failed"
     assert ISSUE116_CHECKS[-1] in result["error"]
+
+
+def test_issue117_conversation_reflection_requires_every_scenario(tmp_path: Path) -> None:
+    partial = {**complete_issue117_checks(), "checks": ISSUE117_CHECKS[:-1]}
+    write_checks(tmp_path, "issue117-conversation-reflection/checks.json", partial)
+    result = reporter().validate_checks(tmp_path)["issue117_conversation_reflection"]
+    assert result["status"] == "failed"
+    assert ISSUE117_CHECKS[-1] in result["error"]
 
 
 def test_issue110_answer_sources_requires_every_scenario(tmp_path: Path) -> None:

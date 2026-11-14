@@ -239,6 +239,14 @@ ISSUE116_CHECKS = {
     "basis": "a paused or deleted basis puts the synthesis under applicability review",
     "narrow": "the synthesis detail fits a narrow viewport",
 }
+ISSUE117_CHECKS = {
+    "weekly": "reflection drafts judgments a failed extraction left in a past turn",
+    "extracted": "a judgment already extracted is not drafted again",
+    "origin": "a reflection draft shows its user or assistant origin and reflection",
+    "imported": "reflection reads no imported material, not even material the turn cited",
+    "answers": "an unapproved reflection draft does not answer, and answers once approved",
+    "narrow": "the reflection draft detail fits a narrow viewport",
+}
 # Stages whose checks.json must list every scenario label of its issue.
 SCENARIO_CHECKS = {
     "context_prompts_issue8": ISSUE8_CHECKS,
@@ -251,6 +259,7 @@ SCENARIO_CHECKS = {
     "issue114_onboarding": ISSUE114_CHECKS,
     "issue115_health": ISSUE115_CHECKS,
     "issue116_reflection": ISSUE116_CHECKS,
+    "issue117_conversation_reflection": ISSUE117_CHECKS,
     "issue10_matrix": ISSUE10_CHECKS,
     "issue14_writes": ISSUE14_CHECKS,
     "issue11_upgrade": ISSUE11_CHECKS,
@@ -273,6 +282,7 @@ EXPECTED_CHECKS = {
     "issue114_onboarding": Path("issue114-onboarding/checks.json"),
     "issue115_health": Path("issue115-health/checks.json"),
     "issue116_reflection": Path("issue116-reflection/checks.json"),
+    "issue117_conversation_reflection": Path("issue117-conversation-reflection/checks.json"),
     "issue10_matrix": Path("issue10-matrix/checks.json"),
     "issue14_writes": Path("issue14-writes/checks.json"),
     "issue11_upgrade": Path("issue11-upgrade/checks.json"),
@@ -432,6 +442,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     "issue114_onboarding",
                     "issue115_health",
                     "issue116_reflection",
+                    "issue117_conversation_reflection",
                     "issue10_matrix",
                     "issue14_writes",
                     "issue11_upgrade",
@@ -794,6 +805,7 @@ def main() -> int:
             "node tests/e2e/check_issue114_onboarding.cjs",
             "node tests/e2e/check_issue115_health.cjs",
             "node tests/e2e/check_issue116_reflection.cjs",
+            "node tests/e2e/check_issue117_conversation_reflection.cjs",
             "node tests/e2e/check_issue10_matrix.cjs",
             "node tests/e2e/check_issue14_writes.cjs",
             "node tests/e2e/check_issue11_upgrade.cjs",
@@ -891,6 +903,7 @@ def main() -> int:
             "#114": list(ISSUE114_CHECKS.values()),
             "#115": list(ISSUE115_CHECKS.values()),
             "#116": list(ISSUE116_CHECKS.values()),
+            "#117": list(ISSUE117_CHECKS.values()),
             "#55": [
                 "browser answer failures use a local injected Provider boundary",
                 "invalid model output stops as invalid_model_output with audit metadata",
