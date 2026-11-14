@@ -188,7 +188,15 @@ function python(script, ...args) {
     evidence.approved = { id: user.id, status: approved.status };
 
     // Later stages share this database: reject what we did not approve, and the other drafts our
-    // run created, and classify our knowledge.
+    // run created, and classify our knowledge. The live answer to our question can hold text the
+    // extractor sets aside for review; resolve that request too, then reject its draft.
+    for (const item of (await api("/v1/review/items?type=extraction_supplement&deferred=include&limit=500")).items
+      .filter((entry) => JSON.stringify(entry).includes(TAG))) {
+      await api(`/v1/conclusions/drafts/${encodeURIComponent(item.id)}/supplement`, { method: "POST", body: {
+        title: `${TAG} 人工补充`, claim: `${TAG} 人工补充：无需记录`,
+        domain_id: "education_learning", excerpt: TAG,
+      } });
+    }
     for (const item of [...await ours(), ...created.filter((entry) => entry.id !== user.id)]) {
       const current = await api(`/v1/conclusions/${item.id}`);
       if (["draft", "deferred"].includes(current.status)) {
