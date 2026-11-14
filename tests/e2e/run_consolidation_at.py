@@ -33,6 +33,7 @@ def main(argv: list[str]) -> int:
                 "suggestions_created": run.suggestions_created,
                 "findings_created": run.findings_created,
                 "health_reports_created": run.health_reports_created,
+                "reflection_drafts_created": run.reflection_drafts_created,
             }
         )
     )

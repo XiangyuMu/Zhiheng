@@ -156,6 +156,7 @@ run_stage "issue112-pending-importance" node tests/e2e/check_issue112_pending_im
 run_stage "issue113-consolidation" node tests/e2e/check_issue113_consolidation.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue113-consolidation"
 run_stage "issue114-onboarding" node tests/e2e/check_issue114_onboarding.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue114-onboarding"
 run_stage "issue115-health" node tests/e2e/check_issue115_health.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue115-health"
+run_stage "issue116-reflection" node tests/e2e/check_issue116_reflection.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue116-reflection"
 run_stage "issue11-upgrade" node tests/e2e/check_issue11_upgrade.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue11-upgrade"
 run_stage "issue12-relations" node tests/e2e/check_issue12_relations.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue12-relations"
 run_stage "issue14-writes" node tests/e2e/check_issue14_writes.cjs "${BASE_URL}" "${OUTPUT_DIR}/issue14-writes"
