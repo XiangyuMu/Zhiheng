@@ -119,8 +119,9 @@ function consolidateAt(offsetMs) {
     const conflict = ours(suggestions, [newerConflict]).find((item) => item.detail.kind === "conflict");
     assert(merge && conflict, "the run suggests the merge and the conflict");
     assert.equal(merge.detail.left_id, newerDuplicate.id, "the newer duplicate is the one to merge");
-    // Only the suggestions are pending; findings never count.
-    assert.equal(await total(), pendingBefore + suggestions.length);
+    // Only the suggestions (and the drafts the weekly reflection added, #116) are pending;
+    // findings never count.
+    assert.equal(await total(), pendingBefore + suggestions.length + first.reflection_drafts_created);
     const findings = (await api("/v1/consolidation/findings")).items;
     const ourFindings = findings.filter((item) => entries.some((entry) => entry.id === item.subject_id));
     assert(ourFindings.some((item) => item.kind === "unconfirmed_assumption"),

@@ -231,6 +231,14 @@ ISSUE115_CHECKS = {
     "readonly": "opening reports changes no pending item and earlier snapshots stay unchanged",
     "narrow": "the report fits a narrow viewport",
 }
+ISSUE116_CHECKS = {
+    "weekly": "the weekly reflection drafts a synthesis from formal knowledge in the background",
+    "draft": "a synthesis draft is marked system generated and cites only formal knowledge",
+    "imported": "a fact only in imported material appears in no reflection draft",
+    "approved": "an approved synthesis is formal knowledge marked as synthesized by the system",
+    "basis": "a paused or deleted basis puts the synthesis under applicability review",
+    "narrow": "the synthesis detail fits a narrow viewport",
+}
 # Stages whose checks.json must list every scenario label of its issue.
 SCENARIO_CHECKS = {
     "context_prompts_issue8": ISSUE8_CHECKS,
@@ -242,6 +250,7 @@ SCENARIO_CHECKS = {
     "issue113_consolidation": ISSUE113_CHECKS,
     "issue114_onboarding": ISSUE114_CHECKS,
     "issue115_health": ISSUE115_CHECKS,
+    "issue116_reflection": ISSUE116_CHECKS,
     "issue10_matrix": ISSUE10_CHECKS,
     "issue14_writes": ISSUE14_CHECKS,
     "issue11_upgrade": ISSUE11_CHECKS,
@@ -263,6 +272,7 @@ EXPECTED_CHECKS = {
     "issue113_consolidation": Path("issue113-consolidation/checks.json"),
     "issue114_onboarding": Path("issue114-onboarding/checks.json"),
     "issue115_health": Path("issue115-health/checks.json"),
+    "issue116_reflection": Path("issue116-reflection/checks.json"),
     "issue10_matrix": Path("issue10-matrix/checks.json"),
     "issue14_writes": Path("issue14-writes/checks.json"),
     "issue11_upgrade": Path("issue11-upgrade/checks.json"),
@@ -421,6 +431,7 @@ def validate_checks(output: Path) -> dict[str, Any]:
                     "issue113_consolidation",
                     "issue114_onboarding",
                     "issue115_health",
+                    "issue116_reflection",
                     "issue10_matrix",
                     "issue14_writes",
                     "issue11_upgrade",
@@ -782,6 +793,7 @@ def main() -> int:
             "node tests/e2e/check_issue113_consolidation.cjs",
             "node tests/e2e/check_issue114_onboarding.cjs",
             "node tests/e2e/check_issue115_health.cjs",
+            "node tests/e2e/check_issue116_reflection.cjs",
             "node tests/e2e/check_issue10_matrix.cjs",
             "node tests/e2e/check_issue14_writes.cjs",
             "node tests/e2e/check_issue11_upgrade.cjs",
@@ -878,6 +890,7 @@ def main() -> int:
             "#113": list(ISSUE113_CHECKS.values()),
             "#114": list(ISSUE114_CHECKS.values()),
             "#115": list(ISSUE115_CHECKS.values()),
+            "#116": list(ISSUE116_CHECKS.values()),
             "#55": [
                 "browser answer failures use a local injected Provider boundary",
                 "invalid model output stops as invalid_model_output with audit metadata",

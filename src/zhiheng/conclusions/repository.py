@@ -26,6 +26,15 @@ def relation_etag(relation_id: str, status: str, left_version: Any, right_versio
     )
 
 
+def synthesis_basis_ids(payload: Mapping[str, Any]) -> set[str]:
+    """The formal conclusions a synthesized conclusion was drawn from, if any."""
+    return {
+        str(item.get("entry_id"))
+        for item in payload.get("basis", [])
+        if isinstance(item, Mapping) and item.get("entry_id")
+    }
+
+
 class ConclusionRepository:
     @staticmethod
     def _event_timestamp() -> str:
@@ -529,7 +538,12 @@ class ConclusionRepository:
             {"o": owner, "id": entry_id},
         ).mappings()
         proposals: list[dict[str, Any]] = []
+        # A synthesized conclusion is drawn from its basis; it neither revises
+        # nor supplements it (#116).
+        basis = synthesis_basis_ids(item)
         for row in rows:
+            if str(row["id"]) in basis:
+                continue
             old_payload = cast(dict[str, Any], json.loads(str(row["payload_json"])))
             kind = relation_kind(item, old_payload)
             if kind is None:
