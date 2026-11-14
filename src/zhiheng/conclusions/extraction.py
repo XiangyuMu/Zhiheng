@@ -29,6 +29,9 @@ class ExtractedConclusion:
 USER_STATEMENT = "user_statement"
 ASSISTANT_OUTPUT = "assistant_output"
 _ASSISTANT_PREFIX = "\n助手："
+# Recorded on each extraction run; a turn the current extractor has not
+# succeeded on is left for reflection to look at again (#117).
+EXTRACTOR_VERSION = "heuristic-conclusion-v1"
 
 
 def conversation_source_text(query: str, answer: str) -> str:
@@ -37,6 +40,15 @@ def conversation_source_text(query: str, answer: str) -> str:
     if answer.strip():
         source = f"{source}{_ASSISTANT_PREFIX}{answer.strip()}"
     return source
+
+
+def conversation_source_key(history_id: str) -> str:
+    """The one persisted source a turn's drafts share, whoever drafts them."""
+    return f"conclusion-source:{history_id}"
+
+
+def extraction_run_id(history_id: str) -> str:
+    return f"conversation-extraction:{history_id}"
 
 
 def _origin_at(query: str, answer: str, offset: int) -> str:
@@ -305,6 +317,35 @@ def _is_blocked_claim(claim: str) -> bool:
     )
 
 
+def conversation_draft_payload(
+    item: ExtractedConclusion,
+    *,
+    conversation_id: str,
+    history_id: str,
+    material_refs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """The draft of one judgment found in a turn, with its origin and location in the turn."""
+    return {
+        "title": f"对话结论：{item.claim[:80]}",
+        "claim": item.claim,
+        "origin": item.origin,
+        "domain_id": item.domain_id,
+        "premises": item.premises,
+        "excerpt": item.excerpt,
+        "evidence": [
+            {
+                **evidence,
+                "conversation_id": conversation_id,
+                "history_id": history_id,
+                "start_offset": item.start_offset,
+                "end_offset": item.end_offset,
+            }
+            for evidence in item.evidence
+        ],
+        "material_refs": material_refs,
+    }
+
+
 class ConversationConclusionDraftService:
     def __init__(
         self,
@@ -333,7 +374,7 @@ class ConversationConclusionDraftService:
             session,
             owner_user_id,
             source_text,
-            f"conclusion-source:{history_id}",
+            conversation_source_key(history_id),
             history_id=history_id,
         )
         created = 0
@@ -343,25 +384,12 @@ class ConversationConclusionDraftService:
                 session,
                 owner_user_id,
                 str(source["id"]),
-                {
-                    "title": f"对话结论：{item.claim[:80]}",
-                    "claim": item.claim,
-                    "origin": item.origin,
-                    "domain_id": item.domain_id,
-                    "premises": item.premises,
-                    "excerpt": item.excerpt,
-                    "evidence": [
-                        {
-                            **evidence,
-                            "conversation_id": conversation_id,
-                            "history_id": history_id,
-                            "start_offset": item.start_offset,
-                            "end_offset": item.end_offset,
-                        }
-                        for evidence in item.evidence
-                    ],
-                    "material_refs": material_refs,
-                },
+                conversation_draft_payload(
+                    item,
+                    conversation_id=conversation_id,
+                    history_id=history_id,
+                    material_refs=material_refs,
+                ),
                 f"conclusion-draft:{history_id}:{index}:{claim_hash}",
             )
             created += 1
@@ -396,7 +424,7 @@ class ConversationConclusionDraftService:
             session,
             owner_user_id,
             source_text,
-            f"conclusion-source:{history_id}",
+            conversation_source_key(history_id),
             history_id=history_id,
         )
         self._record_run(
@@ -414,7 +442,7 @@ class ConversationConclusionDraftService:
         )
 
     def _record_run(self, session: Session, *, history_id: str, **fields: Any) -> None:
-        run_id = f"conversation-extraction:{history_id}"
+        run_id = extraction_run_id(history_id)
         before = _run_result(session, run_id)
         self._write_run(session, history_id=history_id, **fields)
         if before is not None and before != _run_result(session, run_id):
@@ -445,7 +473,7 @@ class ConversationConclusionDraftService:
         failure_reason: str | None = None,
         review_items: list[dict[str, Any]] | None = None,
     ) -> None:
-        run_id = f"conversation-extraction:{history_id}"
+        run_id = extraction_run_id(history_id)
         review_items = list(review_items or [])
         needs_supplement = status == "failed" or extracted_count == 0 or bool(review_items)
         unrecognized_count = len(review_items) if review_items else (1 if needs_supplement else 0)
@@ -460,7 +488,7 @@ class ConversationConclusionDraftService:
                 VALUES (
                   :id, :owner, :conversation, :history, :source, :status,
                   :extracted_count, :unrecognized_count, :failure_code, :failure_reason,
-                  'heuristic-conclusion-v1'
+                  :extractor_version
                 )
                 ON CONFLICT(history_id) DO UPDATE SET
                   source_id=excluded.source_id,
@@ -469,6 +497,7 @@ class ConversationConclusionDraftService:
                   unrecognized_count=excluded.unrecognized_count,
                   failure_code=excluded.failure_code,
                   failure_reason=excluded.failure_reason,
+                  extractor_version=excluded.extractor_version,
                   updated_at=CURRENT_TIMESTAMP
                 """
             ),
@@ -483,6 +512,7 @@ class ConversationConclusionDraftService:
                 "unrecognized_count": unrecognized_count,
                 "failure_code": failure_code,
                 "failure_reason": failure_reason,
+                "extractor_version": EXTRACTOR_VERSION,
             },
         )
         session.execute(

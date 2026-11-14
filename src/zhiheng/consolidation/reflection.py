@@ -1,7 +1,7 @@
-"""反思: weekly 综合结论草稿 drawn from formal knowledge (spec decision 23, ADR 0012).
+"""反思: weekly drafts from formal knowledge and past conversations (spec decision 23, ADR 0012).
 
-Reflection reads formal conclusions only: never imported material, and never
-a synthesized draft that is not yet approved. Formal conclusions that share a
+Reflection reads formal knowledge and original conversations: never imported
+material, and never a synthesized draft that is not yet approved. Formal conclusions that share a
 premise are drawn together into one synthesized draft, whose basis is exactly
 the formal knowledge it was drawn from. The draft is marked as system
 generated and reviewed one by one like any other conclusion draft.
@@ -9,6 +9,12 @@ generated and reviewed one by one like any other conclusion draft.
 Each draft is keyed by the versions of its basis, so a repeated run drafts
 nothing new and a rejected draft only returns once a basis entry has a new
 version or new formal knowledge joins the group.
+
+Reflection also rereads the original conversations, the user's words and the
+assistant's answers only, for turns the current extractor never succeeded on,
+and drafts the substantive judgments found there that no conclusion holds yet
+(#117). Each such draft keeps the origin of its text, a user statement or
+assistant output, and is reviewed one by one like any other draft.
 """
 
 from __future__ import annotations
@@ -23,12 +29,24 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from zhiheng.conclusions.applicability import SYSTEM_SYNTHESIS
+from zhiheng.conclusions.extraction import (
+    EXTRACTOR_VERSION,
+    HeuristicConversationConclusionExtractor,
+    conversation_draft_payload,
+    conversation_source_key,
+    conversation_source_text,
+    extraction_run_id,
+    resolve_extraction_supplement,
+)
 from zhiheng.conclusions.relations import CONSOLIDATION_KINDS, normalize_claim, relation_kind
 from zhiheng.conclusions.repository import ConclusionRepository, synthesis_basis_ids
 from zhiheng.consolidation.findings import iso_utc, parse_utc
-from zhiheng.core.ids import json_text, new_id, sha256_json
+from zhiheng.core.ids import json_text, new_id, sha256_json, sha256_text
 
 REFLECT_EVERY = timedelta(days=7)
+# Marks a draft reflection found in a past conversation; its origin stays the
+# user's statement or the assistant's output it was found in.
+REFLECTION_DRAFT = "reflection"
 
 
 @dataclass(frozen=True)
@@ -58,6 +76,7 @@ class _Group:
 class ReflectionService:
     def __init__(self) -> None:
         self.repository = ConclusionRepository()
+        self.extractor = HeuristicConversationConclusionExtractor()
 
     def reflect_due(self, session: Session, *, now: datetime) -> int:
         """Reflect for each owner not reflected on in the last week; drafts created."""
@@ -110,6 +129,7 @@ class ReflectionService:
                 },
             )
             created += 1
+        created += self._draft_missed_judgments(session, owner)
         session.execute(
             text(
                 "INSERT INTO reflection_runs (id, owner_user_id, started_at, drafts_created) "
@@ -168,9 +188,109 @@ class ReflectionService:
             return None
         return str(draft["id"])
 
+    def _draft_missed_judgments(self, session: Session, owner: str) -> int:
+        """Draft the judgments past turns hold that no conclusion was extracted for."""
+        extracted = _extracted_claims(session, owner)
+        created = 0
+        for turn in _unextracted_turns(session, owner):
+            history_id, query = str(turn["id"]), str(turn["query"])
+            answer = _answer(turn["response_json"])
+            missed = [
+                item
+                for item in self.extractor.extract(query=query, answer=answer)
+                if normalize_claim(item.claim) not in extracted
+            ]
+            if not missed:
+                continue
+            # The same source the turn's own extraction persists, if it got that far.
+            source = self.repository.persist_source(
+                session,
+                owner,
+                conversation_source_text(query, answer),
+                conversation_source_key(history_id),
+                history_id=history_id,
+            )
+            for item in missed:
+                claim = normalize_claim(item.claim)
+                extracted.add(claim)
+                payload = conversation_draft_payload(
+                    item,
+                    conversation_id=str(turn["conversation_id"]),
+                    history_id=history_id,
+                    # Reflection reads no imported material, not even where a turn cited it.
+                    material_refs=[],
+                )
+                self.repository.create_draft(
+                    session,
+                    owner,
+                    str(source["id"]),
+                    {**payload, "drafted_by": REFLECTION_DRAFT},
+                    f"reflection-turn:{history_id}:{sha256_text(claim)}",
+                )
+                created += 1
+            # The drafts are the extraction the turn was waiting on; a failed
+            # run no longer asks the user to supplement it by hand.
+            resolve_extraction_supplement(session, owner, extraction_run_id(history_id))
+        return created
+
+
+def _unextracted_turns(session: Session, owner: str) -> list[dict[str, Any]]:
+    """Turns the current extractor has not succeeded on, that no job will extract
+    and whose failed extraction the user has not supplemented by hand."""
+    rows = session.execute(
+        text(
+            """
+            SELECT h.id, h.conversation_id, h.query, h.response_json
+            FROM answer_history h
+            WHERE h.owner_user_id = :o
+              AND NOT EXISTS (
+                SELECT 1 FROM conversation_extraction_runs r
+                WHERE r.history_id = h.id AND r.status = 'succeeded'
+                  AND r.extractor_version = :version)
+              AND NOT EXISTS (
+                SELECT 1 FROM conversation_extraction_runs r
+                WHERE r.history_id = h.id AND r.supplement_resolved_at IS NOT NULL)
+              AND NOT EXISTS (
+                SELECT 1 FROM outbox_events ev
+                WHERE ev.id = 'conversation:' || h.id AND ev.status IN ('pending', 'processing'))
+              AND NOT EXISTS (
+                SELECT 1 FROM jobs j
+                WHERE j.idempotency_key = 'conversation:' || h.id
+                  AND j.status IN ('pending', 'processing'))
+            ORDER BY h.created_at, h.conversation_id, h.turn_index
+            """
+        ),
+        {"o": owner, "version": EXTRACTOR_VERSION},
+    ).mappings()
+    return [dict(row) for row in rows]
+
+
+def _extracted_claims(session: Session, owner: str) -> set[str]:
+    """Every claim any version of the owner's conclusions has held, whatever became of it."""
+    rows = session.execute(
+        text(
+            """
+            SELECT json_extract(v.payload_json, '$.claim')
+            FROM conclusion_versions v
+            JOIN conclusion_entries e ON e.id = v.entry_id
+            WHERE e.owner_user_id = :o
+            """
+        ),
+        {"o": owner},
+    ).scalars()
+    return {normalize_claim(str(claim)) for claim in rows if claim}
+
+
+def _answer(response_json: object) -> str:
+    try:
+        response = json.loads(str(response_json))
+    except (TypeError, ValueError):
+        return ""
+    return str(response.get("answer", "")) if isinstance(response, dict) else ""
+
 
 def _formal_knowledge(session: Session, owner: str) -> list[dict[str, Any]]:
-    """Formal conclusions that may serve answers now: reflection's only input."""
+    """Formal conclusions that may serve answers now: synthesis's only input."""
     rows = session.execute(
         text(
             """
