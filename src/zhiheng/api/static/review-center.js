@@ -517,6 +517,8 @@
       const parts = [definitions([
         ["结论", entry.claim],
         ...(ORIGIN_LABELS[entry.origin] ? [["出自", ORIGIN_LABELS[entry.origin]]] : []),
+        // #117: found by weekly reflection in a past conversation, not when it was said.
+        ...(entry.drafted_by === "reflection" ? [["生成方式", "系统反思时从过往对话补提"]] : []),
         ["前提", premiseText(entry.premises)],
         ["依据", (entry.evidence || []).map((e) => e.text || e.quote || e.excerpt || JSON.stringify(e)).join("\n") || entry.excerpt],
         ["分类", entry.classification?.primary_domain_id || entry.domain_id],
